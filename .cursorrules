@@ -1,0 +1,513 @@
+# Cursor AI Rules - COPILOT_NOTES.md and ROADMAP Integration Pattern
+# Generic AI Continuity Framework for Any Project
+
+## Primary Directive: Always Check Project Context Documents First
+
+**CRITICAL**: Before responding to any user query, always read and reference these key project documents if they exist in the project root:
+
+1. **COPILOT_NOTES.md** - Master context document containing:
+   - Project context and business rationale
+   - Architectural decisions and their reasoning  
+   - Implementation patterns and anti-patterns
+   - Technology choices and frameworks
+   - Development history and lessons learned
+   - Current system state and next steps
+
+2. **PROJECT_FILEMAP.md** - Project-specific architecture map containing:
+   - Core files and their purposes
+   - Integration points and component relationships
+   - Architecture patterns to follow
+   - Deprecated/legacy components to avoid
+   - Current system state and component status
+
+3. **ROADMAP/*.md** - Project roadmap files containing:
+   - Project goals and objectives
+   - Phase-by-phase implementation plans
+   - Success criteria and metrics
+   - Timeline and dependencies
+
+Each folder may contain context files specific to that folder. Maintain a consistent structure and format across all context documents. The ROADMAP is a living document that should be updated as the project evolves.
+
+## Context Priority Order
+
+1. **COPILOT_NOTES.md** - Master context document (if exists) 
+2. **PROJECT_FILEMAP.md** - Project-specific architecture map (if exists)
+3. **ROADMAP/*.md** - Project roadmap (if exists)
+4. **GitHub Issues & History** - Existing issues, PRs, and commit history
+5. **.github/ISSUE_TEMPLATE/** - Available issue templates for tracking work
+6. **README.md** - Project overview and setup
+7. **ARCHITECTURE.md** - System design documentation
+8. **CONTRIBUTING.md** - Development guidelines
+9. **Project-specific documentation** - Domain-specific guides
+
+## GitHub Integration & Project Tracking
+
+### GitHub Issues as Paper Trail
+**CRITICAL**: Always integrate GitHub issues into development workflow to maintain comprehensive project history.
+
+#### Before Starting Work
+1. Check existing GitHub issues: `gh issue list --state all`
+2. Look for relevant issue templates in `.github/ISSUE_TEMPLATE/`
+3. Create tracking issues for significant work using appropriate templates
+4. Reference related issues and link dependencies
+
+#### During Development
+1. Make regular commits with descriptive messages following this pattern:
+   ```
+   [Type] Brief Description
+   
+   Detailed explanation of changes:
+   - Specific change 1
+   - Specific change 2
+   - Impact on system
+   
+   Related: #issue-number
+   ```
+
+2. Commit types: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `perf:`, `chore:`
+3. Update issue status with progress comments
+4. Reference commit hashes when updating issues
+
+#### After Completing Work
+1. Create completion summary comments on related issues
+2. Close completed issues with comprehensive status updates
+3. Update Epic/tracking issues with phase completion
+4. Cross-reference commits, test results, and deliverables
+
+### Issue Management Patterns
+
+#### For Large Features/Projects
+1. **Create Epic Issue**: Master tracking issue for entire project
+2. **Create Phase Issues**: Break work into phases with specific deliverables
+3. **Create Migration/Deployment Issues**: Track operational tasks
+4. **Link Everything**: Use issue numbers to create project relationship map
+
+#### Commit Message Best Practices
+```
+✅ Phase X Complete: Feature Name
+
+🎯 FEATURE: Brief description of what was implemented
+
+Key Changes:
+- Specific technical change with impact
+- Another change with business value
+- Integration point or dependency update
+
+Testing Results: X/X PASS
+- ✅ Test category 1: description
+- ✅ Test category 2: description
+- ✅ Integration test: description
+
+Phase Status:
+✅ Phase X: Description (Complete)
+🔄 Phase Y: Description (Next)
+
+Fixes #issue-number, Related to #issue-number
+```
+
+#### GitHub Linking Syntax
+**CRITICAL**: Always use GitHub's linking syntax in commit messages, issues, and PRs to maintain clear project relationships:
+
+**Issue/PR References**:
+- `#123` - Links to issue/PR #123 in current repo
+- `owner/repo#123` - Links to issue/PR in different repo
+- `Fixes #123` - **Closes** issue #123 when commit/PR is merged
+- `Closes #123` - **Closes** issue #123 when merged
+- `Resolves #123` - **Closes** issue #123 when merged
+- `Related to #123` - References without closing
+- `See #123` - References without closing
+- `Part of #123` - References as part of larger work
+
+**Multiple References**:
+- `Fixes #123, #456` - Closes multiple issues
+- `Related to #123, see #456` - Multiple non-closing references
+
+**Commit References**:
+- `abc1234` - Links to commit by SHA (short or full)
+- `owner/repo@abc1234` - Links to commit in different repo
+
+**Best Practices**:
+- Use closing keywords (`Fixes`, `Closes`, `Resolves`) when work completes an issue
+- Use non-closing references (`Related to`, `See`, `Part of`) for partial work or context
+- Always reference the Epic/parent issue for tracking
+- Reference related issues for context and dependency tracking
+
+## AI Agent Behavior Guidelines
+
+### For New Sessions
+1. Read COPILOT_NOTES.md immediately to understand project context
+2. Read PROJECT_FILEMAP.md to understand project architecture and key files
+3. Read ROADMAP/*.md to understand the project roadmap
+4. **Check GitHub Issues**: Review existing issues and project history for context
+5. **Look for Issue Templates**: Check `.github/ISSUE_TEMPLATE/` for tracking patterns
+6. Reference architectural decisions to avoid re-litigating settled issues
+7. Follow established patterns and conventions
+8. Maintain consistency with documented frameworks and standards
+9. If the user asks about the project roadmap, refer to the ROADMAP/*.md files
+
+### For Code Changes
+1. **Create/Update GitHub Issues**: Track significant changes with appropriate issues
+2. Follow established coding patterns and conventions
+3. Implement error handling according to project standards
+4. Use documented architectural patterns
+5. Maintain separation of concerns per project architecture
+6. Follow security and performance guidelines
+7. **Commit Regularly**: Make meaningful commits with descriptive messages
+8. **Update Issue Progress**: Comment on related issues with development progress
+9. Generally the ROADMAP does not need to be updated for code changes, but it is a good idea to update it when the project roadmap changes.
+
+### For Documentation Updates
+1. Update COPILOT_NOTES.md when making architectural decisions
+2. Update PROJECT_FILEMAP.md when adding/removing core files or changing architecture patterns
+3. Update ROADMAP/*.md when making architectural decisions
+4. Maintain decision history and rationale
+5. Update relevant documentation when requirements change
+6. Keep success criteria and metrics current
+7. Document new patterns and anti-patterns learned
+
+## Communication Guidelines
+
+### When Responding to User Queries
+1. Reference relevant COPILOT_NOTES.md context
+2. Cite specific architectural decisions when applicable
+3. Explain how suggestions align with established patterns
+4. Note any deviations from documented approaches
+5. Consider impact on overall system architecture
+6. If the user asks about the project roadmap, refer to the ROADMAP/*.md files
+
+### When Suggesting Changes
+1. Consider impact on overall system architecture
+2. Maintain consistency with established standards
+3. Ensure changes are compatible with existing integrations
+4. Update documentation if architectural changes are made
+5. Follow established security and compliance requirements
+6. Update ROADMAP/*.md on an as-needed basis
+
+## Core Development Principles
+
+### KISS - Keep It Simple Stupid
+**PRIMARY ARCHITECTURAL PRINCIPLE**: Always favor simplicity over complexity.
+
+#### Guidelines:
+- **Question Complexity**: Before adding new systems, ask "Do we REALLY need this?"
+- **Stateful Applications**: For long-running processes, prefer in-memory solutions over external caches
+- **Single Purpose**: Each component should have one clear responsibility
+- **Minimal Dependencies**: Reduce external service dependencies where possible
+- **Clear Data Flow**: Simple, predictable data paths are better than clever optimizations
+- **Premature Optimization**: Avoid over-engineering for hypothetical future needs
+
+#### Red Flags (Anti-KISS Patterns):
+- Adding Redis caching to stateful applications that can use memory
+- Complex async patterns where sync would work fine
+- Multiple abstraction layers for simple operations
+- External services for functionality that can be handled locally
+- "Future-proofing" that adds complexity without clear benefits
+
+#### When to Add Complexity:
+- **Clear Performance Need**: Measured bottlenecks, not theoretical ones
+- **Scalability Requirements**: Actual growth demands, not hypothetical scale
+- **Business Requirements**: Real business needs, not "what if" scenarios
+- **Integration Necessities**: Required for existing system compatibility
+
+**Remember**: Simple solutions are easier to debug, maintain, and understand. Complex solutions should require strong justification.
+
+### Explicit Planning & Implementation
+**CRITICAL**: Always provide detailed, step-by-step implementation plans that could be executed by humans or AI agents.
+
+#### Planning Requirements:
+- **Break Down Complex Tasks**: Decompose large features into specific, actionable steps
+- **Implementation Details**: Include code patterns, file changes, and integration points
+- **Dependency Mapping**: Identify prerequisites and order of operations
+- **Testing Strategy**: Define validation steps for each implementation phase
+- **Rollback Plans**: Include fallback strategies for each major change
+
+#### Implementation Step Format:
+```
+## Implementation Plan: [Feature Name]
+
+### Phase 1: [Phase Name]
+**Objective**: [Clear goal statement]
+**Files to Modify**: [Specific file paths]
+**Key Changes**:
+1. [Specific change with code pattern]
+2. [Another specific change]
+3. [Integration point details]
+
+**Testing**: [How to validate this phase]
+**Success Criteria**: [Measurable outcomes]
+```
+
+**Benefit**: Any team member (human or AI) can pick up and execute the plan without additional context gathering.
+
+## COPILOT_NOTES.md Structure Template
+
+When creating or updating COPILOT_NOTES.md, include these sections:
+
+```markdown
+# COPILOT_NOTES.md - AI Agent Context Document
+## [Project Name] Development Guide
+
+### Project Overview & Mission
+- **Project Name**: [Name]
+- **Status**: [Current phase/status]
+- **Primary Goal**: [Main objective]
+- **Business Context**: [Why this project exists]
+
+### Architecture Evolution & Key Decisions
+#### Decision #1: [Technology Choice] ([Date])
+**Context**: [Why this decision was needed]
+**Decision**: [What was chosen]
+**Rationale**: [Why this was the best choice]
+
+### Current System State
+- **Completed**: [What's done]
+- **In Progress**: [Current work]
+- **Next Phase**: [What's coming next]
+
+### Recent Context & Temporal Notes
+*Note: This section provides immediate context for recent work alongside GitHub commit history*
+
+#### Recent Sessions ([Date Range])
+- **[Date]**: [Brief description of work completed]
+- **[Date]**: [Key decisions made]
+- **[Date]**: [Important discoveries or changes]
+
+#### Active Issues & PRs
+- **Issue #X**: [Current status and context]
+- **PR #Y**: [Review status and blockers]
+
+#### Immediate Next Steps
+- [ ] [Specific task with clear success criteria]
+- [ ] [Another immediate task]
+- [ ] [Short-term dependency or prerequisite]
+
+#### Recent Architectural Decisions
+- **[Date] - [Decision Name]**: [Brief context and rationale]
+- **[Date] - [Another Decision]**: [Why this approach was chosen]
+
+*Keep this section current (last 2-4 weeks) and archive older entries to preserve project flow*
+
+### Integration Patterns & Conventions
+- [Key patterns to follow]
+- [Standard practices]
+- [Common utilities and helpers]
+
+### Security & Compliance Framework
+- [Security requirements]
+- [Compliance standards]
+- [Data handling guidelines]
+
+### Success Metrics & KPIs
+- [Technical metrics]
+- [Business metrics]
+- [Quality indicators]
+
+### Common Patterns & Anti-patterns
+#### ✅ Recommended Patterns
+- [Best practices to follow]
+
+#### ❌ Anti-patterns to Avoid
+- [Practices to avoid and why]
+
+### Development Guidelines
+- [Coding standards]
+- [Testing requirements]
+- [Deployment practices]
+
+### Getting Started Guide for New Contributors
+1. [First steps]
+2. [Key concepts to understand]
+3. [Where to find information]
+```
+
+## ROADMAP Structure Template
+
+When creating or updating ROADMAP/*.md, include these sections:
+
+```markdown
+# ROADMAP Feature
+
+## Feature Name
+
+### Executive Summary
+
+### Strategic Framework
+
+### Implementation Strategy (break up into phases if applicable)
+
+### Technical Implementation Details
+
+### Success Metrics & KPIs
+
+### Risk Mitigation
+
+### Implementation Roadmap (use checklists if possible)
+
+```
+
+
+## Code Quality Standards
+
+### General Requirements
+- Follow project-specific coding standards
+- Implement comprehensive error handling
+- Add appropriate logging and monitoring
+- Include documentation for complex logic
+- Write tests according to project standards
+
+### Security Guidelines
+- Follow documented security requirements
+- Implement appropriate access controls
+- Handle sensitive data according to project guidelines
+- Add security logging where required
+
+### Performance Standards
+- Meet documented performance requirements
+- Implement efficient algorithms and data structures
+- Follow caching and optimization guidelines
+- Monitor resource usage appropriately
+
+## Project Filemap & Architecture Awareness
+
+**CRITICAL**: If a `PROJECT_FILEMAP.md` file exists in the project root, read it immediately to understand the project's specific architecture, key files, integration points, and deprecated components. This document provides essential context for:
+
+- **Core Files**: Most important files for understanding the system
+- **Integration Points**: How different components connect and interact
+- **Architecture Patterns**: Established patterns to follow and anti-patterns to avoid
+- **Deprecated/Legacy Components**: Files and patterns to avoid in new development
+- **Current System State**: What's production-ready, in-progress, or planned
+
+The project filemap complements COPILOT_NOTES.md by providing a structural view of the codebase, while COPILOT_NOTES.md provides business context and architectural decisions.
+
+### Generic File Structure Reference
+
+If no PROJECT_FILEMAP.md exists, be aware of common project structure patterns:
+```
+project-root/
+├── COPILOT_NOTES.md                    # Master context document
+├── PROJECT_FILEMAP.md                  # Project-specific architecture map (if exists)
+├── ROADMAP/                            # Project roadmap documents
+├── .scratchpad/                        # Scratchpad for your thoughts and ideas
+├── .github/
+│   ├── ISSUE_TEMPLATE/                 # GitHub issue templates for tracking
+│   ├── workflows/                      # CI/CD workflows
+│   └── PULL_REQUEST_TEMPLATE.md        # PR template
+├── README.md                           # Project overview
+├── ARCHITECTURE.md                     # System design
+├── CONTRIBUTING.md                     # Development guidelines
+├── docs/                               # Additional documentation
+└── .cursorrules                        # This file (generic framework)
+```
+
+**Use PROJECT_FILEMAP.md for project-specific file locations, architecture patterns, and integration points.**
+
+## GitHub CLI Usage Patterns
+
+### Essential Commands for Context Gathering
+```bash
+# Check existing issues and project status
+gh issue list --state all --limit 20
+
+# View specific issue details
+gh issue view [issue-number]
+
+# Create new issue from template
+gh issue create --title "Title" --body-file .github/ISSUE_TEMPLATE/template.md
+
+# Add comments and update issues
+gh issue comment [issue-number] --body "Progress update"
+
+# Close issues with completion status
+gh issue close [issue-number]
+
+# Check recent commit history for context
+git log --oneline -10
+```
+
+### Project History Analysis
+Before making significant changes:
+1. **Review recent commits**: `git log --oneline -20` to understand recent work
+2. **Check issue history**: `gh issue list --state all` to see project evolution
+3. **Look for patterns**: Check if similar work has been done before
+4. **Identify dependencies**: Look for related issues or incomplete work
+
+## Innovation and Learning
+
+### Pattern Recognition
+- Identify and document new patterns that emerge
+- Update COPILOT_NOTES.md with lessons learned
+- Share successful approaches across team
+- Continuously improve development practices
+
+### Knowledge Preservation
+- Document important decisions and their rationale
+- Maintain history of architectural evolution
+- Preserve context for future team members
+- Update documentation as project evolves
+
+## Customization Instructions
+
+To customize this template for your specific project:
+
+1. **Replace placeholder content** with project-specific details
+2. **Add domain-specific guidelines** (e.g., web development, data science, mobile)
+3. **Include technology-specific patterns** (e.g., React patterns, Python conventions)
+4. **Define project-specific success metrics**
+5. **Add relevant compliance requirements** (e.g., GDPR, HIPAA, SOX)
+
+### Example Customizations by Domain:
+
+**Web Development Projects**:
+```
+### Web Development Standards
+- Use semantic HTML and accessible design
+- Follow responsive design principles
+- Implement proper SEO practices
+- Use established CSS/JS frameworks per architecture
+```
+
+**Data Science Projects**:
+```
+### Data Science Standards
+- Document data sources and transformations
+- Use established ML model versioning
+- Follow data privacy and ethics guidelines
+- Implement reproducible research practices
+```
+
+**Mobile Development Projects**:
+```
+### Mobile Development Standards
+- Follow platform-specific design guidelines
+- Implement appropriate offline capabilities
+- Use established app architecture patterns
+- Follow app store guidelines and requirements
+```
+
+## Benefits of This Approach
+
+### For Development Teams
+- **Instant Onboarding**: New AI agents and team members get full context immediately
+- **Consistent Quality**: All AI-generated code follows established patterns
+- **Decision Continuity**: Prevents re-discussing settled architectural decisions
+- **Knowledge Preservation**: Important context and decisions are never lost
+
+### For Project Success
+- **Reduced Errors**: AI follows established patterns and avoids known anti-patterns
+- **Faster Development**: Less time spent explaining context and requirements
+- **Better Maintainability**: Consistent patterns make code easier to maintain
+- **Improved Quality**: Established standards are automatically enforced
+
+---
+
+**Remember**: The COPILOT_NOTES.md pattern is about preserving and leveraging institutional knowledge for better AI-assisted development. Customize this template for your specific project needs and maintain it as your project evolves. 
+
+## Scratchpad
+
+You can utilize the .scratchpad folder to store your thoughts and ideas. Just remember to clean up after yourself.
+
+For example, when you create temporary markdown files, you can store them in the .scratchpad folder.
+
+# Miscellaneous
+
+- When running commands, always break them up into smaller steps. For some reason, the "&&" operator does not work as expected and often times the commands will fail.
