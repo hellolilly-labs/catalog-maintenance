@@ -24,7 +24,7 @@
 
 #### **Storage Layer (Existing - Proven)**
 ```
-├── storage.py                        # ✅ CORE: Account-based storage abstraction
+├── src/storage.py                    # ✅ CORE: Account-based storage abstraction
 │                                     # Patterns: GCP + local, compression, metadata
 │                                     # Usage: AccountStorageProvider for all storage
 └── accounts/                         # Account-isolated storage structure
@@ -37,9 +37,9 @@
 #### **Product Data Model (Existing - Proven)**
 ```
 └── src/models/
-    ├── __init__.py
     ├── product.py                    # ✅ CORE: Product model with metadata handling
-    └── base.py                       # Base model patterns and validation
+    ├── product_manager.py            # ✅ EXISTING: Product management utilities
+    └── product_catalog_cache.py      # ✅ EXISTING: Product catalog caching
 ```
 
 ### 🤖 LLM Services (Multi-Provider Strategy)
@@ -71,7 +71,9 @@
 #### **Vector Storage (Issue #6)**
 ```
 └── src/
-    └── pinecone_client.py            # 🔄 IMPLEMENTING: Dynamic index management
+    ├── pinecone_setup.py             # ✅ EXISTING: Comprehensive Pinecone setup (2282 lines)
+    │                                 # Features: Multi-namespace, chunking, embedding
+    └── pinecone_client.py            # 🔄 PLANNED: Dynamic index management abstraction
                                       # Pattern: <env>--<brand_url>--dense/sparse
                                       # Scalable to 100s-1000s of brands
 ```
