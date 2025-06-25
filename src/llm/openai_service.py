@@ -352,3 +352,16 @@ class OpenAIService(LLMModelService):
         except Exception as e:
             logger.error(f"OpenAI connection test failed: {e}")
             return False 
+
+
+def create_openai_service(api_key: str = None) -> OpenAIService:
+    """
+    Factory function to create OpenAI service
+    
+    Args:
+        api_key: Optional API key (uses settings if not provided)
+        
+    Returns:
+        Configured OpenAI service
+    """
+    return OpenAIService(api_key=api_key)

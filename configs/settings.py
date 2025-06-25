@@ -9,7 +9,8 @@ and performance tuning parameters for the catalog maintenance system.
 import os
 import logging
 from typing import Dict, Optional, List, Any
-from pydantic import BaseSettings, Field, validator
+from pydantic import Field, validator
+from pydantic_settings import BaseSettings
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -82,37 +83,22 @@ class Settings(BaseSettings):
     # ============================================================================
     
     # OpenAI Configuration
-    OPENAI_API_KEY: Optional[str] = Field(
-        default=None,
-        description="OpenAI API key for GPT models",
-        env="OPENAI_API_KEY"
-    )
-    
+    OPENAI_API_KEY: Optional[str] = Field(None, description="OpenAI API key")
     OPENAI_DEFAULT_MODEL: str = Field(
         default="gpt-4-turbo",
         description="Default OpenAI model",
         env="OPENAI_DEFAULT_MODEL"
     )
+    OPENAI_MAX_TOKENS: int = Field(4000, description="Maximum tokens for OpenAI requests")
+    OPENAI_RETRY_ATTEMPTS: int = Field(3, description="Number of retry attempts for failed requests")
     
-    OPENAI_MAX_TOKENS: int = Field(
-        default=4000,
-        description="Default max tokens for OpenAI requests",
-        env="OPENAI_MAX_TOKENS"
-    )
+    # Anthropic Configuration  
+    ANTHROPIC_API_KEY: Optional[str] = Field(None, description="Anthropic Claude API key")
+    ANTHROPIC_MAX_TOKENS: int = Field(4000, description="Maximum tokens for Anthropic requests")
     
-    # Anthropic Configuration (Future)
-    ANTHROPIC_API_KEY: Optional[str] = Field(
-        default=None,
-        description="Anthropic API key for Claude models",
-        env="ANTHROPIC_API_KEY"
-    )
-    
-    # Gemini Configuration (Future)
-    GEMINI_API_KEY: Optional[str] = Field(
-        default=None,
-        description="Google Gemini API key",
-        env="GEMINI_API_KEY"
-    )
+    # Gemini Configuration
+    GEMINI_API_KEY: Optional[str] = Field(None, description="Google Gemini API key")
+    GEMINI_MAX_TOKENS: int = Field(2000, description="Maximum tokens for Gemini requests")
     
     # ============================================================================
     # Langfuse Configuration

@@ -293,20 +293,24 @@ class LLMRouter:
         }
 
 
-def create_default_router(openai_api_key: str = None) -> LLMRouter:
+def create_default_router(openai_api_key: str = None, anthropic_api_key: str = None, 
+                         gemini_api_key: str = None) -> LLMRouter:
     """
-    Create a default LLM router with OpenAI service.
+    Create a default LLM router with all available services.
     
     Args:
         openai_api_key: OpenAI API key (optional, reads from env if not provided)
+        anthropic_api_key: Anthropic API key (optional, reads from env if not provided)
+        gemini_api_key: Gemini API key (optional, reads from env if not provided)
         
     Returns:
-        Configured LLM router
+        Configured LLM router with all available providers
     """
     router = LLMRouter()
     
-    # Register OpenAI service
+    # Register OpenAI service (always available)
     try:
+        from .openai_service import OpenAIService
         openai_service = OpenAIService(api_key=openai_api_key)
         router.register_provider(
             'openai', 
@@ -314,10 +318,52 @@ def create_default_router(openai_api_key: str = None) -> LLMRouter:
             openai_service.list_supported_models(),
             priority=100
         )
-        logger.info("Default router created with OpenAI service")
+        logger.info("Registered OpenAI service with router")
         
     except Exception as e:
         logger.error(f"Failed to initialize OpenAI service: {e}")
-        raise LLMError(f"Failed to create default router: {str(e)}", original_error=e)
     
+    # Register Anthropic service (optional)
+    try:
+        from .anthropic_service import AnthropicService
+        anthropic_service = AnthropicService(api_key=anthropic_api_key)
+        router.register_provider(
+            'anthropic',
+            anthropic_service,
+            anthropic_service.list_supported_models(),
+            priority=110  # Higher priority for reasoning tasks
+        )
+        logger.info("Registered Anthropic service with router")
+        
+        # Update task routing to use Anthropic for reasoning
+        router.set_task_routing('sizing_analysis', 'anthropic/claude-3-5-sonnet-20241022')
+        router.set_task_routing('brand_research', 'anthropic/claude-3-5-sonnet-20241022')
+        router.set_task_routing('quality_evaluation', 'anthropic/claude-3-sonnet-20240229')
+        
+    except Exception as e:
+        logger.warning(f"Anthropic service not available: {e}")
+    
+    # Register Gemini service (optional)
+    try:
+        from .gemini_service import GeminiService
+        gemini_service = GeminiService(api_key=gemini_api_key)
+        router.register_provider(
+            'gemini',
+            gemini_service, 
+            gemini_service.list_supported_models(),
+            priority=90
+        )
+        logger.info("Registered Gemini service with router")
+        
+        # Gemini can be good for certain specialized tasks
+        # router.set_task_routing('multimodal_analysis', 'gemini/gemini-1.5-pro')
+        
+    except Exception as e:
+        logger.warning(f"Gemini service not available: {e}")
+    
+    # Ensure we have at least one provider
+    if not router.providers:
+        raise LLMError("No LLM providers available. Check API keys and package installations.")
+    
+    logger.info(f"Router initialized with {len(router.providers)} providers")
     return router 

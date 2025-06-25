@@ -52,11 +52,13 @@ class AuthenticationError(LLMError):
 
 
 class NetworkError(LLMError):
-    """Raised when network operations fail"""
-    
-    def __init__(self, message: str = "Network error", status_code: int = None, **kwargs):
-        super().__init__(message, **kwargs)
-        self.status_code = status_code
+    """Network connection error"""
+    pass
+
+
+class ServiceError(LLMError):
+    """General service error"""
+    pass
 
 
 class InvalidRequestError(LLMError):
