@@ -8,7 +8,7 @@ Tests:
 - Chat completion functionality
 - Error handling with retry logic
 - Token counting and conversation truncation
-- Multi-provider routing via LLMRouter
+- LLMFactory integration
 """
 
 import pytest
@@ -16,7 +16,7 @@ import asyncio
 import os
 from unittest.mock import Mock, patch, AsyncMock
 
-from src.llm import OpenAIService, LLMRouter, create_default_router
+from src.llm import OpenAIService, LLMFactory
 from src.llm.errors import LLMError, AuthenticationError, ModelNotFoundError
 
 
@@ -188,91 +188,58 @@ class TestOpenAIService:
         assert total_tokens <= 1000
 
 
-class TestLLMRouter:
-    """Test LLM router functionality."""
+class TestLLMFactory:
+    """Test LLM factory functionality."""
     
-    def test_router_initialization(self):
-        """Test router initializes with correct default routing."""
-        router = LLMRouter()
-        
-        assert 'descriptor_generation' in router.default_task_routing
-        assert 'sizing_analysis' in router.default_task_routing
-        assert router.default_task_routing['descriptor_generation'] == 'openai/gpt-4-turbo'
-    
-    def test_provider_registration(self, mock_api_key):
-        """Test provider registration in router."""
-        router = LLMRouter()
-        service = OpenAIService(api_key=mock_api_key)
-        
-        router.register_provider('openai', service, ['gpt-4', 'gpt-3.5-turbo'], priority=100)
-        
-        assert 'openai' in router.providers
-        assert router.providers['openai'].priority == 100
-        assert router.providers['openai'].enabled == True
-        assert 'gpt-4' in router.providers['openai'].models
-    
-    def test_optimal_provider_selection_by_task(self, mock_api_key):
-        """Test router selects correct provider for specific tasks."""
-        router = LLMRouter()
-        service = OpenAIService(api_key=mock_api_key)
-        router.register_provider('openai', service, service.list_supported_models())
-        
-        # Test task-based routing
-        provider_name, service_instance, model = router.get_optimal_provider(task='descriptor_generation')
-        
-        assert provider_name == 'openai'
-        assert model == 'gpt-4-turbo'
-        assert isinstance(service_instance, OpenAIService)
-    
-    def test_optimal_provider_selection_by_model(self, mock_api_key):
-        """Test router selects correct provider for specific model."""
-        router = LLMRouter()
-        service = OpenAIService(api_key=mock_api_key)
-        router.register_provider('openai', service, service.list_supported_models())
-        
-        # Test model-based routing
-        provider_name, service_instance, model = router.get_optimal_provider(model='gpt-3.5-turbo')
-        
-        assert provider_name == 'openai'
-        assert model == 'gpt-3.5-turbo'
-    
-    def test_provider_model_parsing(self):
-        """Test provider/model string parsing."""
-        router = LLMRouter()
-        
-        # Test with provider prefix
-        provider, model = router._parse_provider_model('openai/gpt-4')
-        assert provider == 'openai'
-        assert model == 'gpt-4'
-        
-        # Test without provider prefix
-        provider, model = router._parse_provider_model('gpt-4')
-        assert provider is None
-        assert model == 'gpt-4'
-    
-    def test_available_models_listing(self, mock_api_key):
-        """Test listing available models from router."""
-        router = LLMRouter()
-        service = OpenAIService(api_key=mock_api_key)
-        router.register_provider('openai', service, service.list_supported_models())
-        
-        available = router.list_available_models()
-        
-        assert 'openai' in available
-        assert 'gpt-4' in available['openai']
-        assert 'gpt-4-turbo' in available['openai']
-    
-    def test_create_default_router(self, mock_api_key):
-        """Test creating default router with OpenAI service."""
+    def test_factory_get_service(self, mock_api_key):
+        """Test factory creates correct service for model."""
         with patch.dict(os.environ, {'OPENAI_API_KEY': mock_api_key}):
-            router = create_default_router()
+            service = LLMFactory.get_service("openai/gpt-4-turbo")
             
-            assert 'openai' in router.providers
-            assert router.providers['openai'].enabled == True
+            assert isinstance(service, OpenAIService)
+            assert service.provider_name == "openai"
+    
+    def test_factory_get_service_invalid_provider(self):
+        """Test factory fails for invalid provider."""
+        with pytest.raises(ModelNotFoundError):
+            LLMFactory.get_service("invalid/model")
+    
+    def test_factory_get_service_missing_api_key(self):
+        """Test factory fails when API key missing."""
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(ModelNotFoundError, match="OPENAI_API_KEY not set"):
+                LLMFactory.get_service("openai/gpt-4")
+    
+    def test_get_model_for_task(self):
+        """Test task-to-model mapping."""
+        model = LLMFactory.get_model_for_task("descriptor_generation")
+        assert model == "openai/gpt-4-turbo"
+        
+        model = LLMFactory.get_model_for_task("sizing_analysis")
+        assert model == "anthropic/claude-3-5-sonnet-20241022"
+    
+    def test_get_model_for_task_with_env_override(self):
+        """Test environment variable overrides default task model."""
+        with patch.dict(os.environ, {'DESCRIPTOR_MODEL': 'openai/gpt-3.5-turbo'}):
+            model = LLMFactory.get_model_for_task("descriptor_generation")
+            assert model == "openai/gpt-3.5-turbo"
+    
+    def test_list_available_providers(self, mock_api_key):
+        """Test listing available providers."""
+        with patch.dict(os.environ, {'OPENAI_API_KEY': mock_api_key}):
+            providers = LLMFactory.list_available_providers()
+            assert 'openai' in providers
+    
+    def test_get_configuration(self, mock_api_key):
+        """Test getting factory configuration."""
+        with patch.dict(os.environ, {'OPENAI_API_KEY': mock_api_key, 'DESCRIPTOR_MODEL': 'openai/gpt-3.5-turbo'}):
+            config = LLMFactory.get_configuration()
             
-            available_models = router.list_available_models()
-            assert 'openai' in available_models
-            assert len(available_models['openai']) > 0
+            assert 'available_providers' in config
+            assert 'task_models' in config
+            assert 'environment_overrides' in config
+            assert 'openai' in config['available_providers']
+            assert config['environment_overrides']['DESCRIPTOR_MODEL'] == 'openai/gpt-3.5-turbo'
 
 
 # Integration tests (require actual API key)
@@ -308,19 +275,17 @@ class TestOpenAIIntegration:
         assert response['provider'] == 'openai'
     
     @pytest.mark.skipif(not os.getenv('OPENAI_API_KEY'), reason="No OpenAI API key provided")
-    async def test_router_integration(self):
-        """Test router with actual OpenAI service."""
-        router = create_default_router()
+    async def test_factory_integration(self):
+        """Test LLMFactory with actual OpenAI service."""
+        # Test direct service creation
+        service = LLMFactory.get_service("openai/gpt-3.5-turbo")
+        assert isinstance(service, OpenAIService)
         
-        # Test provider test
-        test_results = await router.test_all_providers()
-        assert test_results['openai'] == True
-        
-        # Test routed chat completion
-        response = await router.chat_completion(
+        # Test factory chat completion
+        response = await LLMFactory.chat_completion(
+            task="conversation",
             system="You are helpful.",
             messages=[{"role": "user", "content": "Say 'test' and nothing else."}],
-            task="conversation",
             max_tokens=5,
             temperature=0.1
         )
@@ -328,7 +293,6 @@ class TestOpenAIIntegration:
         assert response is not None
         assert 'content' in response
         assert response['provider'] == 'openai'
-        assert response['routed_model'] == 'gpt-3.5-turbo'
 
 
 if __name__ == "__main__":

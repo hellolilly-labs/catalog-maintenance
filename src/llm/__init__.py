@@ -25,9 +25,6 @@ from .errors import (
 from .simple_factory import LLMFactory
 from .openai_service import OpenAIService, create_openai_service
 
-# Legacy router (available but not recommended)
-from .router import LLMRouter, create_default_router
-
 # Optional imports with graceful fallbacks
 try:
     from .anthropic_service import AnthropicService, create_anthropic_service
@@ -57,10 +54,6 @@ __all__ = [
     'create_anthropic_service',
     'GeminiService',         # None if package not installed
     'create_gemini_service',
-    
-    # Legacy router (use LLMFactory instead)
-    'LLMRouter',
-    'create_default_router',
     
     # Errors
     'LLMError',
