@@ -19,7 +19,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 
 from src.models.product import Product
-from src.llm.router import LLMRouter
+from src.llm.simple_factory import LLMFactory
 from src.llm.errors import LLMError, TokenLimitError, ModelNotFoundError
 from configs.settings import get_settings
 
@@ -29,15 +29,13 @@ logger = logging.getLogger(__name__)
 class DescriptorGenerator:
     """LLM-powered product descriptor and sizing generation"""
     
-    def __init__(self, llm_router: Optional[LLMRouter] = None, brand_vertical: str = None):
+    def __init__(self, brand_vertical: str = None):
         """
-        Initialize descriptor generator with LLM router and settings
+        Initialize descriptor generator with settings
         
         Args:
-            llm_router: Optional LLMRouter instance (creates new one if None)
             brand_vertical: Optional brand-level vertical (will detect if None)
         """
-        self.llm_router = llm_router or LLMRouter()
         self.settings = get_settings()
         self.brand_vertical = brand_vertical
         self._vertical_cache = {}  # Cache for detected verticals
@@ -78,7 +76,7 @@ Common verticals include: cycling, fashion, footwear, electronics, home, beauty,
 
 Respond with ONLY the primary vertical name (single word or short phrase, lowercase). No explanation needed."""
 
-            response = await self.llm_router.chat_completion(
+            response = await LLMFactory.chat_completion(
                 task="brand_research",
                 system="You are a brand analysis expert. Determine brand verticals accurately based on product information.",
                 messages=[{
@@ -130,7 +128,7 @@ If this product is just a general {brand_vertical} product without a more specif
 
 Respond with ONLY the sub-category name (lowercase) or "none". No explanation needed."""
 
-            response = await self.llm_router.chat_completion(
+            response = await LLMFactory.chat_completion(
                 task="brand_research", 
                 system="You are a product categorization expert. Identify specific sub-categories within broader verticals.",
                 messages=[{
@@ -268,7 +266,7 @@ Example response format:
             
             # Use router to get optimal model for descriptor generation
             # From router configuration: descriptor_generation -> gpt-4-turbo
-            response = await self.llm_router.chat_completion(
+            response = await LLMFactory.chat_completion(
                 task="descriptor_generation",
                 system="You are a professional product copywriter. Create engaging, informative product descriptors.",
                 messages=[{
@@ -317,7 +315,7 @@ Example response format:
             
             # Use router for sizing analysis - optimized for reasoning
             # From router configuration: sizing_analysis -> gpt-4 (superior reasoning)
-            response = await self.llm_router.chat_completion(
+            response = await LLMFactory.chat_completion(
                 task="sizing_analysis",
                 system="You are a sizing expert. Analyze product details and sizing charts to provide accurate size guidance in JSON format.",
                 messages=[{

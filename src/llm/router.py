@@ -8,6 +8,7 @@ Implements multi-provider LLM strategy following Decision #1 in COPILOT_NOTES.md
 """
 
 import logging
+import os
 from typing import Dict, List, Any, Optional, Union
 from dataclasses import dataclass
 
@@ -336,9 +337,9 @@ def create_default_router(openai_api_key: str = None, anthropic_api_key: str = N
         logger.info("Registered Anthropic service with router")
         
         # Update task routing to use Anthropic for reasoning
-        router.set_task_routing('sizing_analysis', 'anthropic/claude-3-5-sonnet-20241022')
-        router.set_task_routing('brand_research', 'anthropic/claude-3-5-sonnet-20241022')
-        router.set_task_routing('quality_evaluation', 'anthropic/claude-3-sonnet-20240229')
+        router.set_task_routing('sizing_analysis', os.getenv('SIZING_MODEL', 'anthropic/claude-3-5-sonnet-20241022'))
+        router.set_task_routing('brand_research', os.getenv('BRAND_MODEL', 'anthropic/claude-3-5-sonnet-20241022'))
+        router.set_task_routing('quality_evaluation', os.getenv('QUALITY_MODEL', 'anthropic/claude-3-sonnet-20240229'))
         
     except Exception as e:
         logger.warning(f"Anthropic service not available: {e}")

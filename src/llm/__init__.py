@@ -1,22 +1,20 @@
 """
 LLM Services Package
 
-Multi-provider LLM strategy with intelligent routing following Decision #1
-in COPILOT_NOTES.md:
-- OpenAI: Creative writing and general purpose  
-- Anthropic: Superior reasoning and analytical tasks
-- Gemini: Multimodal and specialized tasks
+Simple, direct LLM factory following KISS principle.
+Use LLMFactory for all LLM operations - no complex routing needed.
 
 Usage:
-    from src.llm import LLMRouter, OpenAIService, AnthropicService, GeminiService
+    # Simple direct usage
+    response = await LLMFactory.chat_completion(
+        task="descriptor_generation",
+        system="You are a helpful assistant",
+        messages=[{"role": "user", "content": "Hello"}]
+    )
     
-    # Create router with all providers
-    router = create_default_router()
-    
-    # Or use specific services
-    openai = OpenAIService()
-    anthropic = AnthropicService()  # Requires anthropic package
-    gemini = GeminiService()        # Requires google-generativeai package
+    # Or get service directly  
+    service = LLMFactory.get_service("openai/gpt-4-turbo")
+    response = await service.chat_completion(...)
 """
 
 from .base import LLMModelService
@@ -24,8 +22,11 @@ from .errors import (
     LLMError, RateLimitError, TokenLimitError, ModelNotFoundError,
     AuthenticationError, NetworkError, ServiceError
 )
-from .router import LLMRouter, create_default_router
+from .simple_factory import LLMFactory
 from .openai_service import OpenAIService, create_openai_service
+
+# Legacy router (available but not recommended)
+from .router import LLMRouter, create_default_router
 
 # Optional imports with graceful fallbacks
 try:
@@ -41,12 +42,13 @@ except ImportError:
     create_gemini_service = None
 
 __all__ = [
-    # Base and router
-    'LLMModelService',
-    'LLMRouter', 
-    'create_default_router',
+    # Primary interface (recommended)
+    'LLMFactory',
     
-    # OpenAI (always available)
+    # Base classes
+    'LLMModelService',
+    
+    # Individual services (for direct use)
     'OpenAIService',
     'create_openai_service',
     
@@ -55,6 +57,10 @@ __all__ = [
     'create_anthropic_service',
     'GeminiService',         # None if package not installed
     'create_gemini_service',
+    
+    # Legacy router (use LLMFactory instead)
+    'LLMRouter',
+    'create_default_router',
     
     # Errors
     'LLMError',
