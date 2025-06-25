@@ -13,7 +13,7 @@ Usage:
     )
     
     # Or get service directly  
-    service = LLMFactory.get_service("openai/gpt-4-turbo")
+    service = LLMFactory.get_service("openai/o3")
     response = await service.chat_completion(...)
 """
 

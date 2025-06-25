@@ -2,7 +2,7 @@
 OpenAI Service Implementation
 
 Provides OpenAI GPT model integration following the standardized LLMModelService interface.
-Supports GPT-4, GPT-4-turbo, GPT-3.5-turbo models with comprehensive error handling,
+Supports GPT-4.1 and o3 models with comprehensive error handling,
 token management, and retry logic.
 """
 
@@ -28,38 +28,32 @@ class OpenAIService(LLMModelService):
     OpenAI service implementation following LLMModelService interface.
     
     Supports models:
-    - gpt-4: High-quality reasoning and analysis
-    - gpt-4-turbo: Improved performance and cost efficiency
-    - gpt-3.5-turbo: Fast responses for simple tasks
     - gpt-4o: Latest optimized model
+    - gpt-4.1: Latest optimized model
+    - o3: Advanced reasoning model optimized for research and analysis
     """
     
     # Supported models with their characteristics
     SUPPORTED_MODELS = {
-        'gpt-4': {
-            'max_tokens': 8192,
-            'context_window': 8192,
-            'description': 'High-quality reasoning and analysis'
-        },
-        'gpt-4-turbo': {
-            'max_tokens': 4096,
-            'context_window': 128000,
-            'description': 'Improved performance and cost efficiency'
-        },
-        'gpt-4-turbo-preview': {
-            'max_tokens': 4096,
-            'context_window': 128000,
-            'description': 'Preview version of GPT-4 Turbo'
-        },
-        'gpt-3.5-turbo': {
-            'max_tokens': 4096,
-            'context_window': 16385,
-            'description': 'Fast responses for simple tasks'
-        },
         'gpt-4o': {
-            'max_tokens': 4096,
+            'max_tokens': 16384,
             'context_window': 128000,
-            'description': 'Latest optimized model'
+            'description': 'Latest optimized model',
+            'uses_max_completion_tokens': False
+        },
+        'gpt-4.1': {
+            'max_tokens': 32768,
+            'context_window': 1047576,
+            'description': 'Latest optimized model',
+            'uses_max_completion_tokens': False
+        },
+        'o3': {
+            'max_tokens': 100000,
+            'context_window': 200000,
+            'description': 'Advanced reasoning model optimized for research and analysis',
+            'uses_max_completion_tokens': True,
+            'temperature_fixed': 1.0,
+            'supported_params': ['model', 'messages', 'max_completion_tokens']
         }
     }
     
@@ -104,8 +98,13 @@ class OpenAIService(LLMModelService):
         Raises:
             LLMError: For any OpenAI service errors
         """
+        
         # Use default model if not specified
         model_name = model or self.default_model
+        
+        # if model name starts with "openai/" remove the prefix
+        if model_name.startswith("openai/"):
+            model_name = model_name[len("openai/"):]
         
         # Validate model is supported
         if model_name not in self.SUPPORTED_MODELS:
@@ -129,18 +128,43 @@ class OpenAIService(LLMModelService):
             formatted_messages = self._prepare_messages(system, truncated_messages)
         
         # Prepare request parameters
+        model_config = self.SUPPORTED_MODELS[model_name]
+        
         request_params = {
             'model': model_name,
             'messages': formatted_messages,
-            'temperature': kwargs.get('temperature', 0.7),
-            'max_tokens': max_tokens,
-            'top_p': kwargs.get('top_p', 1.0),
-            'frequency_penalty': kwargs.get('frequency_penalty', 0.0),
-            'presence_penalty': kwargs.get('presence_penalty', 0.0),
         }
         
-        # Remove None values
-        request_params = {k: v for k, v in request_params.items() if v is not None}
+        # O3 and reasoning models have specific parameter restrictions
+        if model_config.get('uses_max_completion_tokens', False):
+            request_params['max_completion_tokens'] = max_tokens
+            logger.debug(f"Using max_completion_tokens={max_tokens} for reasoning model {model_name}")
+            
+            # O3 has fixed temperature and limited parameter support
+            if 'temperature_fixed' in model_config:
+                # O3 only supports temperature=1.0 (default)
+                logger.debug(f"Using fixed temperature={model_config['temperature_fixed']} for {model_name}")
+                # Don't set temperature parameter - let it use default
+            else:
+                request_params['temperature'] = kwargs.get('temperature', 0.7)
+                
+            # Only add other parameters if supported by the model
+            supported_params = model_config.get('supported_params', [])
+            if 'top_p' in supported_params:
+                request_params['top_p'] = kwargs.get('top_p', 1.0)
+            if 'frequency_penalty' in supported_params:
+                request_params['frequency_penalty'] = kwargs.get('frequency_penalty', 0.0)
+            if 'presence_penalty' in supported_params:
+                request_params['presence_penalty'] = kwargs.get('presence_penalty', 0.0)
+        else:
+            # Standard models support all parameters
+            request_params.update({
+                'max_tokens': max_tokens,
+                'temperature': kwargs.get('temperature', 0.7),
+                'top_p': kwargs.get('top_p', 1.0),
+                'frequency_penalty': kwargs.get('frequency_penalty', 0.0),
+                'presence_penalty': kwargs.get('presence_penalty', 0.0),
+            })
         
         # Execute with retry logic
         async def make_request():
@@ -344,7 +368,7 @@ class OpenAIService(LLMModelService):
             response = await self.chat_completion(
                 system="You are a helpful assistant.",
                 messages=[{"role": "user", "content": "Hello"}],
-                model="gpt-3.5-turbo",
+                model="gpt-4.1",
                 max_tokens=10
             )
             return response is not None and 'content' in response

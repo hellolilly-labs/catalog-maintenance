@@ -61,20 +61,20 @@ class LLMModelService(ABC):
         pass
     
     @staticmethod
-    def count_tokens(text: str, model: str = "gpt-4") -> int:
+    def count_tokens(text: str, model: str = "o3") -> int:
         """
         Count tokens in text using tiktoken.
         
         Args:
             text: Text to count tokens for
-            model: Model to use for tokenization (defaults to gpt-4)
+            model: Model to use for tokenization (defaults to o3)
             
         Returns:
             Number of tokens
         """
         try:
-            # Use model-specific encoding or fall back to cl100k_base (GPT-4)
-            if model.startswith("gpt-4") or model.startswith("gpt-3.5"):
+            # Use model-specific encoding or fall back to cl100k_base (GPT-4.1)
+            if model.startswith("gpt-4") or model.startswith("o"):
                 encoding = tiktoken.encoding_for_model(model)
             else:
                 # Fallback encoding for other models
@@ -100,7 +100,7 @@ class LLMModelService(ABC):
             Total token count
         """
         total_tokens = 0
-        model_name = model or self.default_model or "gpt-4"
+        model_name = model or self.default_model or "o3"
         
         # Count system message tokens
         if system:
@@ -135,7 +135,7 @@ class LLMModelService(ABC):
         if not messages:
             return system, []
             
-        model_name = model or self.default_model or "gpt-4"
+        model_name = model or self.default_model or "o3"
         
         # Always preserve system message
         system_tokens = self.count_tokens(system or "", model_name)

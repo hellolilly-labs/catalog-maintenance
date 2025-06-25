@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     # OpenAI Configuration
     OPENAI_API_KEY: Optional[str] = Field(None, description="OpenAI API key")
     OPENAI_DEFAULT_MODEL: str = Field(
-        default="gpt-4-turbo",
+        default="o3",
         description="Default OpenAI model",
         env="OPENAI_DEFAULT_MODEL"
     )

@@ -41,7 +41,7 @@ class TestOpenAIService:
         service = OpenAIService(api_key=mock_api_key)
         
         assert service.provider_name == "openai"
-        assert service.default_model == "gpt-4-turbo"
+        assert service.default_model == "o3"
         assert service.api_key == mock_api_key
         assert service.client is not None
     
@@ -59,7 +59,7 @@ class TestOpenAIService:
     
     def test_supported_models(self, openai_service):
         """Test that all documented models are supported."""
-        expected_models = ['gpt-4', 'gpt-4-turbo', 'gpt-3.5-turbo', 'gpt-4o']
+        expected_models = ['gpt-4.1', 'gpt-4o', 'o3']
         supported_models = openai_service.list_supported_models()
         
         for model in expected_models:
@@ -67,7 +67,7 @@ class TestOpenAIService:
     
     def test_model_info(self, openai_service):
         """Test model information retrieval."""
-        info = openai_service.get_model_info('gpt-4-turbo')
+        info = openai_service.get_model_info('o3')
         
         assert 'max_tokens' in info
         assert 'context_window' in info
@@ -194,7 +194,7 @@ class TestLLMFactory:
     def test_factory_get_service(self, mock_api_key):
         """Test factory creates correct service for model."""
         with patch.dict(os.environ, {'OPENAI_API_KEY': mock_api_key}):
-            service = LLMFactory.get_service("openai/gpt-4-turbo")
+            service = LLMFactory.get_service("openai/o3")
             
             assert isinstance(service, OpenAIService)
             assert service.provider_name == "openai"
@@ -208,12 +208,12 @@ class TestLLMFactory:
         """Test factory fails when API key missing."""
         with patch.dict(os.environ, {}, clear=True):
             with pytest.raises(ModelNotFoundError, match="OPENAI_API_KEY not set"):
-                LLMFactory.get_service("openai/gpt-4")
+                LLMFactory.get_service("openai/o3")
     
     def test_get_model_for_task(self):
         """Test task-to-model mapping."""
         model = LLMFactory.get_model_for_task("descriptor_generation")
-        assert model == "openai/gpt-4-turbo"
+        assert model == "openai/o3"
         
         model = LLMFactory.get_model_for_task("sizing_analysis")
         assert model == "anthropic/claude-3-5-sonnet-20241022"

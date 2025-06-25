@@ -339,25 +339,48 @@ class LocalAccountStorageProvider(AccountStorageProvider):
     # Product Catalog Methods
     async def get_product_catalog(self, account: str) -> Optional[List[dict]]:
         """Get product catalog from local storage or fallback to data/{account}/products.json"""
+        import gzip
+        
         try:
-            # First try local storage
-            filepath = os.path.join(self.base_dir, "accounts", account, "products.json")
+            # First try local storage - check for both compressed and uncompressed files
+            base_filepath = os.path.join(self.base_dir, "accounts", account, "products.json")
+            gzip_filepath = base_filepath + ".gz"
+            
+            # Try compressed file first
+            if os.path.exists(gzip_filepath):
+                logger.info(f"Loading compressed product catalog for {account}: {gzip_filepath}")
+                with gzip.open(gzip_filepath, 'rt', encoding='utf-8') as f:
+                    products = json.load(f)
+                    logger.info(f"Loaded compressed product catalog for {account}: {len(products)} products")
+                    return products
+            
+            # Try uncompressed file
+            if os.path.exists(base_filepath):
+                logger.info(f"Loading product catalog for {account}: {base_filepath}")
+                with open(base_filepath, "r") as f:
+                    products = json.load(f)
+                    logger.info(f"Loaded product catalog for {account}: {len(products)} products")
+                    return products
             
             # Fallback to data/{account}/products.json if not in storage
-            if not os.path.exists(filepath):
-                fallback_path = f"data/{account}/products.json"
-                if os.path.exists(fallback_path):
-                    logger.info(f"Using fallback product catalog for {account}: {fallback_path}")
-                    with open(fallback_path, "r") as f:
-                        return json.load(f)
-                
-                logger.info(f"No product catalog found for {account}")
-                return None
+            fallback_path = f"data/{account}/products.json"
+            fallback_gzip_path = fallback_path + ".gz"
             
-            with open(filepath, "r") as f:
-                products = json.load(f)
-                logger.info(f"Loaded product catalog for {account}: {len(products)} products")
-                return products
+            # Try compressed fallback
+            if os.path.exists(fallback_gzip_path):
+                logger.info(f"Using compressed fallback product catalog for {account}: {fallback_gzip_path}")
+                with gzip.open(fallback_gzip_path, 'rt', encoding='utf-8') as f:
+                    return json.load(f)
+            
+            # Try uncompressed fallback
+            if os.path.exists(fallback_path):
+                logger.info(f"Using fallback product catalog for {account}: {fallback_path}")
+                with open(fallback_path, "r") as f:
+                    return json.load(f)
+            
+            logger.info(f"No product catalog found for {account}")
+            return None
+            
         except Exception as e:
             logger.error(f"Error loading product catalog for {account}: {e}")
             return None

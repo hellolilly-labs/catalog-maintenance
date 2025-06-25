@@ -165,6 +165,50 @@ Fixes #issue-number, Related to #issue-number
 6. Keep success criteria and metrics current
 7. Document new patterns and anti-patterns learned
 
+## Implementation Plan Adherence Guidelines
+
+### CRITICAL: Always Check Implementation Plan Scope First
+
+**Before implementing ANY feature or component:**
+
+1. **Reference the ROADMAP**: Check `ROADMAP/*.md` for the actual implementation plan
+2. **Identify Current Phase**: Determine exactly which phase/section we're implementing
+3. **Scope Verification**: Confirm what's actually required vs. what seems logical
+4. **Success Criteria**: Reference the specific success criteria from the roadmap
+5. **Dependencies**: Check what prerequisites must be completed first
+
+### Red Flags - Stop and Ask for Clarification:
+- **Scope Creep**: If you're implementing more than what the roadmap specifies
+- **Missing Context**: If the roadmap references components that don't exist yet
+- **Ambiguous Requirements**: If implementation details are unclear
+- **Dependency Confusion**: If unsure about prerequisite components
+
+### Implementation Workflow:
+1. **Quote the Roadmap**: Reference the exact section being implemented
+2. **Break Down the Phase**: List specific deliverables from the roadmap
+3. **Identify Files to Create/Modify**: Map roadmap requirements to code changes
+4. **Confirm Scope**: Ask user to confirm if scope understanding is correct
+5. **Implement Incrementally**: Build exactly what's specified, no more, no less
+
+### Example Pattern:
+```
+🗺️ ROADMAP REFERENCE: Section 4.1 - Brand Research Pipeline
+📋 DELIVERABLE: `python src/research/brand_researcher.py --brand specialized.com --force-regenerate`
+📁 FILES TO CREATE: 
+  - src/research/brand_researcher.py
+  - Research phase storage structure
+  - Quality evaluation system
+✅ SUCCESS CRITERIA: Generate brand_details.md with comprehensive intelligence
+
+Before implementing, confirming this matches your roadmap expectations...
+```
+
+### Preventing Scope Drift:
+- **Never implement "nice to have" features** not in the roadmap
+- **Don't optimize prematurely** beyond roadmap requirements  
+- **Ask before adding complexity** not explicitly planned
+- **Focus on roadmap deliverables** rather than theoretical improvements
+
 ## Communication Guidelines
 
 ### When Responding to User Queries

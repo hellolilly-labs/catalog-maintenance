@@ -25,7 +25,7 @@ class TestSettings:
         assert settings.ENV == "dev"
         assert settings.DEBUG is True
         assert settings.LOG_LEVEL == "INFO"
-        assert settings.OPENAI_DEFAULT_MODEL == "gpt-4-turbo"
+        assert settings.OPENAI_DEFAULT_MODEL == "gpt-4.1"
         assert settings.PINECONE_DEFAULT_DIMENSION == 1536
         assert settings.INGESTION_BATCH_SIZE == 20
     
@@ -115,7 +115,7 @@ class TestSettings:
         # Test OpenAI config
         openai_config = settings.get_llm_config("openai")
         assert openai_config["api_key"] == "test-openai-key"
-        assert openai_config["default_model"] == "gpt-4-turbo"
+        assert openai_config["default_model"] == "gpt-4.1"
         assert openai_config["max_tokens"] == 4000
         
         # Test Anthropic config
@@ -222,11 +222,11 @@ class TestHelperFunctions:
         # Test settings with overrides
         settings = create_test_settings(
             ENV="staging",
-            OPENAI_DEFAULT_MODEL="gpt-4",
+            OPENAI_DEFAULT_MODEL="o3",
             CUSTOM_SETTING="custom-value"
         )
         assert settings.ENV == "staging"
-        assert settings.OPENAI_DEFAULT_MODEL == "gpt-4"
+        assert settings.OPENAI_DEFAULT_MODEL == "o3"
 
 
 class TestProductionReadiness:

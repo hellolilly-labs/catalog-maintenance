@@ -5,13 +5,14 @@ Direct, simple factory for creating LLM services based on model names.
 Follows KISS principle - no complex routing or registration needed.
 
 Usage:
-    service = LLMFactory.get_service("openai/gpt-4-turbo")
+    service = LLMFactory.get_service("openai/o3")
     response = await service.chat_completion(...)
 """
 
 import os
 import logging
 from typing import Dict, Any, List, Optional
+import asyncio
 
 from .base import LLMModelService
 from .openai_service import OpenAIService
@@ -38,12 +39,20 @@ class LLMFactory:
     
     # Default model routing (configurable via environment)
     DEFAULT_MODELS = {
-        'descriptor_generation': 'openai/gpt-4-turbo',
-        'sizing_analysis': 'anthropic/claude-3-5-sonnet-20241022', 
-        'brand_research': 'anthropic/claude-3-5-sonnet-20241022',
-        'quality_evaluation': 'anthropic/claude-3-sonnet-20240229',
-        'conversation': 'openai/gpt-3.5-turbo',
-        'default': 'openai/gpt-4-turbo'
+        'descriptor_generation': 'openai/o3',
+        'sizing_analysis': 'openai/o3', 
+        'brand_research': 'openai/o3',
+        'foundation_research': 'openai/o3',
+        'market_research': 'openai/o3',
+        'product_research': 'openai/o3',
+        'customer_research': 'openai/o3',
+        'voice_research': 'openai/o3',
+        'interview_research': 'openai/o3',
+        'synthesis_research': 'openai/o3',
+        'quality_evaluation': 'openai/o3',
+        'summarization': 'openai/o3',
+        'conversation': 'openai/gpt-4.1',
+        'default': 'openai/o3'
     }
     
     @staticmethod
@@ -52,7 +61,7 @@ class LLMFactory:
         Get an LLM service instance for the specified model.
         
         Args:
-            model_name: Model name in format "provider/model" (e.g., "openai/gpt-4-turbo")
+            model_name: Model name in format "provider/model" (e.g., "openai/o3")
             
         Returns:
             LLMModelService instance
@@ -181,3 +190,24 @@ class LLMFactory:
                 'CONVERSATION_MODEL': os.getenv('CONVERSATION_MODEL')
             }
         } 
+
+# Example usage
+if __name__ == "__main__":
+    service = LLMFactory.get_service("openai/o3")
+    result = asyncio.run(service.complete_chat([
+        {"role": "user", "content": "Hello, world!"}
+    ]))
+    print(result)
+
+
+def get_service(model_name: str):
+    """
+    Get LLM service for the specified model.
+    
+    Args:
+        model_name: Model name in format "provider/model" (e.g., "openai/o3")
+        
+    Returns:
+        LLM service instance
+    """
+    return LLMFactory.get_service(model_name) 

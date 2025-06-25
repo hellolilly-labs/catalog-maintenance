@@ -241,7 +241,7 @@ class TestDescriptorGeneration:
                 {  # Descriptor generation
                     "content": "This high-performance road bike features a lightweight carbon frame and professional-grade components.",
                     "usage": {"total_tokens": 150},
-                    "model": "gpt-4-turbo"
+                    "model": "o3"
                 }
             ]
             
@@ -322,7 +322,7 @@ class TestSizingGeneration:
             mock_chat.return_value = {
                 "content": json.dumps(sizing_response),
                 "usage": {"total_tokens": 200},
-                "model": "gpt-4"
+                "model": "o3"
             }
             
             generator = DescriptorGenerator()

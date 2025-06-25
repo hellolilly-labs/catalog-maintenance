@@ -59,6 +59,11 @@ class AnthropicService(LLMModelService):
             "max_tokens": 200000,
             "max_output_tokens": 4096,
             "description": "Fastest model for simpler tasks"
+        },
+        "claude-4-0-sonnet": {
+            "max_tokens": 200000,
+            "max_output_tokens": 8192,
+            "description": "Most capable model for complex reasoning"
         }
     }
     
@@ -124,6 +129,11 @@ class AnthropicService(LLMModelService):
         try:
             # Validate and prepare inputs
             model = model or self.default_model
+            
+            # if model name starts with "anthropic/" remove the prefix
+            if model.startswith("anthropic/"):
+                model = model[len("anthropic/"):]
+            
             if model not in self.SUPPORTED_MODELS:
                 raise ModelNotFoundError(f"Model {model} not supported by Anthropic service")
             

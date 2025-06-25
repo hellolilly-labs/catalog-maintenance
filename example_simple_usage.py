@@ -21,7 +21,7 @@ def main():
     # 1. Direct service creation (your fetch_llm_model_service pattern)
     print("✅ Direct service creation:")
     print("   # Get service directly by model name")
-    print("   service = LLMFactory.get_service('openai/gpt-4-turbo')")
+    print("   service = LLMFactory.get_service('openai/o3')")
     print("   service = LLMFactory.get_service('anthropic/claude-3-5-sonnet')")
     print("   service = LLMFactory.get_service('gemini/gemini-pro')")
     
@@ -29,7 +29,7 @@ def main():
     print("\n✅ One-line LLM calls:")
     print("   # Task-based calls (uses optimal model automatically)")
     print("   response = await LLMFactory.chat_completion(")
-    print("       task='descriptor_generation',  # Uses gpt-4-turbo")
+    print("       task='descriptor_generation',  # Uses o3")
     print("       system='You are a helpful assistant',")
     print("       messages=[{'role': 'user', 'content': 'Hello'}]")
     print("   )")
@@ -44,7 +44,7 @@ def main():
     print("\n✅ Environment-configurable:")
     print("   # Override default models with environment variables")
     print("   export DESCRIPTOR_MODEL=anthropic/claude-3-5-sonnet")
-    print("   export SIZING_MODEL=openai/gpt-4")
+    print("   export SIZING_MODEL=openai/o3")
     print("   export BRAND_RESEARCH_MODEL=gemini/gemini-pro")
     print("   # Now all tasks use your preferred models!")
     
@@ -79,7 +79,7 @@ def main():
     print("   router = LLMRouter()")
     print("   router.register_provider('openai', service, models, priority=100)")
     print("   router.register_provider('anthropic', service, models, priority=110)")
-    print("   router.set_task_routing('descriptor_generation', 'openai/gpt-4-turbo')")
+    print("   router.set_task_routing('descriptor_generation', 'openai/o3')")
     print("   router.set_task_routing('sizing_analysis', 'anthropic/claude-3-5-sonnet')")
     
     print("\n❌ Complex usage:")
