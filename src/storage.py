@@ -500,3 +500,289 @@ def get_account_storage_provider() -> AccountStorageProvider:
         storage_dir = os.environ.get("ACCOUNT_STORAGE_DIR", "local/account_storage")
         logger.info(f"Using local account storage: {storage_dir}")
         return LocalAccountStorageProvider(base_dir=storage_dir)
+
+class BrandDataManager:
+    """
+    Brand data management utilities with restart/cleanup functionality.
+    
+    ⚠️  WARNING: These operations are IRREVERSIBLE and will permanently delete data!
+    """
+    
+    def __init__(self, storage_provider: AccountStorageProvider):
+        self.storage = storage_provider
+    
+    async def restart_brand(self, brand_domain: str, force: bool = False) -> bool:
+        """
+        🚨 DANGER: Completely removes ALL brand data and starts fresh.
+        
+        This will permanently delete:
+        - Account configuration
+        - Product catalogs
+        - All backups
+        - Any cached data
+        
+        Args:
+            brand_domain: Brand domain (e.g., "specialized.com")
+            force: Skip safety checks (USE WITH EXTREME CAUTION)
+            
+        Returns:
+            True if successful, False if cancelled or failed
+            
+        ⚠️  THIS OPERATION IS IRREVERSIBLE ⚠️
+        """
+        if not force:
+            # Safety checks and user confirmation
+            print(f"\n🚨 DANGER: BRAND DATA RESTART FOR '{brand_domain}' 🚨")
+            print("=" * 70)
+            print("This operation will PERMANENTLY DELETE ALL DATA for this brand:")
+            print(f"  • Account configuration (accounts/{brand_domain}/account.json)")
+            print(f"  • Product catalog (accounts/{brand_domain}/products.json)")  
+            print(f"  • All backups (accounts/{brand_domain}/backup/)")
+            print(f"  • Cached vertical detection data")
+            print(f"  • Any generated descriptors/sizing data")
+            print("\n⚠️  THIS CANNOT BE UNDONE! ⚠️")
+            print("\nReasons you might want to do this:")
+            print("  • Testing new implementation")
+            print("  • Brand has completely changed their product line")
+            print("  • Starting fresh after major data corruption")
+            
+            # Check if data exists first
+            account_config = await self.storage.get_account_config(brand_domain)
+            product_catalog = await self.storage.get_product_catalog(brand_domain)
+            
+            if not account_config and not product_catalog:
+                print(f"\n✅ No existing data found for '{brand_domain}' - nothing to delete.")
+                return True
+            
+            if account_config:
+                print(f"\n📊 Current account config: {len(account_config)} settings")
+                
+            if product_catalog:
+                print(f"📦 Current product catalog: {len(product_catalog)} products")
+            
+            # Require explicit confirmation
+            print(f"\nTo confirm deletion, type exactly: DELETE {brand_domain}")
+            confirmation = input("Confirmation: ").strip()
+            
+            if confirmation != f"DELETE {brand_domain}":
+                print("❌ Confirmation failed. Brand restart cancelled.")
+                return False
+            
+            print("\n⚠️  LAST CHANCE: Are you absolutely sure? (yes/no)")
+            final_confirm = input("Final confirmation: ").strip().lower()
+            
+            if final_confirm != "yes":
+                print("❌ Brand restart cancelled.")
+                return False
+        
+        # Proceed with deletion
+        print(f"\n🗑️  Starting brand data deletion for '{brand_domain}'...")
+        
+        deleted_items = []
+        errors = []
+        
+        try:
+            # Delete account configuration
+            if await self._delete_account_config(brand_domain):
+                deleted_items.append("Account configuration")
+            else:
+                errors.append("Failed to delete account configuration")
+                
+            # Delete product catalog  
+            if await self._delete_product_catalog(brand_domain):
+                deleted_items.append("Product catalog")
+            else:
+                errors.append("Failed to delete product catalog")
+                
+            # Delete all backups
+            backup_count = await self._delete_all_backups(brand_domain)
+            if backup_count > 0:
+                deleted_items.append(f"{backup_count} backup files")
+            
+            # Clear any cached data (brand vertical cache, etc.)
+            await self._clear_brand_cache(brand_domain)
+            deleted_items.append("Cached data")
+            
+            # Report results
+            if deleted_items:
+                print(f"\n✅ Successfully deleted:")
+                for item in deleted_items:
+                    print(f"   • {item}")
+            
+            if errors:
+                print(f"\n❌ Errors encountered:")
+                for error in errors:
+                    print(f"   • {error}")
+                return False
+            else:
+                print(f"\n🎉 Brand restart complete for '{brand_domain}'")
+                print("   You can now start fresh with this brand.")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error during brand restart for {brand_domain}: {e}")
+            print(f"\n❌ Unexpected error during restart: {e}")
+            return False
+    
+    async def _delete_account_config(self, brand_domain: str) -> bool:
+        """Delete account configuration"""
+        try:
+            if isinstance(self.storage, GCPAccountStorageProvider):
+                # Delete from GCP
+                blob = self.storage.bucket.blob(f"accounts/{brand_domain}/account.json")
+                if blob.exists():
+                    blob.delete()
+                    return True
+                    
+            elif isinstance(self.storage, LocalAccountStorageProvider):
+                # Delete from local storage
+                filepath = os.path.join(self.storage.base_dir, "accounts", brand_domain, "account.json")
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+                    return True
+                    
+            return True  # Nothing to delete
+        except Exception as e:
+            logger.error(f"Error deleting account config for {brand_domain}: {e}")
+            return False
+    
+    async def _delete_product_catalog(self, brand_domain: str) -> bool:
+        """Delete product catalog and metadata"""
+        try:
+            if isinstance(self.storage, GCPAccountStorageProvider):
+                # Delete from GCP
+                catalog_blob = self.storage.bucket.blob(f"accounts/{brand_domain}/products.json")
+                metadata_blob = self.storage.bucket.blob(f"accounts/{brand_domain}/products.metadata.json")
+                
+                if catalog_blob.exists():
+                    catalog_blob.delete()
+                if metadata_blob.exists():
+                    metadata_blob.delete()
+                    
+            elif isinstance(self.storage, LocalAccountStorageProvider):
+                # Delete from local storage
+                catalog_path = os.path.join(self.storage.base_dir, "accounts", brand_domain, "products.json")
+                metadata_path = os.path.join(self.storage.base_dir, "accounts", brand_domain, "products.metadata.json")
+                
+                if os.path.exists(catalog_path):
+                    os.remove(catalog_path)
+                if os.path.exists(metadata_path):
+                    os.remove(metadata_path)
+                
+                # Also check fallback location
+                fallback_path = f"data/{brand_domain}/products.json"
+                if os.path.exists(fallback_path):
+                    os.remove(fallback_path)
+                    
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting product catalog for {brand_domain}: {e}")
+            return False
+    
+    async def _delete_all_backups(self, brand_domain: str) -> int:
+        """Delete all backup files and return count of deleted files"""
+        deleted_count = 0
+        
+        try:
+            if isinstance(self.storage, GCPAccountStorageProvider):
+                # Delete from GCP
+                backup_prefix = f"accounts/{brand_domain}/backup/"
+                blobs = self.storage.bucket.list_blobs(prefix=backup_prefix)
+                
+                for blob in blobs:
+                    blob.delete()
+                    deleted_count += 1
+                    
+            elif isinstance(self.storage, LocalAccountStorageProvider):
+                # Delete from local storage
+                backup_dir = os.path.join(self.storage.base_dir, "accounts", brand_domain, "backup")
+                
+                if os.path.exists(backup_dir):
+                    import shutil
+                    for filename in os.listdir(backup_dir):
+                        filepath = os.path.join(backup_dir, filename)
+                        if os.path.isfile(filepath):
+                            os.remove(filepath)
+                            deleted_count += 1
+                    
+                    # Remove empty backup directory
+                    os.rmdir(backup_dir)
+                    
+        except Exception as e:
+            logger.error(f"Error deleting backups for {brand_domain}: {e}")
+            
+        return deleted_count
+    
+    async def _clear_brand_cache(self, brand_domain: str) -> None:
+        """Clear any cached data for the brand"""
+        try:
+            # Clear brand vertical cache if it exists
+            # This would integrate with the descriptor.py caching mechanism
+            from src.descriptor import DescriptorGenerator
+            generator = DescriptorGenerator()
+            
+            # Clear the brand from cache if present
+            if hasattr(generator, '_brand_vertical_cache'):
+                generator._brand_vertical_cache.pop(brand_domain, None)
+                logger.info(f"Cleared brand vertical cache for {brand_domain}")
+                
+        except Exception as e:
+            logger.debug(f"Note: Could not clear cache for {brand_domain}: {e}")
+    
+    async def list_brand_data(self, brand_domain: str) -> Dict[str, Any]:
+        """
+        List all data associated with a brand (for inspection before deletion).
+        
+        Returns:
+            Dictionary with brand data summary
+        """
+        try:
+            summary = {
+                "brand_domain": brand_domain,
+                "account_config": None,
+                "product_catalog": None,
+                "backups": [],
+                "total_size_estimate": 0
+            }
+            
+            # Get account config
+            account_config = await self.storage.get_account_config(brand_domain)
+            if account_config:
+                summary["account_config"] = {
+                    "exists": True,
+                    "settings_count": len(account_config),
+                    "last_updated": account_config.get("updatedAt", "unknown")
+                }
+            
+            # Get product catalog metadata
+            catalog_metadata = await self.storage.get_product_catalog_metadata(brand_domain)
+            if catalog_metadata:
+                summary["product_catalog"] = catalog_metadata
+                summary["total_size_estimate"] += catalog_metadata.get("size", 0)
+            
+            # List backups (implementation depends on storage type)
+            if isinstance(self.storage, LocalAccountStorageProvider):
+                backup_dir = os.path.join(self.storage.base_dir, "accounts", brand_domain, "backup")
+                if os.path.exists(backup_dir):
+                    for filename in os.listdir(backup_dir):
+                        filepath = os.path.join(backup_dir, filename)
+                        if os.path.isfile(filepath):
+                            stat = os.stat(filepath)
+                            summary["backups"].append({
+                                "filename": filename,
+                                "size": stat.st_size,
+                                "created": datetime.fromtimestamp(stat.st_ctime).isoformat()
+                            })
+                            summary["total_size_estimate"] += stat.st_size
+            
+            return summary
+            
+        except Exception as e:
+            logger.error(f"Error listing brand data for {brand_domain}: {e}")
+            return {"error": str(e)}
+
+# Factory function
+def get_brand_data_manager() -> BrandDataManager:
+    """Get brand data manager with configured storage provider"""
+    storage = get_account_storage_provider()
+    return BrandDataManager(storage)
