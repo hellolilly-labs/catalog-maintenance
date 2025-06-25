@@ -18,6 +18,7 @@ from .errors import (
     LLMError, RateLimitError, TokenLimitError, ModelNotFoundError,
     AuthenticationError, NetworkError, InvalidRequestError, ServiceUnavailableError
 )
+from configs import settings
 
 logger = logging.getLogger(__name__)
 
@@ -62,20 +63,24 @@ class OpenAIService(LLMModelService):
         }
     }
     
-    def __init__(self, api_key: str = None, default_model: str = "gpt-4-turbo"):
+    def __init__(self, api_key: str = None, default_model: str = None):
         """
         Initialize OpenAI service.
         
         Args:
-            api_key: OpenAI API key (if None, reads from OPENAI_API_KEY env var)
-            default_model: Default model to use for requests
+            api_key: OpenAI API key (if None, uses settings.OPENAI_API_KEY)
+            default_model: Default model to use (if None, uses settings.OPENAI_DEFAULT_MODEL)
         """
+        # Get default model from settings if not provided
+        if default_model is None:
+            default_model = settings.OPENAI_DEFAULT_MODEL
+            
         super().__init__(provider_name="openai", default_model=default_model)
         
-        # Get API key from parameter or environment
-        self.api_key = api_key or os.getenv('OPENAI_API_KEY')
+        # Get API key from parameter, settings, or environment (in that order)
+        self.api_key = api_key or settings.OPENAI_API_KEY or os.getenv('OPENAI_API_KEY')
         if not self.api_key:
-            raise AuthenticationError("OpenAI API key not provided", provider="openai")
+            raise AuthenticationError("OpenAI API key not provided in settings or environment", provider="openai")
         
         # Initialize async client
         self.client = AsyncOpenAI(api_key=self.api_key)
@@ -112,7 +117,7 @@ class OpenAIService(LLMModelService):
         
         # Check token limits and truncate if necessary
         max_context = self.SUPPORTED_MODELS[model_name]['context_window']
-        max_tokens = kwargs.get('max_tokens', 1000)
+        max_tokens = kwargs.get('max_tokens', settings.OPENAI_MAX_TOKENS)
         available_tokens = max_context - max_tokens - 100  # Reserve space for response
         
         total_tokens = self.count_conversation_tokens(system, messages, model_name)
@@ -142,7 +147,7 @@ class OpenAIService(LLMModelService):
             return await self._make_openai_request(request_params)
         
         try:
-            response = await self.retry_with_backoff(make_request, max_retries=3)
+            response = await self.retry_with_backoff(make_request, max_retries=settings.RETRY_ATTEMPTS)
             return self._format_openai_response(response, model_name)
             
         except Exception as e:
