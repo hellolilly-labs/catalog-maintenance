@@ -1,5 +1,5 @@
 """
-Base class for all researchers
+Base class for all researchers with integrated quality evaluation
 """
 import logging
 from typing import Dict, Any, List, Optional
@@ -60,11 +60,11 @@ class BaseResearcher:
         
         # Quality evaluator models by phase
         self.quality_evaluator_models = {
-            "foundation": "claude-3-5-sonnet",
-            "market_positioning": "claude-3-5-sonnet",
-            "product_style": "claude-3-5-sonnet",
+            "foundation": "o3",
+            "market_positioning": "o3",
+            "product_style": "o3",
             "customer_cultural": "o3",
-            "voice_messaging": "claude-3-5-sonnet",
+            "voice_messaging": "o3",
             "interview_synthesis": "o3",
             "linearity_analysis": "o3",
             "research_integration": "o3"
@@ -72,7 +72,89 @@ class BaseResearcher:
 
     async def research(self, force_refresh: bool = False) -> Dict[str, Any]:
         """
-        Enhanced research method with integrated quality evaluation and feedback loops
+        Main research method with automatic quality evaluation wrapping
+        """
+        if self.enable_quality_evaluation:
+            return await self._research_with_quality_wrapper(force_refresh)
+        else:
+            return await self._execute_core_research(force_refresh)
+    
+    async def _research_with_quality_wrapper(self, force_refresh: bool) -> Dict[str, Any]:
+        """
+        Quality evaluation wrapper around core research logic
+        Handles feedback loops and quality control automatically
+        """
+        logger.info(f"🎯 Starting quality-controlled research for {self.researcher_name}")
+        
+        best_result = None
+        best_quality_score = 0.0
+        improvement_context = None
+        
+        for attempt in range(1, self.max_quality_attempts + 1):
+            logger.info(f"🔄 Quality attempt {attempt}/{self.max_quality_attempts}")
+            
+            try:
+                # Execute core research (always force refresh on retries)
+                should_force = force_refresh or (attempt > 1)
+                core_result = await self._execute_core_research(
+                    force_refresh=should_force,
+                    improvement_context=improvement_context
+                )
+                
+                # Run quality evaluation
+                quality_evaluation = await self._evaluate_research_quality(core_result)
+                
+                # Add quality evaluation to result
+                enhanced_result = core_result.copy()
+                enhanced_result["quality_evaluation"] = quality_evaluation
+                enhanced_result["quality_attempts"] = attempt
+                enhanced_result["max_quality_attempts"] = self.max_quality_attempts
+                
+                # Check if quality threshold is met
+                quality_score = quality_evaluation.get("quality_score", 0.0)
+                passes_threshold = quality_score >= self.quality_threshold
+                
+                if passes_threshold:
+                    logger.info(f"✅ Quality threshold met on attempt {attempt}: {quality_score:.1f}/{self.quality_threshold:.1f}")
+                    enhanced_result["research_method"] = "quality_controlled_research"
+                    return enhanced_result
+                
+                # Track best result for fallback
+                if quality_score > best_quality_score:
+                    best_result = enhanced_result
+                    best_quality_score = quality_score
+                
+                # Prepare for next attempt
+                if attempt < self.max_quality_attempts:
+                    improvement_context = quality_evaluation.get("improvement_feedback", [])
+                    logger.warning(f"⚠️ Quality below threshold ({quality_score:.1f}/{self.quality_threshold:.1f}). Retrying...")
+                    
+                    # Brief pause before retry
+                    import asyncio
+                    await asyncio.sleep(2)
+                
+            except Exception as e:
+                logger.error(f"❌ Quality attempt {attempt} failed: {e}")
+                if attempt == self.max_quality_attempts:
+                    raise
+                continue
+        
+        # All attempts completed but quality threshold not met
+        logger.warning(f"⚠️ Quality threshold not met after {self.max_quality_attempts} attempts. Best: {best_quality_score:.1f}/{self.quality_threshold:.1f}")
+        
+        if best_result:
+            # Mark as quality warning and return best result
+            best_result["quality_warning"] = True
+            best_result["final_quality_score"] = best_quality_score
+            best_result["research_method"] = "quality_controlled_with_warning"
+            return best_result
+        else:
+            raise RuntimeError(f"Quality control failed after {self.max_quality_attempts} attempts")
+    
+    async def _execute_core_research(self, force_refresh: bool = False, improvement_context: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Core research execution method - this is what subclasses should override
+        Clean separation from quality evaluation logic
         """
         start_time = time.time()
         
@@ -89,8 +171,8 @@ class BaseResearcher:
         try:
             await self.progress_tracker.start_step(step_id, "Checking cache and initializing...")
             
-            # Check for cached results first
-            if not force_refresh:
+            # Check for cached results first (only on first attempt without improvement context)
+            if not force_refresh and not improvement_context:
                 cached_result = await self._load_cached_results()
                 if cached_result:
                     await self.progress_tracker.complete_step(
@@ -102,193 +184,61 @@ class BaseResearcher:
                     logger.info(f"✅ Using cached {self.researcher_name} research for {self.brand_domain}")
                     return cached_result
             
-            # Research with quality control
-            if self.enable_quality_evaluation:
-                return await self._research_with_quality_control(step_id, start_time)
-            else:
-                return await self._research_without_quality_control(step_id, start_time)
-                
-        except Exception as e:
-            await self.progress_tracker.fail_step(step_id, str(e))
-            logger.error(f"❌ Error in {self.researcher_name.capitalize()} research for {self.brand_domain}: {e}")
-            raise
-    
-    async def _research_with_quality_control(self, step_id: str, start_time: float) -> Dict[str, Any]:
-        """Research execution with quality evaluation and feedback loops"""
-        
-        best_result = None
-        best_quality_score = 0.0
-        improvement_context = None
-        
-        for attempt in range(1, self.max_quality_attempts + 1):
-            logger.info(f"🎯 Quality attempt {attempt}/{self.max_quality_attempts} for {self.researcher_name}")
+            # Step 1: Comprehensive data gathering
+            await self.progress_tracker.update_progress(step_id, 1, f"📊 Step 1: Gathering comprehensive {self.researcher_name} data...")
+            data = await self._gather_data()
             
-            try:
-                # Step 1: Comprehensive data gathering
-                await self.progress_tracker.update_progress(step_id, 1, f"📊 Step 1: Gathering comprehensive {self.researcher_name} data (attempt {attempt})...")
-                data = await self._gather_data()
-                
-                # Add improvement context to data if available
-                if improvement_context and attempt > 1:
-                    data["improvement_context"] = improvement_context
-                    logger.info(f"💡 Incorporating {len(improvement_context)} improvement suggestions")
-                
-                # Step 2: Multi-round LLM analysis
-                await self.progress_tracker.update_progress(step_id, 2, f"🧠 Step 2: Analyzing {self.researcher_name} data with LLM (attempt {attempt})...")
-                analysis = await self._analyze_data(data)
-                
-                # Step 3: Quality evaluation and synthesis
-                await self.progress_tracker.update_progress(step_id, 3, f"🎯 Step 3: Quality evaluation and synthesis (attempt {attempt})...")
-                final_results = await self._synthesize_results(analysis)
-                
-                # Step 4: LLM-based quality evaluation
-                await self.progress_tracker.update_progress(step_id, 4, f"🔍 Step 4: LLM quality evaluation (attempt {attempt})...")
-                quality_evaluation = await self._evaluate_research_quality(final_results)
-                
-                # Add quality evaluation to metadata
-                final_results["quality_evaluation"] = quality_evaluation
-                
-                # Update basic metadata
-                final_results.update({
-                    "research_metadata": {
-                        "phase": self.researcher_name,
-                        "research_duration_seconds": time.time() - start_time,
-                        "timestamp": datetime.now().isoformat() + "Z",
-                        "cache_expires": (datetime.now() + timedelta(days=self.cache_duration_days)).isoformat() + "Z",
-                        "quality_threshold": self.quality_threshold,
-                        "version": "1.0",
-                        "quality_attempts": attempt,
-                        "max_quality_attempts": self.max_quality_attempts
-                    }
-                })
-                
-                # Check if quality threshold is met
-                quality_score = quality_evaluation.get("quality_score", 0.0)
-                passes_threshold = quality_score >= self.quality_threshold
-                
-                if passes_threshold:
-                    logger.info(f"✅ {self.researcher_name} passed quality check on attempt {attempt}: {quality_score:.1f}/{self.quality_threshold:.1f}")
-                    
-                    # Save successful results
-                    saved_files = await self._save_results(final_results)
-                    
-                    duration = time.time() - start_time
-                    await self.progress_tracker.complete_step(
-                        step_id,
-                        output_files=saved_files,
-                        quality_score=quality_score,
-                        cache_hit=False
-                    )
-                    
-                    return {
-                        "brand": self.brand_domain,
-                        "content": final_results.get("content", ""),
-                        "quality_score": quality_score,
-                        "files": saved_files,
-                        "data_sources": len(data.get("search_results", [])),
-                        "research_method": "enhanced_quality_controlled",
-                        "quality_evaluation": quality_evaluation
-                    }
-                
-                # Track best result for fallback
-                if quality_score > best_quality_score:
-                    best_result = final_results
-                    best_quality_score = quality_score
-                
-                # Prepare for next attempt
-                if attempt < self.max_quality_attempts:
-                    improvement_context = quality_evaluation.get("improvement_feedback", [])
-                    logger.warning(f"⚠️ Quality below threshold ({quality_score:.1f}/{self.quality_threshold:.1f}). Retrying with improvements...")
-                    
-                    # Brief pause before retry
-                    import asyncio
-                    await asyncio.sleep(2)
-                
-            except Exception as e:
-                logger.error(f"❌ Quality attempt {attempt} failed: {e}")
-                if attempt == self.max_quality_attempts:
-                    raise
-                continue
-        
-        # All attempts completed but quality threshold not met
-        logger.warning(f"⚠️ {self.researcher_name} completed {self.max_quality_attempts} attempts. Best quality: {best_quality_score:.1f}/{self.quality_threshold:.1f}")
-        
-        if best_result:
-            # Mark as quality warning and save best result
-            best_result["quality_warning"] = True
-            best_result["final_quality_score"] = best_quality_score
+            # Add improvement context if available (for quality retries)
+            if improvement_context:
+                data["improvement_context"] = improvement_context
+                logger.info(f"💡 Incorporating {len(improvement_context)} improvement suggestions")
             
-            saved_files = await self._save_results(best_result)
+            # Step 2: Multi-round LLM analysis
+            await self.progress_tracker.update_progress(step_id, 2, f"🧠 Step 2: Analyzing {self.researcher_name} data with LLM...")
+            analysis = await self._analyze_data(data)
+            
+            # Step 3: Quality evaluation and synthesis
+            await self.progress_tracker.update_progress(step_id, 3, f"🎯 Step 3: Quality evaluation and synthesis...")
+            final_results = await self._synthesize_results(analysis)
+            
+            # Add metadata
+            final_results.update({
+                "research_metadata": {
+                    "phase": self.researcher_name,
+                    "research_duration_seconds": time.time() - start_time,
+                    "timestamp": datetime.now().isoformat() + "Z",
+                    "cache_expires": (datetime.now() + timedelta(days=self.cache_duration_days)).isoformat() + "Z",
+                    "quality_threshold": self.quality_threshold,
+                    "version": "1.0"
+                }
+            })
+            
+            # Save to storage
+            saved_files = await self._save_results(final_results)
             
             duration = time.time() - start_time
+            logger.info(f"✅ {self.researcher_name.capitalize()} Research completed for {self.brand_domain} in {duration:.1f}s")
+            
             await self.progress_tracker.complete_step(
                 step_id,
                 output_files=saved_files,
-                quality_score=best_quality_score,
+                quality_score=final_results.get("confidence_score", 0.8),
                 cache_hit=False
             )
             
             return {
                 "brand": self.brand_domain,
-                "content": best_result.get("content", ""),
-                "quality_score": best_quality_score,
+                "content": final_results.get("content", ""),
+                "quality_score": final_results.get("confidence_score", 0.8),
                 "files": saved_files,
                 "data_sources": len(data.get("search_results", [])),
-                "research_method": "quality_controlled_with_warning",
-                "quality_warning": True,
-                "quality_evaluation": best_result.get("quality_evaluation", {})
+                "research_method": "enhanced_tavily_crawl_search"
             }
-        else:
-            raise RuntimeError(f"Quality control failed after {self.max_quality_attempts} attempts")
-    
-    async def _research_without_quality_control(self, step_id: str, start_time: float) -> Dict[str, Any]:
-        """Original research execution without quality evaluation"""
-        
-        # Step 1: Comprehensive data gathering (60-90 seconds)
-        await self.progress_tracker.update_progress(step_id, 1, f"📊 Step 1: Gathering comprehensive {self.researcher_name} data...")
-        data = await self._gather_data()
-        
-        # Step 2: Multi-round LLM analysis (90-120 seconds)
-        await self.progress_tracker.update_progress(step_id, 2, f"🧠 Step 2: Analyzing {self.researcher_name} data with LLM...")
-        analysis = await self._analyze_data(data)
-        
-        # Step 3: Quality evaluation and synthesis (30-60 seconds)
-        await self.progress_tracker.update_progress(step_id, 3, f"🎯 Step 3: Quality evaluation and synthesis...")
-        final_results = await self._synthesize_results(analysis)
-        
-        # Add metadata
-        final_results.update({
-            "research_metadata": {
-                "phase": self.researcher_name,
-                "research_duration_seconds": time.time() - start_time,
-                "timestamp": datetime.now().isoformat() + "Z",
-                "cache_expires": (datetime.now() + timedelta(days=self.cache_duration_days)).isoformat() + "Z",
-                "quality_threshold": self.quality_threshold,
-                "version": "1.0"
-            }
-        })
-        
-        # Save to storage
-        saved_files = await self._save_results(final_results)
-        
-        duration = time.time() - start_time
-        logger.info(f"✅ {self.researcher_name.capitalize()} Research completed for {self.brand_domain} in {duration:.1f}s")
-        
-        await self.progress_tracker.complete_step(
-            step_id,
-            output_files=saved_files,
-            quality_score=final_results.get("confidence_score", 0.8),
-            cache_hit=False
-        )
-        
-        return {
-            "brand": self.brand_domain,
-            "content": final_results.get("content", ""),
-            "quality_score": final_results.get("confidence_score", 0.8),
-            "files": saved_files,
-            "data_sources": len(data.get("search_results", [])),
-            "research_method": "enhanced_tavily_crawl_search"
-        }
+            
+        except Exception as e:
+            await self.progress_tracker.fail_step(step_id, str(e))
+            logger.error(f"❌ Error in {self.researcher_name.capitalize()} research for {self.brand_domain}: {e}")
+            raise
     
     async def _evaluate_research_quality(self, research_results: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -298,7 +248,7 @@ class BaseResearcher:
         
         try:
             # Get evaluator model for this phase
-            evaluator_model = self.quality_evaluator_models.get(self.researcher_name, "claude-3-5-sonnet")
+            evaluator_model = self.quality_evaluator_models.get(self.researcher_name, "o3")
             
             # Get quality evaluation prompt
             evaluator_prompt = await self._get_quality_evaluator_prompt()
@@ -320,7 +270,7 @@ class BaseResearcher:
             
             # Map model to task
             task_mapping = {
-                "claude-3-5-sonnet": "quality_evaluation",
+                "o4-mini": "quality_evaluation",
                 "o3": "quality_evaluation_advanced"
             }
             task_name = task_mapping.get(evaluator_model, "quality_evaluation")
@@ -381,15 +331,23 @@ class BaseResearcher:
     async def _get_quality_evaluator_prompt(self) -> Dict[str, str]:
         """Get phase-specific quality evaluator prompt"""
         
+        default_prompts = self._get_fallback_quality_evaluator_prompt()
         try:
             # Try to get phase-specific prompt from Langfuse
             prompt_key = f"liddy/catalog/quality/{self.researcher_name}_evaluator"
-            prompt_client = await self.prompt_manager.get_prompt(prompt_key)
+            prompt_client = await self.prompt_manager.get_prompt(
+                prompt_name=prompt_key, 
+                prompt_type="chat",
+                prompt=[
+                    ChatMessageDict(role="system", content=default_prompts["system"]),
+                    ChatMessageDict(role="user", content=default_prompts["user_template"])
+                ]
+            )
             
             if prompt_client and prompt_client.prompt:
                 return {
-                    "system": prompt_client.prompt[0]["content"],
-                    "user_template": prompt_client.prompt[1]["content"] if len(prompt_client.prompt) > 1 else ""
+                    "system": next((msg["content"] for msg in prompt_client.prompt if msg["role"] == "system"), None),
+                    "user_template": next((msg["content"] for msg in prompt_client.prompt if msg["role"] == "user"), None)
                 }
             
         except Exception as e:
