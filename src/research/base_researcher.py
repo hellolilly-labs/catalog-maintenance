@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 class BaseResearcher:
     """
-    Base class for all researchers
+    Base class for all researchers with integrated quality evaluation
     """
     
     def __init__(self, brand_domain: str, researcher_name: str, step_type: StepType, quality_threshold: float = 8.0, cache_duration_days: int = 180, storage_manager=None):
@@ -54,22 +54,31 @@ class BaseResearcher:
         except Exception:
             self.web_search = None
         
+        # Quality evaluation settings
+        self.enable_quality_evaluation = True
+        self.max_quality_attempts = 3
+        
+        # Quality evaluator models by phase
+        self.quality_evaluator_models = {
+            "foundation": "claude-3-5-sonnet",
+            "market_positioning": "claude-3-5-sonnet",
+            "product_style": "claude-3-5-sonnet",
+            "customer_cultural": "o3",
+            "voice_messaging": "claude-3-5-sonnet",
+            "interview_synthesis": "o3",
+            "linearity_analysis": "o3",
+            "research_integration": "o3"
+        }
 
     async def research(self, force_refresh: bool = False) -> Dict[str, Any]:
         """
-        Research for a brand
-        
-        Args:
-            force_refresh: Force new research even if cached
-            
-        Returns:
-            Research results with metadata
+        Enhanced research method with integrated quality evaluation and feedback loops
         """
         start_time = time.time()
         
         logger.info(f"🏗️ Starting {self.researcher_name} Research for {self.brand_domain}")
         
-        # Create main progress step
+        # Create main progress step  
         step_id = await self.progress_tracker.create_step(
             step_type=self.step_type,
             brand=self.brand_domain,
@@ -93,58 +102,449 @@ class BaseResearcher:
                     logger.info(f"✅ Using cached {self.researcher_name} research for {self.brand_domain}")
                     return cached_result
             
-            # Step 1: Comprehensive data gathering (60-90 seconds)
-            await self.progress_tracker.update_progress(step_id, 1, f"📊 Step 1: Gathering comprehensive {self.researcher_name} data...")
-            data = await self._gather_data()
+            # Research with quality control
+            if self.enable_quality_evaluation:
+                return await self._research_with_quality_control(step_id, start_time)
+            else:
+                return await self._research_without_quality_control(step_id, start_time)
+                
+        except Exception as e:
+            await self.progress_tracker.fail_step(step_id, str(e))
+            logger.error(f"❌ Error in {self.researcher_name.capitalize()} research for {self.brand_domain}: {e}")
+            raise
+    
+    async def _research_with_quality_control(self, step_id: str, start_time: float) -> Dict[str, Any]:
+        """Research execution with quality evaluation and feedback loops"""
+        
+        best_result = None
+        best_quality_score = 0.0
+        improvement_context = None
+        
+        for attempt in range(1, self.max_quality_attempts + 1):
+            logger.info(f"🎯 Quality attempt {attempt}/{self.max_quality_attempts} for {self.researcher_name}")
             
-            # Step 2: Multi-round LLM analysis (90-120 seconds)
-            await self.progress_tracker.update_progress(step_id, 2, f"🧠 Step 2: Analyzing {self.researcher_name} data with LLM...")
-            analysis = await self._analyze_data(data)
+            try:
+                # Step 1: Comprehensive data gathering
+                await self.progress_tracker.update_progress(step_id, 1, f"📊 Step 1: Gathering comprehensive {self.researcher_name} data (attempt {attempt})...")
+                data = await self._gather_data()
+                
+                # Add improvement context to data if available
+                if improvement_context and attempt > 1:
+                    data["improvement_context"] = improvement_context
+                    logger.info(f"💡 Incorporating {len(improvement_context)} improvement suggestions")
+                
+                # Step 2: Multi-round LLM analysis
+                await self.progress_tracker.update_progress(step_id, 2, f"🧠 Step 2: Analyzing {self.researcher_name} data with LLM (attempt {attempt})...")
+                analysis = await self._analyze_data(data)
+                
+                # Step 3: Quality evaluation and synthesis
+                await self.progress_tracker.update_progress(step_id, 3, f"🎯 Step 3: Quality evaluation and synthesis (attempt {attempt})...")
+                final_results = await self._synthesize_results(analysis)
+                
+                # Step 4: LLM-based quality evaluation
+                await self.progress_tracker.update_progress(step_id, 4, f"🔍 Step 4: LLM quality evaluation (attempt {attempt})...")
+                quality_evaluation = await self._evaluate_research_quality(final_results)
+                
+                # Add quality evaluation to metadata
+                final_results["quality_evaluation"] = quality_evaluation
+                
+                # Update basic metadata
+                final_results.update({
+                    "research_metadata": {
+                        "phase": self.researcher_name,
+                        "research_duration_seconds": time.time() - start_time,
+                        "timestamp": datetime.now().isoformat() + "Z",
+                        "cache_expires": (datetime.now() + timedelta(days=self.cache_duration_days)).isoformat() + "Z",
+                        "quality_threshold": self.quality_threshold,
+                        "version": "1.0",
+                        "quality_attempts": attempt,
+                        "max_quality_attempts": self.max_quality_attempts
+                    }
+                })
+                
+                # Check if quality threshold is met
+                quality_score = quality_evaluation.get("quality_score", 0.0)
+                passes_threshold = quality_score >= self.quality_threshold
+                
+                if passes_threshold:
+                    logger.info(f"✅ {self.researcher_name} passed quality check on attempt {attempt}: {quality_score:.1f}/{self.quality_threshold:.1f}")
+                    
+                    # Save successful results
+                    saved_files = await self._save_results(final_results)
+                    
+                    duration = time.time() - start_time
+                    await self.progress_tracker.complete_step(
+                        step_id,
+                        output_files=saved_files,
+                        quality_score=quality_score,
+                        cache_hit=False
+                    )
+                    
+                    return {
+                        "brand": self.brand_domain,
+                        "content": final_results.get("content", ""),
+                        "quality_score": quality_score,
+                        "files": saved_files,
+                        "data_sources": len(data.get("search_results", [])),
+                        "research_method": "enhanced_quality_controlled",
+                        "quality_evaluation": quality_evaluation
+                    }
+                
+                # Track best result for fallback
+                if quality_score > best_quality_score:
+                    best_result = final_results
+                    best_quality_score = quality_score
+                
+                # Prepare for next attempt
+                if attempt < self.max_quality_attempts:
+                    improvement_context = quality_evaluation.get("improvement_feedback", [])
+                    logger.warning(f"⚠️ Quality below threshold ({quality_score:.1f}/{self.quality_threshold:.1f}). Retrying with improvements...")
+                    
+                    # Brief pause before retry
+                    import asyncio
+                    await asyncio.sleep(2)
+                
+            except Exception as e:
+                logger.error(f"❌ Quality attempt {attempt} failed: {e}")
+                if attempt == self.max_quality_attempts:
+                    raise
+                continue
+        
+        # All attempts completed but quality threshold not met
+        logger.warning(f"⚠️ {self.researcher_name} completed {self.max_quality_attempts} attempts. Best quality: {best_quality_score:.1f}/{self.quality_threshold:.1f}")
+        
+        if best_result:
+            # Mark as quality warning and save best result
+            best_result["quality_warning"] = True
+            best_result["final_quality_score"] = best_quality_score
             
-            # Step 3: Quality evaluation and synthesis (30-60 seconds)
-            await self.progress_tracker.update_progress(step_id, 3, f"🎯 Step 3: Quality evaluation and synthesis...")
-            final_results = await self._synthesize_results(
-                analysis
-            )
-            
-            # Add metadata
-            final_results.update({
-                "research_metadata": {
-                    "phase": self.researcher_name,
-                    "research_duration_seconds": time.time() - start_time,
-                    "timestamp": datetime.now().isoformat() + "Z",
-                    "cache_expires": (datetime.now() + timedelta(days=self.cache_duration_days)).isoformat() + "Z",
-                    "quality_threshold": self.quality_threshold,
-                    "version": "1.0"
-                }
-            })
-            
-            # Save to storage
-            saved_files = await self._save_results(final_results)
+            saved_files = await self._save_results(best_result)
             
             duration = time.time() - start_time
-            logger.info(f"✅ {self.researcher_name.capitalize()} Research completed for {self.brand_domain} in {duration:.1f}s")
-            
             await self.progress_tracker.complete_step(
                 step_id,
                 output_files=saved_files,
-                quality_score=final_results.get("confidence_score", 0.8),
+                quality_score=best_quality_score,
                 cache_hit=False
             )
             
             return {
                 "brand": self.brand_domain,
-                "content": final_results.get("content", ""),
-                "quality_score": final_results.get("confidence_score", 0.8),
+                "content": best_result.get("content", ""),
+                "quality_score": best_quality_score,
                 "files": saved_files,
                 "data_sources": len(data.get("search_results", [])),
-                "research_method": "enhanced_tavily_crawl_search"
+                "research_method": "quality_controlled_with_warning",
+                "quality_warning": True,
+                "quality_evaluation": best_result.get("quality_evaluation", {})
+            }
+        else:
+            raise RuntimeError(f"Quality control failed after {self.max_quality_attempts} attempts")
+    
+    async def _research_without_quality_control(self, step_id: str, start_time: float) -> Dict[str, Any]:
+        """Original research execution without quality evaluation"""
+        
+        # Step 1: Comprehensive data gathering (60-90 seconds)
+        await self.progress_tracker.update_progress(step_id, 1, f"📊 Step 1: Gathering comprehensive {self.researcher_name} data...")
+        data = await self._gather_data()
+        
+        # Step 2: Multi-round LLM analysis (90-120 seconds)
+        await self.progress_tracker.update_progress(step_id, 2, f"🧠 Step 2: Analyzing {self.researcher_name} data with LLM...")
+        analysis = await self._analyze_data(data)
+        
+        # Step 3: Quality evaluation and synthesis (30-60 seconds)
+        await self.progress_tracker.update_progress(step_id, 3, f"🎯 Step 3: Quality evaluation and synthesis...")
+        final_results = await self._synthesize_results(analysis)
+        
+        # Add metadata
+        final_results.update({
+            "research_metadata": {
+                "phase": self.researcher_name,
+                "research_duration_seconds": time.time() - start_time,
+                "timestamp": datetime.now().isoformat() + "Z",
+                "cache_expires": (datetime.now() + timedelta(days=self.cache_duration_days)).isoformat() + "Z",
+                "quality_threshold": self.quality_threshold,
+                "version": "1.0"
+            }
+        })
+        
+        # Save to storage
+        saved_files = await self._save_results(final_results)
+        
+        duration = time.time() - start_time
+        logger.info(f"✅ {self.researcher_name.capitalize()} Research completed for {self.brand_domain} in {duration:.1f}s")
+        
+        await self.progress_tracker.complete_step(
+            step_id,
+            output_files=saved_files,
+            quality_score=final_results.get("confidence_score", 0.8),
+            cache_hit=False
+        )
+        
+        return {
+            "brand": self.brand_domain,
+            "content": final_results.get("content", ""),
+            "quality_score": final_results.get("confidence_score", 0.8),
+            "files": saved_files,
+            "data_sources": len(data.get("search_results", [])),
+            "research_method": "enhanced_tavily_crawl_search"
+        }
+    
+    async def _evaluate_research_quality(self, research_results: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Evaluate research quality using LLM judge
+        Returns quality evaluation data to be stored in research_metadata.json
+        """
+        
+        try:
+            # Get evaluator model for this phase
+            evaluator_model = self.quality_evaluator_models.get(self.researcher_name, "claude-3-5-sonnet")
+            
+            # Get quality evaluation prompt
+            evaluator_prompt = await self._get_quality_evaluator_prompt()
+            
+            # Prepare evaluation context
+            research_content = research_results.get("content", "")
+            current_confidence = research_results.get("confidence_score", 0.0)
+            
+            evaluation_context = {
+                "phase_name": self.researcher_name,
+                "brand_domain": self.brand_domain,
+                "research_content": research_content[:8000],  # Limit for token management
+                "current_confidence_score": current_confidence,
+                "quality_threshold": self.quality_threshold
+            }
+            
+            # Format user prompt with context
+            user_prompt = evaluator_prompt["user_template"].format(**evaluation_context)
+            
+            # Map model to task
+            task_mapping = {
+                "claude-3-5-sonnet": "quality_evaluation",
+                "o3": "quality_evaluation_advanced"
+            }
+            task_name = task_mapping.get(evaluator_model, "quality_evaluation")
+            
+            # Run LLM evaluation
+            response = await LLMFactory.chat_completion(
+                task=task_name,
+                system=evaluator_prompt["system"],
+                messages=[{
+                    "role": "user",
+                    "content": user_prompt
+                }],
+                temperature=0.1,  # Low temperature for consistent evaluation
+            )
+            
+            # Parse evaluation results
+            evaluation_content = response.get("content", "")
+            quality_score = self._extract_quality_score(evaluation_content)
+            improvement_feedback = self._extract_improvement_suggestions(evaluation_content)
+            criteria_met = self._extract_criteria_compliance(evaluation_content)
+            
+            # Determine confidence level
+            confidence_level = self._determine_confidence_level(quality_score, criteria_met)
+            
+            quality_evaluation = {
+                "quality_score": quality_score,
+                "passes_threshold": quality_score >= self.quality_threshold,
+                "improvement_feedback": improvement_feedback,
+                "criteria_met": criteria_met,
+                "evaluator_model": evaluator_model,
+                "evaluation_timestamp": datetime.now().isoformat(),
+                "confidence_level": confidence_level,
+                "raw_evaluation": evaluation_content[:1000]  # Store first 1000 chars for debugging
+            }
+            
+            # Log evaluation results
+            status_icon = "✅" if quality_evaluation["passes_threshold"] else "⚠️"
+            logger.info(f"{status_icon} Quality evaluation: {quality_score:.1f}/{self.quality_threshold:.1f} ({confidence_level} confidence)")
+            
+            if improvement_feedback and not quality_evaluation["passes_threshold"]:
+                logger.warning(f"💡 Improvement suggestions: {'; '.join(improvement_feedback[:2])}")
+            
+            return quality_evaluation
+            
+        except Exception as e:
+            logger.error(f"❌ Quality evaluation failed: {e}")
+            return {
+                "quality_score": 0.0,
+                "passes_threshold": False,
+                "improvement_feedback": [f"Evaluation failed: {str(e)}"],
+                "criteria_met": {},
+                "evaluator_model": "evaluation_failed",
+                "evaluation_timestamp": datetime.now().isoformat(),
+                "confidence_level": "low",
+                "error": str(e)
+            }
+    
+    async def _get_quality_evaluator_prompt(self) -> Dict[str, str]:
+        """Get phase-specific quality evaluator prompt"""
+        
+        try:
+            # Try to get phase-specific prompt from Langfuse
+            prompt_key = f"liddy/catalog/quality/{self.researcher_name}_evaluator"
+            prompt_client = await self.prompt_manager.get_prompt(prompt_key)
+            
+            if prompt_client and prompt_client.prompt:
+                return {
+                    "system": prompt_client.prompt[0]["content"],
+                    "user_template": prompt_client.prompt[1]["content"] if len(prompt_client.prompt) > 1 else ""
+                }
+            
+        except Exception as e:
+            logger.warning(f"Using fallback evaluator prompt for {self.researcher_name}: {e}")
+        
+        return self._get_fallback_quality_evaluator_prompt()
+    
+    def _get_fallback_quality_evaluator_prompt(self) -> Dict[str, str]:
+        """Fallback quality evaluator prompt when Langfuse is unavailable"""
+        
+        system_prompt = f"""You are an expert quality evaluator for {self.researcher_name} brand research.
+
+Evaluate the research quality on a scale of 0.0 to 10.0 based on these criteria:
+
+EVALUATION CRITERIA:
+- Accuracy: Information is factual and well-sourced (0-2 points)
+- Completeness: All required elements present (0-2 points)  
+- Consistency: No contradictions or conflicts (0-2 points)
+- Authenticity: Captures genuine brand voice (0-2 points)
+- Actionability: Provides implementable insights (0-2 points)
+
+QUALITY STANDARDS:
+- 9.0-10.0: Exceptional quality, production ready
+- 8.0-8.9: High quality, minor improvements possible
+- 7.0-7.9: Good quality, some improvements needed
+- 6.0-6.9: Acceptable quality, significant improvements needed
+- Below 6.0: Poor quality, major rework required
+
+Respond in JSON format with your evaluation."""
+
+        user_template = """Evaluate this {phase_name} research for {brand_domain}:
+
+RESEARCH CONTENT:
+{research_content}
+
+CONTEXT:
+- Current confidence score: {current_confidence_score}
+- Quality threshold: {quality_threshold}/10.0
+
+Provide evaluation in this JSON format:
+{{
+    "quality_score": 8.2,
+    "criteria_met": {{
+        "accuracy": true,
+        "completeness": true, 
+        "consistency": true,
+        "authenticity": true,
+        "actionability": true
+    }},
+    "improvement_feedback": [
+        "Specific suggestion 1",
+        "Specific suggestion 2"
+    ],
+    "confidence_level": "high"
+}}"""
+
+        return {
+            "system": system_prompt,
+            "user_template": user_template
+        }
+    
+    def _extract_quality_score(self, evaluation_content: str) -> float:
+        """Extract quality score from LLM evaluation"""
+        
+        try:
+            # Try JSON parsing first
+            if evaluation_content.strip().startswith("{"):
+                import json
+                evaluation_json = json.loads(evaluation_content)
+                return float(evaluation_json.get("quality_score", 5.0))
+            
+            # Fallback: regex patterns
+            import re
+            patterns = [
+                r"quality[_\s]*score[:\s]*(\d+\.?\d*)",
+                r"score[:\s]*(\d+\.?\d*)",
+                r"(\d+\.?\d*)\s*/\s*10"
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, evaluation_content, re.IGNORECASE)
+                if match:
+                    score = float(match.group(1))
+                    return min(10.0, max(0.0, score))
+            
+            return 5.0  # Default
+            
+        except Exception as e:
+            logger.error(f"Error extracting quality score: {e}")
+            return 5.0
+    
+    def _extract_improvement_suggestions(self, evaluation_content: str) -> List[str]:
+        """Extract improvement suggestions from evaluation"""
+        
+        try:
+            # Try JSON parsing first
+            if evaluation_content.strip().startswith("{"):
+                import json
+                evaluation_json = json.loads(evaluation_content)
+                return evaluation_json.get("improvement_feedback", [])
+            
+            # Fallback: extract from text
+            suggestions = []
+            lines = evaluation_content.split('\n')
+            
+            for line in lines:
+                line = line.strip()
+                if line.startswith('-') or line.startswith('•') or line.startswith('*'):
+                    suggestion = line[1:].strip()
+                    if suggestion and len(suggestion) > 10:
+                        suggestions.append(suggestion)
+                        if len(suggestions) >= 5:
+                            break
+            
+            return suggestions
+            
+        except Exception as e:
+            logger.error(f"Error extracting improvement suggestions: {e}")
+            return []
+    
+    def _extract_criteria_compliance(self, evaluation_content: str) -> Dict[str, bool]:
+        """Extract criteria compliance from evaluation"""
+        
+        try:
+            # Try JSON parsing first
+            if evaluation_content.strip().startswith("{"):
+                import json
+                evaluation_json = json.loads(evaluation_content)
+                return evaluation_json.get("criteria_met", {})
+            
+            # Fallback: basic analysis
+            return {
+                "accuracy": "accuracy" in evaluation_content.lower() and "good" in evaluation_content.lower(),
+                "completeness": "complete" in evaluation_content.lower(),
+                "consistency": "consistent" in evaluation_content.lower(),
+                "authenticity": "authentic" in evaluation_content.lower(),
+                "actionability": "actionable" in evaluation_content.lower()
             }
             
         except Exception as e:
-            await self.progress_tracker.fail_step(step_id, str(e))
-            logger.error(f"❌ Error in {self.researcher_name.capitalize()} research for {self.brand_domain}: {e}")
-            raise
+            logger.error(f"Error extracting criteria compliance: {e}")
+            return {}
+    
+    def _determine_confidence_level(self, quality_score: float, criteria_met: Dict[str, bool]) -> str:
+        """Determine confidence level for the evaluation"""
+        
+        criteria_count = sum(1 for met in criteria_met.values() if met)
+        criteria_ratio = criteria_count / max(1, len(criteria_met))
+        
+        if quality_score >= 8.0 and criteria_ratio >= 0.8:
+            return "high"
+        elif quality_score >= 6.0 and criteria_ratio >= 0.6:
+            return "medium"
+        else:
+            return "low"
     
     async def _gather_data(self) -> Dict[str, Any]:
         """
@@ -193,7 +593,6 @@ class BaseResearcher:
             for result, citation in zip(data["search_results"][:50], source_citations.values())
         ])
 
-
         prompt_client = await self._get_prompt()
         prompts = prompt_client.prompt
         system_prompt = next((msg["content"] for msg in prompts if msg["role"] == "system"), None)
@@ -212,6 +611,19 @@ class BaseResearcher:
             "confidence_level": "High" if success_rate > 0.7 and total_sources >= 20 else "Medium" if success_rate > 0.5 and total_sources >= 10 else "Low",
             "data_quality_text": "high" if success_rate > 0.7 else "medium" if success_rate > 0.5 else "limited"
         }
+        
+        # Add improvement context if available (for quality retries)
+        improvement_context = data.get("improvement_context", [])
+        if improvement_context:
+            improvement_text = "\n\n**IMPROVEMENT CONTEXT (from previous quality evaluation):**\n"
+            for i, suggestion in enumerate(improvement_context[:5], 1):
+                improvement_text += f"{i}. {suggestion}\n"
+            improvement_text += "\nPlease address these specific improvement areas in your research.\n"
+            
+            template_vars["improvement_context"] = improvement_text
+            user_prompt = user_prompt + "\n\n{improvement_context}"
+        else:
+            template_vars["improvement_context"] = ""
         
         # Replace template variables
         final_prompt = user_prompt
@@ -288,200 +700,230 @@ class BaseResearcher:
         
         return intelligence
 
-    async def _save_results(self, results: Dict[str, Any]) -> List[str]:
-        """Save research as separate markdown content, JSON metadata, and sources file"""
+    async def _save_results(self, research_results: Dict[str, Any]) -> List[str]:
+        """Save research results with quality evaluation in metadata"""
+        saved_files = []
         
         try:
-            # Extract content, metadata, and sources
-            content = results.get("content", "")
-            detailed_sources = results.get("detailed_sources", [])
+            brand_domain = self.brand_domain
+            phase_name = self.researcher_name
             
-            metadata = {
-                "brand_domain": self.brand_domain,
-                "phase": self.researcher_name,
-                "confidence_score": results.get("confidence_score", 0.0),
-                "data_quality": results.get("data_quality", "unknown"),
-                "data_sources_count": results.get("data_sources_count", 0),
-                "analysis_method": results.get("analysis_method", "unknown"),
-                "source_citations": results.get("source_citations", {}),
-                "research_metadata": results.get("research_metadata", {})
-            }
-            
-            # Create sources document
-            sources_doc = {
-                "brand_domain": self.brand_domain,
-                "phase": self.researcher_name,
-                "research_timestamp": results.get("research_metadata", {}).get("timestamp"),
-                "total_sources": len(detailed_sources),
-                "detailed_sources": detailed_sources,
-                "source_summary": {
-                    "web_search_results": len([s for s in detailed_sources if s.get("source_type") == "web_search"]),
-                    "unique_domains": len(set(s.get("url", "").split("/")[2] for s in detailed_sources if s.get("url"))),
-                    "search_queries_used": len(set(s.get("search_query") for s in detailed_sources if s.get("search_query"))),
-                },
-                "collection_timestamp": datetime.now().isoformat() + "Z"
-            }
-            
-            # Save markdown content
-            content_path = f"research/{self.researcher_name}/research.md"
-            metadata_path = f"research/{self.researcher_name}/research_metadata.json"
-            sources_path = f"research/{self.researcher_name}/research_sources.json"
-            
-            await self.storage_manager.write_file(
-                account=self.brand_domain,
-                file_path=content_path,
-                content=content,
-                content_type="text/markdown"
-            )
-            # content_blob = self.storage_manager.bucket.blob(f"accounts/{self.brand_domain}/research/{self.researcher_name}/research.md")
-            # content_blob.upload_from_string(
-            #     content,
-            #     content_type="text/markdown"
-            # )
-            
-            # Save metadata
-            await self.storage_manager.write_file(
-                account=self.brand_domain,
-                file_path=metadata_path,
-                content=json.dumps(metadata, indent=2),
-                content_type="application/json"
-            )
-            # metadata_blob = self.storage_manager.bucket.blob(f"accounts/{self.brand_domain}/research/{self.researcher_name}/research_metadata.json")
-            # metadata_blob.upload_from_string(
-            #     json.dumps(metadata, indent=2),
-            #     content_type="application/json"
-            # )
-            
-            # Save sources
-            await self.storage_manager.write_file(
-                account=self.brand_domain,
-                file_path=sources_path,
-                content=json.dumps(sources_doc, indent=2),
-                content_type="application/json"
-            )
-            # sources_blob = self.storage_manager.bucket.blob(f"accounts/{self.brand_domain}/research/{self.researcher_name}/research_sources.json")
-            # sources_blob.upload_from_string(
-            #     json.dumps(sources_doc, indent=2),
-            #     content_type="application/json"
-            # )
-            
-            logger.info(f"💾 Saved {self.researcher_name} research to GCP: {self.brand_domain}")
-            
-            return [content_path, metadata_path, sources_path]
-            
-        except Exception as e:
-            logger.error(f"Error saving {self.researcher_name} research: {e}")
-            return []
-    
-    async def _load_cached_results(self) -> Optional[Dict[str, Any]]:
-        """Load cached research from separate markdown, metadata, and sources files"""
-        
-        try:
-            if hasattr(self.storage_manager, 'bucket'):
-                # GCP storage
-                metadata_blob = self.storage_manager.bucket.blob(f"accounts/{self.brand_domain}/research/{self.researcher_name}/research_metadata.json")
-                content_blob = self.storage_manager.bucket.blob(f"accounts/{self.brand_domain}/research/{self.researcher_name}/research.md")
-                sources_blob = self.storage_manager.bucket.blob(f"accounts/{self.brand_domain}/research/{self.researcher_name}/research_sources.json")
-                
-                if metadata_blob.exists() and content_blob.exists():
-                    metadata_content = metadata_blob.download_as_text()
-                    cached_metadata = json.loads(metadata_content)
-                    research_metadata = cached_metadata.get("research_metadata", {})
-                    
-                    # Check if cache is expired
-                    cache_expires = research_metadata.get("cache_expires")
-                    if cache_expires:
-                        expiry_date = datetime.fromisoformat(cache_expires.replace('Z', '+00:00'))
-                        if datetime.now().replace(tzinfo=expiry_date.tzinfo) < expiry_date:
-                            logger.info(f"🔍 Cache expired for {self.researcher_name} research for {self.brand_domain}")
-                            return None
-                    
-                    markdown_content = content_blob.download_as_text()
-                    
-                    # Load sources if available (optional - older research may not have sources)
-                    detailed_sources = []
-                    if sources_blob.exists():
-                        sources_content = sources_blob.download_as_text()
-                        sources_data = json.loads(sources_content)
-                        detailed_sources = sources_data.get("sources", [])
-                    
-                    # Check if cache is expired
-                    cache_expires = cached_metadata.get("research_metadata", {}).get("cache_expires")
-                    if cache_expires:
-                        expiry_date = datetime.fromisoformat(cache_expires.replace('Z', '+00:00'))
-                        if datetime.now().replace(tzinfo=expiry_date.tzinfo) < expiry_date:
-                            # Combine metadata, content, and sources
-                            cached_metadata["content"] = markdown_content
-                            cached_metadata["detailed_sources"] = detailed_sources
-                            return cached_metadata
-                    
-            else:
+            if hasattr(self.storage_manager, 'base_dir'):
                 # Local storage
-                import os
-                research_dir = os.path.join(
-                    self.storage_manager.base_dir, 
-                    "accounts", 
-                    self.brand_domain, 
-                    "research"
-                )
+                research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research_phases")
+                os.makedirs(research_dir, exist_ok=True)
                 
-                metadata_path = os.path.join(research_dir, f"{self.researcher_name}", "research_metadata.json")
-                content_path = os.path.join(research_dir, f"{self.researcher_name}", "research.md")
-                sources_path = os.path.join(research_dir, f"{self.researcher_name}", "research_sources.json")
+                # Save content
+                content_path = os.path.join(research_dir, f"{phase_name}_research.md")
+                with open(content_path, "w") as f:
+                    f.write(research_results.get("content", ""))
+                saved_files.append(content_path)
                 
-                if os.path.exists(metadata_path) and os.path.exists(content_path):
-                    # Load metadata
-                    with open(metadata_path, "r", encoding="utf-8") as f:
-                        cached_metadata = json.load(f)
-                    
-                    # Load content
-                    with open(content_path, "r", encoding="utf-8") as f:
-                        markdown_content = f.read()
-                    
-                    # Load sources if available (optional - older research may not have sources)
-                    detailed_sources = []
-                    if os.path.exists(sources_path):
-                        with open(sources_path, "r", encoding="utf-8") as f:
-                            sources_data = json.load(f)
-                            detailed_sources = sources_data.get("sources", [])
-                    
-                    # Check if cache is expired
-                    cache_expires = cached_metadata.get("research_metadata", {}).get("cache_expires")
-                    if cache_expires:
-                        expiry_date = datetime.fromisoformat(cache_expires.replace('Z', ''))
-                        if datetime.now() < expiry_date:
-                            # Combine metadata, content, and sources
-                            cached_metadata["content"] = markdown_content
-                            cached_metadata["detailed_sources"] = detailed_sources
-                            return cached_metadata
+                # Save enhanced metadata with quality evaluation
+                metadata = {
+                    "phase": phase_name,
+                    "confidence_score": research_results.get("confidence_score", 0.8),
+                    "data_sources_count": research_results.get("data_sources_count", 0),
+                    "research_metadata": research_results.get("research_metadata", {}),
+                    "quality_evaluation": research_results.get("quality_evaluation", {}),
+                    "quality_warning": research_results.get("quality_warning", False)
+                }
+                
+                metadata_path = os.path.join(research_dir, f"{phase_name}_research_metadata.json")
+                with open(metadata_path, "w") as f:
+                    json.dump(metadata, f, indent=2)
+                saved_files.append(metadata_path)
+                
+                # Save sources data
+                sources_data = {
+                    "search_stats": research_results.get("search_stats", {}),
+                    "detailed_sources": research_results.get("detailed_sources", []),
+                    "source_citations": research_results.get("source_citations", {}),
+                    "collection_timestamp": datetime.now().isoformat() + "Z"
+                }
+                
+                sources_path = os.path.join(research_dir, f"{phase_name}_research_sources.json")
+                with open(sources_path, "w") as f:
+                    json.dump(sources_data, f, indent=2)
+                saved_files.append(sources_path)
+                
+            else:
+                # GCP storage
+                research_dir = f"accounts/{brand_domain}/research_phases"
+                
+                # Save content
+                content_blob = f"{research_dir}/{phase_name}_research.md"
+                blob = self.storage_manager.bucket.blob(content_blob)
+                blob.upload_from_string(research_results.get("content", ""))
+                saved_files.append(content_blob)
+                
+                # Save enhanced metadata with quality evaluation
+                metadata = {
+                    "phase": phase_name,
+                    "confidence_score": research_results.get("confidence_score", 0.8),
+                    "data_sources_count": research_results.get("data_sources_count", 0),
+                    "research_metadata": research_results.get("research_metadata", {}),
+                    "quality_evaluation": research_results.get("quality_evaluation", {}),
+                    "quality_warning": research_results.get("quality_warning", False)
+                }
+                
+                metadata_blob = f"{research_dir}/{phase_name}_research_metadata.json"
+                blob = self.storage_manager.bucket.blob(metadata_blob)
+                blob.upload_from_string(json.dumps(metadata, indent=2))
+                saved_files.append(metadata_blob)
+                
+                # Save sources
+                sources_data = {
+                    "search_stats": research_results.get("search_stats", {}),
+                    "detailed_sources": research_results.get("detailed_sources", []),
+                    "source_citations": research_results.get("source_citations", {}),
+                    "collection_timestamp": datetime.now().isoformat() + "Z"
+                }
+                
+                sources_blob = f"{research_dir}/{phase_name}_research_sources.json"
+                blob = self.storage_manager.bucket.blob(sources_blob)
+                blob.upload_from_string(json.dumps(sources_data, indent=2))
+                saved_files.append(sources_blob)
             
-            return None
+            logger.info(f"✅ Saved {phase_name} research with quality evaluation for {brand_domain}")
             
         except Exception as e:
-            logger.warning(f"Error loading cached {self.researcher_name} research: {e}")
-            return None
-    
+            logger.error(f"❌ Error saving research results: {e}")
+            raise
+        
+        return saved_files
+
+    async def _load_cached_results(self) -> Optional[Dict[str, Any]]:
+        """Load cached research results with quality evaluation data"""
+        try:
+            brand_domain = self.brand_domain
+            phase_name = self.researcher_name
+            
+            if hasattr(self.storage_manager, 'base_dir'):
+                # Local storage
+                research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research_phases")
+                
+                content_path = os.path.join(research_dir, f"{phase_name}_research.md")
+                metadata_path = os.path.join(research_dir, f"{phase_name}_research_metadata.json")
+                
+                if all(os.path.exists(p) for p in [content_path, metadata_path]):
+                    # Check cache expiry
+                    with open(metadata_path, "r") as f:
+                        metadata = json.load(f)
+                    
+                    research_metadata = metadata.get("research_metadata", {})
+                    cache_expires = research_metadata.get("cache_expires")
+                    
+                    if cache_expires and datetime.now() < datetime.fromisoformat(cache_expires.replace("Z", "")):
+                        # Load cached data
+                        with open(content_path, "r") as f:
+                            content = f.read()
+                        
+                        return {
+                            "brand": brand_domain,
+                            "content": content,
+                            "quality_score": metadata.get("confidence_score", 0.8),
+                            "files": [content_path, metadata_path],
+                            "data_sources": metadata.get("data_sources_count", 0),
+                            "research_method": "cached_results",
+                            "quality_evaluation": metadata.get("quality_evaluation", {}),
+                            "quality_warning": metadata.get("quality_warning", False)
+                        }
+            else:
+                # GCP storage 
+                research_dir = f"accounts/{brand_domain}/research_phases"
+                
+                content_blob = f"{research_dir}/{phase_name}_research.md"
+                metadata_blob = f"{research_dir}/{phase_name}_research_metadata.json"
+                
+                content_blob_obj = self.storage_manager.bucket.blob(content_blob)
+                metadata_blob_obj = self.storage_manager.bucket.blob(metadata_blob)
+                
+                if content_blob_obj.exists() and metadata_blob_obj.exists():
+                    # Check cache expiry
+                    metadata_content = metadata_blob_obj.download_as_text()
+                    metadata = json.loads(metadata_content)
+                    
+                    research_metadata = metadata.get("research_metadata", {})
+                    cache_expires = research_metadata.get("cache_expires")
+                    
+                    if cache_expires and datetime.now() < datetime.fromisoformat(cache_expires.replace("Z", "")):
+                        # Load cached data
+                        content = content_blob_obj.download_as_text()
+                        
+                        return {
+                            "brand": brand_domain,
+                            "content": content,
+                            "quality_score": metadata.get("confidence_score", 0.8),
+                            "files": [content_blob, metadata_blob],
+                            "data_sources": metadata.get("data_sources_count", 0),
+                            "research_method": "cached_results",
+                            "quality_evaluation": metadata.get("quality_evaluation", {}),
+                            "quality_warning": metadata.get("quality_warning", False)
+                        }
+        except Exception as e:
+            logger.debug(f"Cache check failed: {e}")
+        
+        return None
+
     async def _get_prompt(self) -> PromptClient:
-        prompts = []
-        prompts.append(ChatMessageDict(role="system", content=self._get_default_instruction_prompt()))
-        prompts.append(ChatMessageDict(role="user", content=self._get_default_user_prompt()))
-        prompt = await self.prompt_manager.get_prompt(
-            f"internal/researcher/{self.researcher_name}",
-            prompt_type="chat",
-            prompt=prompts
-        )
-        return prompt
+        """Get research prompt for this phase"""
+        try:
+            # Try to get specific prompt from Langfuse
+            prompt_key = f"internal/researcher/{self.researcher_name}"
+            prompt_client = await self.prompt_manager.get_prompt(prompt_key)
+            
+            if prompt_client and prompt_client.prompt:
+                return prompt_client
+            
+            # Fallback to creating default prompts
+            logger.warning(f"Using fallback prompt for {self.researcher_name}")
+            
+            # Create default prompts for the research phase
+            default_prompts = [
+                {"role": "system", "content": self._get_default_system_prompt()},
+                {"role": "user", "content": self._get_default_user_prompt()}
+            ]
+            
+            # Create a mock prompt client for fallback
+            class MockPromptClient:
+                def __init__(self, prompts):
+                    self.prompt = prompts
+                    self.version = "fallback_1.0"
+            
+            return MockPromptClient(default_prompts)
+            
+        except Exception as e:
+            logger.error(f"Error getting prompt for {self.researcher_name}: {e}")
+            raise
+    
+    def _get_default_system_prompt(self) -> str:
+        """Get default system prompt for this research phase"""
+        return f"""You are an expert {self.researcher_name} researcher specializing in comprehensive brand analysis.
+
+Your task is to conduct thorough {self.researcher_name} research by analyzing the provided web research data and generating comprehensive insights.
+
+Focus on accuracy, completeness, and actionable insights. Use proper citations and maintain high quality standards.
+
+Generate comprehensive markdown content that provides valuable insights for brand intelligence and AI sales agent training."""
     
     def _get_default_user_prompt(self) -> str:
-        """
-        Get the default user prompt for the research
-        """
-        raise NotImplementedError("Subclasses must implement this method")
-    
-    def _get_default_instruction_prompt(self) -> str:
-        """
-        Get the default instruction prompt for the research
-        """
-        raise NotImplementedError("Subclasses must implement this method")
+        """Get default user prompt for this research phase"""
+        return """Conduct comprehensive {phase_name} research for {{brand_domain}} based on the provided web research data.
+
+**RESEARCH DATA:**
+{{search_context}}
+
+**REQUIREMENTS:**
+- Generate comprehensive analysis with proper structure
+- Use numbered citations [1], [2], etc. from the source reference guide
+- Provide actionable insights and recommendations
+- Maintain high quality and accuracy standards
+- Focus on information relevant to {phase_name} research
+
+**SOURCE REFERENCE GUIDE:**
+{{source_reference_guide}}
+
+Generate comprehensive {phase_name} intelligence that provides valuable insights for brand understanding and AI agent training."""
         
     
