@@ -23,95 +23,259 @@ from src.llm.prompt_manager import PromptManager
 from src.storage import get_account_storage_provider
 from src.progress_tracker import ProgressTracker, StepType, create_console_listener
 from src.web_search import TavilySearchProvider
+from src.research.base_researcher import BaseResearcher
 
 logger = logging.getLogger(__name__)
 
 
-class CustomerCulturalResearcher:
+class CustomerCulturalResearcher(BaseResearcher):
     """Enhanced Customer & Cultural Intelligence Research Phase Implementation"""
     
-    def __init__(self, storage_manager=None):
-        self.storage_manager = storage_manager or get_account_storage_provider()
-        self.llm_service = LLMFactory.get_service("openai/o3")
-        self.prompt_manager = PromptManager.get_prompt_manager()
-        
-        self.quality_threshold = 8.5  # Enhanced threshold
-        self.cache_duration_days = 105  # 3.5 months default
-        
-        self.progress_tracker = ProgressTracker(storage_manager=self.storage_manager, enable_checkpoints=True)
-        console_listener = create_console_listener()
-        self.progress_tracker.add_progress_listener(console_listener)
-        
-    async def research_customer_cultural(self, brand_domain: str, force_refresh: bool = False) -> Dict[str, Any]:
-        """Enhanced Customer & Cultural Intelligence Research"""
-        start_time = time.time()
-        
-        logger.info(f"👥 Starting Enhanced Customer & Cultural Intelligence Research for {brand_domain}")
-        
-        step_id = self.progress_tracker.create_step(
-            step_type=StepType.CUSTOMER_INTELLIGENCE,
-            brand=brand_domain,
-            phase_name="Enhanced Customer & Cultural Intelligence Research",
-            total_operations=8
+    def __init__(self, brand_domain: str, storage_manager=None):
+        super().__init__(
+            brand_domain=brand_domain,
+            researcher_name="customer_cultural",
+            step_type=StepType.CUSTOMER_CULTURAL,
+            quality_threshold=8.5,
+            cache_duration_days=105,
+            storage_manager=storage_manager
         )
         
+        self.llm_service = LLMFactory.get_service("openai/o3")
+        
+    # async def research_customer_cultural(self, brand_domain: str, force_refresh: bool = False) -> Dict[str, Any]:
+    #     """Enhanced Customer & Cultural Intelligence Research"""
+        
+    #     logger.info(f"👥 Starting Enhanced Customer & Cultural Intelligence Research for {brand_domain}")
+        
+    #     # Use the base class research method
+    #     result = await self.research(force_refresh=force_refresh)
+        
+    #     return {
+    #         "brand": brand_domain,
+    #         "customer_cultural_content": result.get("content", ""),
+    #         "quality_score": result.get("quality_score", 0.8),
+    #         "files": result.get("files", []),
+    #         "data_sources": result.get("data_sources", 0),
+    #         "research_method": result.get("research_method", "enhanced_cultural_analysis")
+    #     }
+
+    async def _gather_data(self) -> Dict[str, Any]:
+        """Gather customer and cultural data - implements BaseResearcher abstract method"""
+        
+        brand_name = self.brand_domain.replace('.com', '').replace('.', ' ').title()
+        research_queries = [
+            f"{brand_name} target audience customer demographics",
+            f"{brand_name} customer personas buyer profiles",
+            f"{brand_name} brand community culture values",
+            f"{brand_name} customer reviews testimonials feedback",
+            f"{brand_name} social media followers audience engagement",
+            f"{brand_name} customer lifestyle preferences behavior",
+            f"{brand_name} market research consumer insights",
+            f"{brand_name} brand loyalty customer retention",
+            f"{brand_name} customer journey touchpoints experience",
+            f"{brand_name} cultural influences brand positioning",
+            f"{brand_name} customer feedback product reviews",
+            f"{brand_name} brand advocates community members"
+        ]
+        
         try:
-            self.progress_tracker.start_step(step_id, "Checking cache and initializing...")
+            from src.web_search import get_web_search_engine
+            web_search = get_web_search_engine()
             
-            if not force_refresh:
-                cached_result = await self._load_cached_customer_cultural(brand_domain)
-                if cached_result:
-                    self.progress_tracker.complete_step(step_id, cache_hit=True)
-                    logger.info(f"✅ Using cached customer cultural research for {brand_domain}")
-                    return cached_result
-            
-            # Enhanced analysis with product catalog integration
-            self.progress_tracker.update_progress(step_id, 1, "📦 Loading product catalog for customer insights...")
-            product_catalog = await self.storage_manager.get_product_catalog(brand_domain)
-            
-            self.progress_tracker.update_progress(step_id, 2, "🔍 Analyzing customer segments from product data...")
-            
-            if product_catalog:
-                logger.info(f"🎉 Analyzing {len(product_catalog)} products for customer insights")
-                analysis_result = await self._analyze_with_product_catalog(
-                    brand_domain=brand_domain,
-                    product_catalog=product_catalog,
-                    step_id=step_id
-                )
+            if web_search and web_search.is_available():
+                all_results = []
+                detailed_sources = []
+                successful_searches = 0
+                failed_searches = 0
+                ssl_errors = 0
+                
+                for query_idx, query in enumerate(research_queries):
+                    try:
+                        results = await web_search.search(query)
+                        if results.get("results"):
+                            successful_searches += 1
+                            for result_idx, result in enumerate(results["results"][:3]):
+                                result_dict = {
+                                    "title": result.title,
+                                    "url": result.url,
+                                    "content": result.content,
+                                    "snippet": result.content,
+                                    "score": result.score,
+                                    "published_date": result.published_date,
+                                    "source_query": query,
+                                    "source_type": "customer_cultural_research",
+                                    "query_index": query_idx,
+                                    "result_index": result_idx
+                                }
+                                all_results.append(result_dict)
+                                
+                                source_record = {
+                                    "source_id": f"query_{query_idx}_result_{result_idx}",
+                                    "title": result_dict.get("title", ""),
+                                    "url": result_dict.get("url", ""),
+                                    "snippet": result_dict.get("snippet", ""),
+                                    "search_query": query,
+                                    "search_score": result_dict.get("score", 0.0),
+                                    "collected_at": datetime.now().isoformat() + "Z",
+                                    "source_type": "web_search",
+                                    "provider": results.get("provider_used", "unknown")
+                                }
+                                detailed_sources.append(source_record)
+                        else:
+                            failed_searches += 1
+                            
+                        await asyncio.sleep(0.5)
+                        
+                    except Exception as e:
+                        failed_searches += 1
+                        error_msg = str(e).lower()
+                        if 'ssl' in error_msg and 'certificate' in error_msg:
+                            ssl_errors += 1
+                        logger.warning(f"Search failed for query '{query}': {e}")
+                
+                total_searches = len(research_queries)
+                success_rate = successful_searches / total_searches if total_searches > 0 else 0
+                
+                if ssl_errors >= 3:
+                    error_msg = f"ABORTING: SSL certificate verification failed for {ssl_errors} searches."
+                    logger.error(f"🚨 {error_msg}")
+                    raise RuntimeError(error_msg)
+                
+                if success_rate < 0.3:
+                    error_msg = f"ABORTING: Only {successful_searches}/{total_searches} searches succeeded ({success_rate:.1%})."
+                    logger.error(f"🚨 {error_msg}")
+                    raise RuntimeError(error_msg)
+                
+                if success_rate < 0.7:
+                    logger.warning(f"⚠️ Reduced data quality: Only {successful_searches}/{total_searches} searches succeeded ({success_rate:.1%})")
+                
+                logger.info(f"✅ Web search completed: {successful_searches}/{total_searches} successful searches, {len(all_results)} total sources")
+                
+                return {
+                    "brand_domain": self.brand_domain,
+                    "brand_name": brand_name,
+                    "search_results": all_results,
+                    "detailed_sources": detailed_sources,
+                    "research_queries": research_queries,
+                    "total_sources": len(all_results),
+                    "search_stats": {
+                        "successful_searches": successful_searches,
+                        "failed_searches": failed_searches,
+                        "success_rate": success_rate,
+                        "ssl_errors": ssl_errors
+                    }
+                }
             else:
-                logger.info("📋 No product catalog - using web-only cultural analysis")
-                analysis_result = await self._analyze_without_product_catalog(
-                    brand_domain=brand_domain,
-                    step_id=step_id
-                )
-            
-            self.progress_tracker.update_progress(step_id, 6, "💾 Saving enhanced customer research...")
-            saved_files = await self._save_customer_cultural_research(brand_domain, analysis_result)
-            
-            duration = time.time() - start_time
-            logger.info(f"✅ Enhanced Customer & Cultural Intelligence Research completed in {duration:.1f}s")
-            
-            self.progress_tracker.complete_step(
-                step_id,
-                output_files=saved_files,
-                quality_score=analysis_result.get("confidence", 0.8),
-                cache_hit=False
-            )
-            
-            return {
-                "brand": brand_domain,
-                "customer_cultural_content": analysis_result.get("content", ""),
-                "quality_score": analysis_result.get("confidence", 0.8),
-                "files": saved_files,
-                "data_sources": analysis_result.get("source_count", 0),
-                "research_method": analysis_result.get("analysis_type", "enhanced_cultural_analysis"),
-                "product_count": len(product_catalog) if product_catalog else 0
-            }
-            
-        except Exception as e:
-            self.progress_tracker.fail_step(step_id, str(e))
-            logger.error(f"❌ Error in enhanced customer cultural research: {e}")
+                error_msg = "ABORTING: Web search service not available."
+                logger.error(f"🚨 {error_msg}")
+                raise RuntimeError(error_msg)
+                
+        except RuntimeError:
             raise
+        except Exception as e:
+            error_msg = f"ABORTING: Critical error in data gathering: {str(e)}"
+            logger.error(f"🚨 {error_msg}")
+            raise RuntimeError(error_msg)
+
+    def _get_default_user_prompt(self) -> str:
+        """Get the default user prompt for customer cultural analysis - implements BaseResearcher abstract method"""
+        
+        default_prompt = """Analyze this customer & cultural research data to extract comprehensive audience intelligence.
+
+**Brand:** {{brand_name}}
+**Domain:** {{brand_domain}}
+
+## Research Data Quality Notice:
+- **Total Sources**: {{total_sources}} sources analyzed
+- **Search Success Rate**: {{success_rate}}
+- **Data Quality**: {{data_quality}}
+
+## Research Data Sources:
+
+{{search_context}}
+
+## Source Reference Guide:
+{{source_reference_guide}}
+
+## Customer & Cultural Intelligence Analysis Requirements:
+
+Please create a comprehensive customer & cultural intelligence report in **markdown format**. When referencing information, cite your sources using the numbers provided (e.g., [1], [2], [3]).
+
+Structure your analysis as follows:
+
+# Customer & Cultural Intelligence: {{brand_name}}
+
+## 1. Customer Demographics & Psychographics
+- **Target Age Groups:** [Primary age demographics and generations] [cite sources]
+- **Income & Lifestyle:** [Economic segments and lifestyle preferences] [cite sources]
+- **Geographic Distribution:** [Regional and global customer presence] [cite sources]
+- **Psychographic Profiles:** [Values, interests, and motivations] [cite sources]
+
+## 2. Cultural Patterns & Trends
+- **Cultural Values:** [Core cultural values driving purchase decisions] [cite sources]
+- **Lifestyle Influences:** [Cultural lifestyle factors and trends] [cite sources]
+- **Social Identity:** [How brand fits into customer identity] [cite sources]
+- **Community Engagement:** [Cultural community and social connection] [cite sources]
+
+## 3. Target Audience Segmentation
+- **Primary Segments:** [Main customer groups and characteristics] [cite sources]
+- **Secondary Segments:** [Additional customer segments] [cite sources]
+- **Segment Behaviors:** [Different behaviors across segments] [cite sources]
+- **Segment Preferences:** [Varying preferences and needs] [cite sources]
+
+## 4. Customer Journey & Touchpoints
+- **Discovery Phase:** [How customers discover the brand] [cite sources]
+- **Consideration:** [Research and evaluation process] [cite sources]
+- **Purchase Decision:** [Key factors in buying decisions] [cite sources]
+- **Post-Purchase:** [Customer retention and loyalty patterns] [cite sources]
+
+## 5. Cultural Influences & Values
+- **Performance Culture:** [Emphasis on achievement and excellence] [cite sources]
+- **Innovation Values:** [Appreciation for cutting-edge solutions] [cite sources]
+- **Sustainability Focus:** [Environmental and social responsibility] [cite sources]
+- **Community Values:** [Importance of belonging and connection] [cite sources]
+
+## 6. Customer Behavior Intelligence
+- **Purchase Patterns:** [Buying behavior and frequency] [cite sources]
+- **Brand Loyalty:** [Customer retention and advocacy] [cite sources]
+- **Engagement Preferences:** [Preferred communication channels] [cite sources]
+- **Feedback Patterns:** [Customer review and feedback behavior] [cite sources]
+
+## Analysis Quality & Confidence
+
+**Data Sources:** {{total_sources}} search results analyzed
+**Search Success Rate:** {{success_rate}}
+**Information Quality:** {{information_quality}}
+**Confidence Level:** {{confidence_level}} confidence in findings
+**Key Gaps:** [Note any information that was missing or unclear due to limited data availability]
+
+## Summary
+
+[Provide a 2-3 sentence executive summary of the customer base and cultural positioning]
+
+## Sources
+
+{{source_reference_guide}}
+
+---
+
+**Important Instructions:**
+- **ALWAYS cite sources** using the provided reference numbers [1], [2], [3], etc.
+- Focus on factual, verifiable information only
+- Clearly distinguish between direct customer feedback and external analysis
+- Note confidence levels for different claims based on data availability
+- If information is missing, clearly state "Not available in research data"
+- Given the {{data_quality_text}} data quality, be appropriately cautious in claims
+- Use markdown formatting for structure and readability
+- Include the complete sources list at the end"""
+
+        return default_prompt
+
+    def _get_default_instruction_prompt(self) -> str:
+        """Get the default instruction prompt for customer cultural analysis - implements BaseResearcher abstract method"""
+        
+        return "You are an expert customer intelligence analyst specializing in target audience and cultural analysis. Generate comprehensive, data-driven customer insights based on research data. Always cite your sources using the provided reference numbers. Adjust confidence levels based on data quality."
 
     async def _analyze_with_product_catalog(
         self,
@@ -121,17 +285,17 @@ class CustomerCulturalResearcher:
     ) -> Dict[str, Any]:
         """Enhanced customer analysis using product catalog data"""
         
-        self.progress_tracker.update_progress(step_id, 3, "🧮 Analyzing customer segmentation from products...")
+        await self.progress_tracker.update_progress(step_id, 3, "🧮 Analyzing customer segmentation from products...")
         
         # Analyze customer segments from product data
         customer_segments = await self._analyze_customer_segments(product_catalog)
         
-        self.progress_tracker.update_progress(step_id, 4, "🎯 Analyzing cultural patterns from product design...")
+        await self.progress_tracker.update_progress(step_id, 4, "🎯 Analyzing cultural patterns from product design...")
         
         # Analyze cultural patterns
         cultural_patterns = await self._analyze_cultural_patterns(product_catalog)
         
-        self.progress_tracker.update_progress(step_id, 5, "🧠 Generating enhanced cultural intelligence...")
+        await self.progress_tracker.update_progress(step_id, 5, "🧠 Generating enhanced cultural intelligence...")
         
         # Get enhanced prompt for catalog-based customer analysis
         prompt_template = await self._get_customer_catalog_analysis_prompt()
@@ -160,7 +324,7 @@ class CustomerCulturalResearcher:
             "content": analysis_content,
             "confidence": quality_score,
             "source_count": len(product_catalog),
-            "analysis_type": "catalog_enhanced_customer_intelligence",
+            "analysis_type": "catalog_enhanced_customer_cultural",
             "customer_segments": customer_segments,
             "cultural_patterns": cultural_patterns
         }
@@ -172,7 +336,7 @@ class CustomerCulturalResearcher:
     ) -> Dict[str, Any]:
         """Fallback customer analysis using web research only"""
         
-        self.progress_tracker.update_progress(step_id, 3, "🌐 Conducting web-based cultural research...")
+        await self.progress_tracker.update_progress(step_id, 3, "🌐 Conducting web-based cultural research...")
         
         # Simplified web-only analysis
         analysis_content = f"""# Customer & Cultural Intelligence: {brand_domain.replace('.com', '').title()}
@@ -452,7 +616,7 @@ SAMPLE PRODUCTS FOR REFERENCE:
                 {"role": "user", "content": context}
             ],
             temperature=0.7,
-            max_tokens=4000
+            # max_tokens=4000
         )
         
         return response.get("content", "Customer analysis generation failed")
@@ -577,6 +741,6 @@ SAMPLE PRODUCTS FOR REFERENCE:
         return None
 
 
-def get_customer_cultural_researcher() -> CustomerCulturalResearcher:
+def get_customer_cultural_researcher(brand_domain: str) -> CustomerCulturalResearcher:
     """Get enhanced customer cultural researcher instance"""
-    return CustomerCulturalResearcher()
+    return CustomerCulturalResearcher(brand_domain)

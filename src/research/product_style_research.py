@@ -28,67 +28,46 @@ from src.progress_tracker import ProgressTracker, StepType, create_console_liste
 from src.web_search import TavilySearchProvider
 from src.storage import get_account_storage_provider, AccountStorageProvider
 from configs.settings import get_settings
+from src.research.base_researcher import BaseResearcher
 
 logger = logging.getLogger(__name__)
 
 
-class ProductStyleResearcher:
+class ProductStyleResearcher(BaseResearcher):
     """Product & Style Intelligence Research Phase Implementation"""
     
-    def __init__(self, llm_service: Optional[Any] = None):
-        self.llm_service = llm_service or LLMFactory.get_service("openai/o3")
-        self.settings = get_settings()
-        # Initialize with API key from settings, or None if not available
-        try:
-            api_key = getattr(self.settings, 'TAVILY_API_KEY', None)
-            self.web_search = TavilySearchProvider(api_key) if api_key else None
-        except Exception:
-            self.web_search = None
-        
-        self.prompt_manager = PromptManager.get_prompt_manager()
-        self.storage = get_account_storage_provider()
-        self.quality_threshold = 7.5
-        self.cache_duration_days = 90  # 3 months default
-        
-        self.progress_tracker = ProgressTracker(
-            storage_manager=self.storage,
-            enable_checkpoints=True
+    def __init__(self, brand_domain: str, storage_manager=None):
+        super().__init__(
+            brand_domain=brand_domain,
+            researcher_name="product_style",
+            step_type=StepType.PRODUCT_STYLE,
+            quality_threshold=8.5,
+            cache_duration_days=90,
+            storage_manager=storage_manager
         )
+                
+    # async def research_product_style(self, force_refresh: bool = False) -> Dict[str, Any]:
+    #     """Research product style phase for a brand - ENHANCED VERSION with product catalog integration"""
         
-        console_listener = create_console_listener()
-        self.progress_tracker.add_progress_listener(console_listener)
+    #     logger.info(f"🎨 Starting Enhanced Product & Style Intelligence Research for {brand_domain}")
         
-        self.storage_manager = self.storage
+    #     # Use the base class research method
+    #     result = await self.research(force_refresh=force_refresh)
         
-    async def research_product_style(self, brand_domain: str, force_refresh: bool = False) -> Dict[str, Any]:
-        """Research product style phase for a brand - ENHANCED VERSION with product catalog integration"""
-        
-        logger.info(f"🎨 Starting Enhanced Product & Style Intelligence Research for {brand_domain}")
-        
-        # Delegate to the new enhanced method - fix parameter name
-        result = await self.research_product_style_intelligence(brand_domain, force_regenerate=force_refresh)
-        
-        # Transform result format to match expected CLI interface
-        if result.get("error"):
-            logger.error(f"❌ Enhanced product style research failed: {result['error']}")
-            raise RuntimeError(result["error"])
-        
-        # Return in expected format
-        return {
-            "brand": brand_domain,
-            "product_style_content": result.get("content", ""),
-            "quality_score": result.get("metadata", {}).get("confidence", 0.75),
-            "files": [f"accounts/{brand_domain}/research_phases/product_style_research.md",
-                     f"accounts/{brand_domain}/research_phases/product_style_research_metadata.json", 
-                     f"accounts/{brand_domain}/research_phases/product_style_research_sources.json"],
-            "data_sources": result.get("metadata", {}).get("source_count", 0),
-            "research_method": result.get("metadata", {}).get("analysis_type", "enhanced_catalog_analysis")
-        }
+    #     # Transform result format to match expected CLI interface
+    #     return {
+    #         "brand": self.brand_domain,
+    #         "content": result.get("content", ""),
+    #         "quality_score": result.get("quality_score", 0.75),
+    #         "files": result.get("files", []),
+    #         "data_sources": result.get("data_sources", 0),
+    #         "research_method": result.get("research_method", "enhanced_catalog_analysis")
+    #     }
 
-    async def _gather_product_style_data(self, brand_domain: str) -> Dict[str, Any]:
-        """Gather comprehensive product style data"""
+    async def _gather_data(self) -> Dict[str, Any]:
+        """Gather comprehensive product style data - implements BaseResearcher abstract method"""
         
-        brand_name = brand_domain.replace('.com', '').replace('.', ' ').title()
+        brand_name = self.brand_domain.replace('.com', '').replace('.', ' ').title()
         research_queries = [
             f"{brand_name} product line design philosophy aesthetic",
             f"{brand_name} design language visual identity style guide",
@@ -129,7 +108,7 @@ class ProductStyleResearcher:
                                     "score": result.score,
                                     "published_date": result.published_date,
                                     "source_query": query,
-                                    "source_type": "product_style_research",
+                                    "source_type": "research",
                                     "query_index": query_idx,
                                     "result_index": result_idx
                                 }
@@ -178,7 +157,7 @@ class ProductStyleResearcher:
                 logger.info(f"✅ Web search completed: {successful_searches}/{total_searches} successful searches, {len(all_results)} total sources")
                 
                 return {
-                    "brand_domain": brand_domain,
+                    "brand_domain": self.brand_domain,
                     "brand_name": brand_name,
                     "search_results": all_results,
                     "detailed_sources": detailed_sources,
@@ -203,50 +182,9 @@ class ProductStyleResearcher:
             logger.error(f"🚨 {error_msg}")
             raise RuntimeError(error_msg)
 
-    async def _analyze_product_style_data(self, brand_domain: str, style_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze product style data using LLM with Langfuse prompt management"""
+    def _get_default_user_prompt(self) -> str:
+        """Get the default user prompt for product style analysis - implements BaseResearcher abstract method"""
         
-        total_sources = style_data.get("total_sources", 0)
-        search_stats = style_data.get("search_stats", {})
-        success_rate = search_stats.get("success_rate", 0)
-        
-        if total_sources == 0:
-            error_msg = "ANALYSIS ABORTED: No search results available for analysis."
-            logger.error(f"🚨 {error_msg}")
-            raise RuntimeError(error_msg)
-        
-        # Warn about data quality but proceed if we have some sources
-        if total_sources < 10:
-            logger.warning(f"⚠️ Limited data available: Only {total_sources} sources for analysis. Research quality may be reduced.")
-        
-        if success_rate < 0.5:
-            logger.warning(f"⚠️ Low search success rate: {success_rate:.1%}. Research confidence may be reduced.")
-        
-        # Compile search context with source IDs for citation
-        search_context = ""
-        source_citations = {}  # Map source_id to citation format
-        
-        for result in style_data["search_results"][:20]:  # Use top 20 results
-            source_id = result.get("source_id", f"source_{len(source_citations)}")
-            citation = f"[{len(source_citations) + 1}]"
-            source_citations[source_id] = citation
-            
-            search_context += f"**Source {citation}:**\n"
-            search_context += f"**Title:** {result.get('title', '')}\n"
-            search_context += f"**URL:** {result.get('url', '')}\n"
-            search_context += f"**Content:** {result.get('snippet', '')}\n"
-            search_context += f"**Query:** {result.get('source_query', '')}\n\n---\n\n"
-        
-        # Create source reference guide for LLM
-        source_reference_guide = "\n".join([
-            f"{citation} - {result.get('title', 'Untitled')} ({result.get('url', 'No URL')})"
-            for result, citation in zip(style_data["search_results"][:20], source_citations.values())
-        ])
-        
-        # Get or create Langfuse prompt for product style analysis
-        prompt_manager = PromptManager.get_prompt_manager()
-        
-        # Default comprehensive product style analysis prompt
         default_prompt = """Analyze this product & style research data to extract comprehensive design intelligence.
 
 **Brand:** {{brand_name}}
@@ -332,256 +270,307 @@ Structure your analysis as follows:
 - Clearly distinguish between official design statements and external analysis  
 - Note confidence levels for different claims based on data availability
 - If information is missing, clearly state "Not available in research data"
-- Given the {{data_quality_level}} data quality, be appropriately cautious in claims
+- Given the {{data_quality_text}} data quality, be appropriately cautious in claims
 - Use markdown formatting for structure and readability
 - Include the complete sources list at the end"""
 
-        try:
-            # Get the Langfuse prompt (create if doesn't exist)
-            langfuse_prompt = await prompt_manager.get_prompt(
-                prompt_name="product_style_intelligence_analysis",
-                default_prompt=default_prompt
-            )
-            
-            if not langfuse_prompt:
-                error_msg = "ANALYSIS FAILED: Could not load or create Langfuse prompt"
-                logger.error(f"🚨 {error_msg}")
-                raise RuntimeError(error_msg)
-            
-            # Prepare template variables
-            brand_name = style_data.get('brand_name', brand_domain)
-            data_quality = "High" if success_rate > 0.7 else "Medium" if success_rate > 0.5 else "Limited"
-            information_quality = f"High quality with comprehensive data" if success_rate > 0.7 else f"Medium quality with adequate data" if success_rate > 0.5 else f"Limited quality with minimal data"
-            confidence_level = "High" if success_rate > 0.7 and total_sources >= 20 else "Medium" if success_rate > 0.5 and total_sources >= 10 else "Low"
-            data_quality_level = "high" if success_rate > 0.7 else "medium" if success_rate > 0.5 else "limited"
-            
-            # Compile the final prompt with template substitution
-            prompt_content = langfuse_prompt.prompt
-            
-            # Replace template variables
-            prompt_variables = {
-                "brand_name": brand_name,
-                "brand_domain": brand_domain,
-                "total_sources": total_sources,
-                "success_rate": f"{success_rate:.1%}",
-                "data_quality": data_quality,
-                "search_context": search_context,
-                "source_reference_guide": source_reference_guide,
-                "information_quality": information_quality,
-                "confidence_level": confidence_level,
-                "data_quality_level": data_quality_level
-            }
-            
-            # Simple template substitution
-            for key, value in prompt_variables.items():
-                prompt_content = prompt_content.replace(f"{{{{{key}}}}}", str(value))
-            
-            logger.info(f"🧠 Analyzing {total_sources} sources with O3 model using Langfuse prompt (success rate: {success_rate:.1%})")
-            
-            # Execute LLM analysis with the Langfuse-managed prompt
-            response = await LLMFactory.chat_completion(
-                task="brand_research",
-                system="You are an expert design researcher specializing in product aesthetics and style analysis. Generate comprehensive, well-structured markdown reports with proper source citations based on research data. Always cite your sources using the provided reference numbers. Adjust confidence levels based on data quality.",
-                messages=[{
-                    "role": "user",
-                    "content": prompt_content
-                }],
-                max_tokens=3500,  # Increased for comprehensive analysis
-                temperature=0.1
-            )
-            
-            if response and response.get("content"):
-                # Adjust confidence based on data quality
-                base_confidence = 0.85  # Higher base for full analysis
-                if success_rate < 0.5:
-                    base_confidence = 0.6
-                elif success_rate < 0.7:
-                    base_confidence = 0.75
-                
-                if total_sources < 10:
-                    base_confidence *= 0.9
-                elif total_sources < 5:
-                    base_confidence *= 0.8
-                
-                logger.info(f"✅ Generated comprehensive product style analysis ({len(response['content'])} chars, confidence: {base_confidence:.2f})")
-                
-                return {
-                    "product_style_markdown": response["content"],
-                    "analysis_method": "langfuse_prompt_comprehensive_analysis",
-                    "confidence": base_confidence,
-                    "data_sources": total_sources,
-                    "search_success_rate": success_rate,
-                    "detailed_sources": style_data.get('detailed_sources', []),
-                    "source_citations": source_citations,
-                    "search_stats": search_stats,
-                    "langfuse_prompt_used": langfuse_prompt.name if hasattr(langfuse_prompt, 'name') else "product_style_intelligence_analysis"
-                }
-            else:
-                error_msg = "ANALYSIS FAILED: No response from LLM analysis despite having valid data"
-                logger.error(f"🚨 {error_msg}")
-                raise RuntimeError(error_msg)
-                
-        except Exception as e:
-            if isinstance(e, RuntimeError):
-                raise e
-            error_msg = f"ANALYSIS FAILED: Error in LLM analysis: {str(e)}"
-            logger.error(f"🚨 {error_msg}")
-            raise RuntimeError(error_msg)
-    
-    async def _synthesize_product_style_intelligence(self, brand_domain: str, analysis: Dict[str, Any]) -> Dict[str, Any]:
-        """Synthesize final product style intelligence with enhanced analysis tracking"""
-        
-        return {
-            "product_style_content": analysis["product_style_markdown"],
-            "confidence_score": analysis["confidence"],
-            "data_quality": "high" if analysis["search_success_rate"] > 0.7 else "medium" if analysis["search_success_rate"] > 0.5 else "limited",
-            "data_sources_count": analysis["data_sources"],
-            "analysis_method": analysis["analysis_method"],
-            "detailed_sources": analysis["detailed_sources"],
-            "source_citations": analysis["source_citations"],
-            "langfuse_prompt_used": analysis.get("langfuse_prompt_used", "unknown"),
-            "content_length": len(analysis["product_style_markdown"]),
-            "has_source_citations": len(analysis["source_citations"]) > 0
-        }
-    
-    async def _save_product_style_research(self, brand_domain: str, style: Dict[str, Any]) -> List[str]:
-        """Save product style research using foundation research pattern"""
-        
-        saved_files = []
-        
-        try:
-            markdown_content = style.get("product_style_content", "")
-            
-            metadata = {
-                "phase": "product_style",
-                "confidence_score": style.get("confidence_score", 0.75),
-                "data_quality": style.get("data_quality", "medium"),
-                "data_sources_count": style.get("data_sources_count", 0),
-                "analysis_method": style.get("analysis_method", "unknown"),
-                "research_metadata": style.get("research_metadata", {})
-            }
-            
-            sources_data = {
-                "detailed_sources": style.get("detailed_sources", []),
-                "source_citations": style.get("source_citations", {}),
-                "total_sources": len(style.get("detailed_sources", [])),
-                "collection_timestamp": datetime.now().isoformat() + "Z"
-            }
-            
-            if hasattr(self.storage_manager, 'bucket'):
-                # GCP storage
-                if markdown_content:
-                    content_blob = self.storage_manager.bucket.blob(f"accounts/{brand_domain}/research_phases/product_style.md")
-                    content_blob.upload_from_string(markdown_content, content_type="text/markdown")
-                    saved_files.append(f"accounts/{brand_domain}/research_phases/product_style.md")
-                
-                metadata_blob = self.storage_manager.bucket.blob(f"accounts/{brand_domain}/research_phases/product_style_metadata.json")
-                metadata_blob.upload_from_string(json.dumps(metadata, indent=2), content_type="application/json")
-                saved_files.append(f"accounts/{brand_domain}/research_phases/product_style_metadata.json")
-                
-                sources_blob = self.storage_manager.bucket.blob(f"accounts/{brand_domain}/research_phases/product_style_sources.json")
-                sources_blob.upload_from_string(json.dumps(sources_data, indent=2), content_type="application/json")
-                saved_files.append(f"accounts/{brand_domain}/research_phases/product_style_sources.json")
-                
-            else:
-                # Local storage
-                research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research_phases")
-                os.makedirs(research_dir, exist_ok=True)
-                
-                if markdown_content:
-                    content_path = os.path.join(research_dir, "product_style.md")
-                    with open(content_path, "w", encoding="utf-8") as f:
-                        f.write(markdown_content)
-                    saved_files.append(content_path)
-                    logger.info(f"💾 Saved product style content: {content_path}")
-                
-                metadata_path = os.path.join(research_dir, "product_style_metadata.json")
-                with open(metadata_path, "w", encoding="utf-8") as f:
-                    json.dump(metadata, f, indent=2)
-                saved_files.append(metadata_path)
-                
-                sources_path = os.path.join(research_dir, "product_style_sources.json")
-                with open(sources_path, "w", encoding="utf-8") as f:
-                    json.dump(sources_data, f, indent=2)
-                saved_files.append(sources_path)
-            
-        except Exception as e:
-            logger.error(f"❌ Error saving product style research: {e}")
-            raise
-        
-        return saved_files
-    
-    async def _load_cached_product_style(self, brand_domain: str) -> Optional[Dict[str, Any]]:
-        """Load cached product style research"""
-        
-        try:
-            if hasattr(self.storage_manager, 'bucket'):
-                # GCP storage
-                metadata_blob = self.storage_manager.bucket.blob(f"accounts/{brand_domain}/research_phases/product_style_metadata.json")
-                if not metadata_blob.exists():
-                    return None
-                    
-                metadata_content = metadata_blob.download_as_text()
-                metadata = json.loads(metadata_content)
-                
-                # Check cache expiry
-                research_metadata = metadata.get("research_metadata", {})
-                if research_metadata.get("cache_expires"):
-                    expire_date = datetime.fromisoformat(research_metadata["cache_expires"].replace("Z", ""))
-                    if datetime.now() > expire_date:
-                        return None
-                
-                content_blob = self.storage_manager.bucket.blob(f"accounts/{brand_domain}/research_phases/product_style.md")
-                if content_blob.exists():
-                    content = content_blob.download_as_text()
-                    return {
-                        "brand": brand_domain,
-                        "product_style_content": content,
-                        "quality_score": metadata.get("confidence_score", 0.75),
-                        "files": [],
-                        "data_sources": 0,
-                        "research_method": "cached_product_style"
-                    }
-                
-            else:
-                # Local storage
-                research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research_phases")
-                metadata_path = os.path.join(research_dir, "product_style_metadata.json")
-                
-                if not os.path.exists(metadata_path):
-                    return None
-                
-                with open(metadata_path, "r", encoding="utf-8") as f:
-                    metadata = json.load(f)
-                
-                research_metadata = metadata.get("research_metadata", {})
-                if research_metadata.get("cache_expires"):
-                    expire_date = datetime.fromisoformat(research_metadata["cache_expires"].replace("Z", ""))
-                    if datetime.now() > expire_date:
-                        return None
-                
-                content_path = os.path.join(research_dir, "product_style.md")
-                if os.path.exists(content_path):
-                    with open(content_path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    return {
-                        "brand": brand_domain,
-                        "product_style_content": content,
-                        "quality_score": metadata.get("confidence_score", 0.75),
-                        "files": [content_path],
-                        "data_sources": 0,
-                        "research_method": "cached_product_style"
-                    }
-            
-        except Exception as e:
-            logger.warning(f"⚠️ Error loading cached product style research for {brand_domain}: {e}")
-        
-        return None
+        return default_prompt
 
-    async def research_product_style_intelligence(
+    def _get_default_instruction_prompt(self) -> str:
+        """Get the default instruction prompt for product style analysis - implements BaseResearcher abstract method"""
+        
+        return "You are an expert design researcher specializing in product aesthetics and style analysis. Generate comprehensive, well-structured markdown reports with proper source citations based on research data. Always cite your sources using the provided reference numbers. Adjust confidence levels based on data quality."
+
+    # async def _analyze_data(self, brand_domain: str, style_data: Dict[str, Any]) -> Dict[str, Any]:
+    #     """Analyze product style data using LLM with Langfuse prompt management"""
+        
+    #     total_sources = style_data.get("total_sources", 0)
+    #     search_stats = style_data.get("search_stats", {})
+    #     success_rate = search_stats.get("success_rate", 0)
+        
+    #     if total_sources == 0:
+    #         error_msg = "ANALYSIS ABORTED: No search results available for analysis."
+    #         logger.error(f"🚨 {error_msg}")
+    #         raise RuntimeError(error_msg)
+        
+    #     # Warn about data quality but proceed if we have some sources
+    #     if total_sources < 10:
+    #         logger.warning(f"⚠️ Limited data available: Only {total_sources} sources for analysis. Research quality may be reduced.")
+        
+    #     if success_rate < 0.5:
+    #         logger.warning(f"⚠️ Low search success rate: {success_rate:.1%}. Research confidence may be reduced.")
+        
+    #     # Compile search context with source IDs for citation
+    #     search_context = ""
+    #     source_citations = {}  # Map source_id to citation format
+        
+    #     for result in style_data["search_results"][:20]:  # Use top 20 results
+    #         source_id = result.get("source_id", f"source_{len(source_citations)}")
+    #         citation = f"[{len(source_citations) + 1}]"
+    #         source_citations[source_id] = citation
+            
+    #         search_context += f"**Source {citation}:**\n"
+    #         search_context += f"**Title:** {result.get('title', '')}\n"
+    #         search_context += f"**URL:** {result.get('url', '')}\n"
+    #         search_context += f"**Content:** {result.get('snippet', '')}\n"
+    #         search_context += f"**Query:** {result.get('source_query', '')}\n\n---\n\n"
+        
+    #     # Create source reference guide for LLM
+    #     source_reference_guide = "\n".join([
+    #         f"{citation} - {result.get('title', 'Untitled')} ({result.get('url', 'No URL')})"
+    #         for result, citation in zip(style_data["search_results"][:20], source_citations.values())
+    #     ])
+        
+    #     # Get or create Langfuse prompt for product style analysis
+    #     prompt_manager = PromptManager.get_prompt_manager()
+        
+    #     # Default comprehensive product style analysis prompt
+    #     default_prompt = self._get_default_user_prompt()
+
+    #     try:
+    #         # Get the Langfuse prompt (create if doesn't exist)
+    #         langfuse_prompt = await prompt_manager.get_prompt(
+    #             prompt_name=f"internal/research/{self.researcher_name}/intelligence_analysis",
+    #             default_prompt=default_prompt
+    #         )
+            
+    #         if not langfuse_prompt:
+    #             error_msg = "ANALYSIS FAILED: Could not load or create Langfuse prompt"
+    #             logger.error(f"🚨 {error_msg}")
+    #             raise RuntimeError(error_msg)
+            
+    #         # Prepare template variables
+    #         brand_name = style_data.get('brand_name', brand_domain)
+    #         data_quality = "High" if success_rate > 0.7 else "Medium" if success_rate > 0.5 else "Limited"
+    #         information_quality = f"High quality with comprehensive data" if success_rate > 0.7 else f"Medium quality with adequate data" if success_rate > 0.5 else f"Limited quality with minimal data"
+    #         confidence_level = "High" if success_rate > 0.7 and total_sources >= 20 else "Medium" if success_rate > 0.5 and total_sources >= 10 else "Low"
+    #         data_quality_level = "high" if success_rate > 0.7 else "medium" if success_rate > 0.5 else "limited"
+            
+    #         # Compile the final prompt with template substitution
+    #         prompt_content = langfuse_prompt.prompt
+            
+    #         # Replace template variables
+    #         prompt_variables = {
+    #             "brand_name": brand_name,
+    #             "brand_domain": brand_domain,
+    #             "total_sources": total_sources,
+    #             "success_rate": f"{success_rate:.1%}",
+    #             "data_quality": data_quality,
+    #             "search_context": search_context,
+    #             "source_reference_guide": source_reference_guide,
+    #             "information_quality": information_quality,
+    #             "confidence_level": confidence_level,
+    #             "data_quality_level": data_quality_level
+    #         }
+            
+    #         # Simple template substitution
+    #         for key, value in prompt_variables.items():
+    #             prompt_content = prompt_content.replace(f"{{{{{key}}}}}", str(value))
+            
+    #         logger.info(f"🧠 Analyzing {total_sources} sources with O3 model using Langfuse prompt (success rate: {success_rate:.1%})")
+            
+    #         # Execute LLM analysis with the Langfuse-managed prompt
+    #         response = await LLMFactory.chat_completion(
+    #             task=f"brand_research_{self.researcher_name}",
+    #             system=self._get_default_instruction_prompt(),
+    #             messages=[{
+    #                 "role": "user",
+    #                 "content": prompt_content
+    #             }],
+    #             temperature=0.1
+    #         )
+            
+    #         if response and response.get("content"):
+    #             # Adjust confidence based on data quality
+    #             base_confidence = 0.85  # Higher base for full analysis
+    #             if success_rate < 0.5:
+    #                 base_confidence = 0.6
+    #             elif success_rate < 0.7:
+    #                 base_confidence = 0.75
+                
+    #             if total_sources < 10:
+    #                 base_confidence *= 0.9
+    #             elif total_sources < 5:
+    #                 base_confidence *= 0.8
+                
+    #             logger.info(f"✅ Generated comprehensive product style analysis ({len(response['content'])} chars, confidence: {base_confidence:.2f})")
+                
+    #             return {
+    #                 "markdown": response["content"],
+    #                 "analysis_method": "langfuse_prompt_comprehensive_analysis",
+    #                 "confidence": base_confidence,
+    #                 "data_sources": total_sources,
+    #                 "search_success_rate": success_rate,
+    #                 "detailed_sources": style_data.get('detailed_sources', []),
+    #                 "source_citations": source_citations,
+    #                 "search_stats": search_stats,
+    #                 "langfuse_prompt_used": langfuse_prompt.name if hasattr(langfuse_prompt, 'name') else "intelligence_analysis"
+    #             }
+    #         else:
+    #             error_msg = "ANALYSIS FAILED: No response from LLM analysis despite having valid data"
+    #             logger.error(f"🚨 {error_msg}")
+    #             raise RuntimeError(error_msg)
+                
+    #     except Exception as e:
+    #         if isinstance(e, RuntimeError):
+    #             raise e
+    #         error_msg = f"ANALYSIS FAILED: Error in LLM analysis: {str(e)}"
+    #         logger.error(f"🚨 {error_msg}")
+    #         raise RuntimeError(error_msg)
+    
+    # async def _synthesize_product_style_intelligence(self, brand_domain: str, analysis: Dict[str, Any]) -> Dict[str, Any]:
+    #     """Synthesize final product style intelligence with enhanced analysis tracking"""
+        
+    #     return {
+    #         "content": analysis["markdown"],
+    #         "confidence_score": analysis["confidence"],
+    #         "data_quality": "high" if analysis["search_success_rate"] > 0.7 else "medium" if analysis["search_success_rate"] > 0.5 else "limited",
+    #         "data_sources_count": analysis["data_sources"],
+    #         "analysis_method": analysis["analysis_method"],
+    #         "detailed_sources": analysis["detailed_sources"],
+    #         "source_citations": analysis["source_citations"],
+    #         "langfuse_prompt_used": analysis.get("langfuse_prompt_used", "unknown"),
+    #         "content_length": len(analysis["markdown"]),
+    #         "has_source_citations": len(analysis["source_citations"]) > 0
+    #     }
+    
+    # async def _save_product_style_research(self, brand_domain: str, style: Dict[str, Any]) -> List[str]:
+    #     """Save product style research using foundation research pattern"""
+        
+    #     saved_files = []
+        
+    #     try:
+    #         markdown_content = style.get("content", "")
+            
+    #         metadata = {
+    #             "phase": "product_style",
+    #             "confidence_score": style.get("confidence_score", 0.75),
+    #             "data_quality": style.get("data_quality", "medium"),
+    #             "data_sources_count": style.get("data_sources_count", 0),
+    #             "analysis_method": style.get("analysis_method", "unknown"),
+    #             "research_metadata": style.get("research_metadata", {})
+    #         }
+            
+    #         sources_data = {
+    #             "detailed_sources": style.get("detailed_sources", []),
+    #             "source_citations": style.get("source_citations", {}),
+    #             "total_sources": len(style.get("detailed_sources", [])),
+    #             "collection_timestamp": datetime.now().isoformat() + "Z"
+    #         }
+            
+    #         if hasattr(self.storage_manager, 'bucket'):
+    #             # GCP storage
+    #             if markdown_content:
+    #                 content_blob = self.storage_manager.bucket.blob(f"accounts/{brand_domain}/research_phases/product_style.md")
+    #                 content_blob.upload_from_string(markdown_content, content_type="text/markdown")
+    #                 saved_files.append(f"accounts/{brand_domain}/research_phases/product_style.md")
+                
+    #             metadata_blob = self.storage_manager.bucket.blob(f"accounts/{brand_domain}/research_phases/product_style_metadata.json")
+    #             metadata_blob.upload_from_string(json.dumps(metadata, indent=2), content_type="application/json")
+    #             saved_files.append(f"accounts/{brand_domain}/research_phases/product_style_metadata.json")
+                
+    #             sources_blob = self.storage_manager.bucket.blob(f"accounts/{brand_domain}/research_phases/product_style_sources.json")
+    #             sources_blob.upload_from_string(json.dumps(sources_data, indent=2), content_type="application/json")
+    #             saved_files.append(f"accounts/{brand_domain}/research_phases/product_style_sources.json")
+                
+    #         else:
+    #             # Local storage
+    #             research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research_phases")
+    #             os.makedirs(research_dir, exist_ok=True)
+                
+    #             if markdown_content:
+    #                 content_path = os.path.join(research_dir, "product_style.md")
+    #                 with open(content_path, "w", encoding="utf-8") as f:
+    #                     f.write(markdown_content)
+    #                 saved_files.append(content_path)
+    #                 logger.info(f"💾 Saved product style content: {content_path}")
+                
+    #             metadata_path = os.path.join(research_dir, "product_style_metadata.json")
+    #             with open(metadata_path, "w", encoding="utf-8") as f:
+    #                 json.dump(metadata, f, indent=2)
+    #             saved_files.append(metadata_path)
+                
+    #             sources_path = os.path.join(research_dir, "product_style_sources.json")
+    #             with open(sources_path, "w", encoding="utf-8") as f:
+    #                 json.dump(sources_data, f, indent=2)
+    #             saved_files.append(sources_path)
+            
+    #     except Exception as e:
+    #         logger.error(f"❌ Error saving product style research: {e}")
+    #         raise
+        
+    #     return saved_files
+    
+    # async def _load_cached_product_style(self, brand_domain: str) -> Optional[Dict[str, Any]]:
+    #     """Load cached product style research"""
+        
+    #     try:
+    #         if hasattr(self.storage_manager, 'bucket'):
+    #             # GCP storage
+    #             metadata_blob = self.storage_manager.bucket.blob(f"accounts/{brand_domain}/research_phases/product_style_metadata.json")
+    #             if not metadata_blob.exists():
+    #                 return None
+                    
+    #             metadata_content = metadata_blob.download_as_text()
+    #             metadata = json.loads(metadata_content)
+                
+    #             # Check cache expiry
+    #             research_metadata = metadata.get("research_metadata", {})
+    #             if research_metadata.get("cache_expires"):
+    #                 expire_date = datetime.fromisoformat(research_metadata["cache_expires"].replace("Z", ""))
+    #                 if datetime.now() > expire_date:
+    #                     return None
+                
+    #             content_blob = self.storage_manager.bucket.blob(f"accounts/{brand_domain}/research_phases/product_style.md")
+    #             if content_blob.exists():
+    #                 content = content_blob.download_as_text()
+    #                 return {
+    #                     "brand": brand_domain,
+    #                     "content": content,
+    #                     "quality_score": metadata.get("confidence_score", 0.75),
+    #                     "files": [],
+    #                     "data_sources": 0,
+    #                     "research_method": "cached_product_style"
+    #                 }
+                
+    #         else:
+    #             # Local storage
+    #             research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research_phases")
+    #             metadata_path = os.path.join(research_dir, "product_style_metadata.json")
+                
+    #             if not os.path.exists(metadata_path):
+    #                 return None
+                
+    #             with open(metadata_path, "r", encoding="utf-8") as f:
+    #                 metadata = json.load(f)
+                
+    #             research_metadata = metadata.get("research_metadata", {})
+    #             if research_metadata.get("cache_expires"):
+    #                 expire_date = datetime.fromisoformat(research_metadata["cache_expires"].replace("Z", ""))
+    #                 if datetime.now() > expire_date:
+    #                     return None
+                
+    #             content_path = os.path.join(research_dir, "product_style.md")
+    #             if os.path.exists(content_path):
+    #                 with open(content_path, "r", encoding="utf-8") as f:
+    #                     content = f.read()
+    #                 return {
+    #                     "brand": brand_domain,
+    #                     "content": content,
+    #                     "quality_score": metadata.get("confidence_score", 0.75),
+    #                     "files": [content_path],
+    #                     "data_sources": 0,
+    #                     "research_method": "cached_product_style"
+    #                 }
+            
+    #     except Exception as e:
+    #         logger.warning(f"⚠️ Error loading cached product style research for {brand_domain}: {e}")
+        
+    #     return None
+
+    async def research(
         self, 
-        brand_domain: str, 
-        force_regenerate: bool = False
+        force_refresh: bool = False
     ) -> Dict[str, Any]:
         """
         Research comprehensive product and style intelligence.
@@ -598,23 +587,23 @@ Structure your analysis as follows:
         )
         
         # Create and start tracking step
-        step_id = tracker.create_step(
+        step_id = await tracker.create_step(
             step_type=StepType.PRODUCT_STYLE,
-            brand=brand_domain,
-            phase_name="product_style_research",
+            brand=self.brand_domain,
+            phase_name="product_style",
             total_operations=8
         )
-        tracker.start_step(step_id, "Initializing product style research")
+        await tracker.start_step(step_id, "Initializing product style research")
         
         try:
             # Check cache
-            tracker.update_progress(step_id, 1, "Checking for existing research")
+            await tracker.update_progress(step_id, 1, "Checking for existing research")
             
-            cached_result = await self._check_cache(brand_domain, force_regenerate)
+            cached_result = await self._check_cache(self.brand_domain, force_refresh)
             if cached_result:
-                logger.info(f"Using cached product style research for {brand_domain}")
+                logger.info(f"Using cached product style research for {self.brand_domain}")
                 
-                tracker.complete_step(
+                await tracker.complete_step(
                     step_id,
                     output_files=[],
                     quality_score=cached_result.get("metadata", {}).get("confidence", 0.75),
@@ -623,24 +612,23 @@ Structure your analysis as follows:
                 return cached_result
             
             # Load foundation research for context
-            tracker.update_progress(step_id, 2, "Loading foundation research context")
-            foundation_context = await self._load_foundation_context(brand_domain)
+            await tracker.update_progress(step_id, 2, "Loading foundation research context")
+            foundation_context = await self._load_foundation_context(self.brand_domain)
             
             # ENHANCED: Load product catalog for analysis
-            tracker.update_progress(step_id, 3, "Loading product catalog")
-            product_catalog = await self.storage_manager.get_product_catalog(brand_domain)
+            await tracker.update_progress(step_id, 3, "Loading product catalog")
+            product_catalog = await self.storage_manager.get_product_catalog(self.brand_domain)
             
             # Phase-specific web research
-            tracker.update_progress(step_id, 4, "Conducting product-focused web research")
-            web_research_data = await self._conduct_product_research(brand_domain, tracker)
+            await tracker.update_progress(step_id, 4, "Conducting product-focused web research")
+            web_research_data = await self._conduct_product_research(self.brand_domain, tracker)
             
             # ENHANCED: Comprehensive product analysis
-            tracker.update_progress(step_id, 5, "Analyzing product catalog and design patterns")
+            await tracker.update_progress(step_id, 5, "Analyzing product catalog and design patterns")
             
             if product_catalog:
                 logger.info(f"Analyzing {len(product_catalog)} products from catalog")
                 analysis_result = await self._analyze_with_product_catalog(
-                    brand_domain=brand_domain,
                     foundation_context=foundation_context,
                     web_research_data=web_research_data,
                     product_catalog=product_catalog,
@@ -649,19 +637,18 @@ Structure your analysis as follows:
             else:
                 logger.info("No product catalog available, using web research only")
                 analysis_result = await self._analyze_without_product_catalog(
-                    brand_domain=brand_domain,
                     foundation_context=foundation_context,
                     web_research_data=web_research_data,
                     tracker=tracker
                 )
             
             # Save results
-            tracker.update_progress(step_id, 7, "Saving research results")
-            await self._save_results(brand_domain, analysis_result)
+            await tracker.update_progress(step_id, 7, "Saving research results")
+            await self._save_results(analysis_result)
             
             # Complete session
-            tracker.update_progress(step_id, 8, "Finalizing research")
-            tracker.complete_step(
+            await tracker.update_progress(step_id, 8, "Finalizing research")
+            await tracker.complete_step(
                 step_id,
                 output_files=[],
                 quality_score=analysis_result['metadata']['confidence'],
@@ -686,7 +673,6 @@ Structure your analysis as follows:
 
     async def _analyze_with_product_catalog(
         self,
-        brand_domain: str,
         foundation_context: Dict[str, Any],
         web_research_data: Dict[str, Any],
         product_catalog: List[Dict[str, Any]],
@@ -707,7 +693,7 @@ Structure your analysis as follows:
         
         # Prepare comprehensive analysis data
         analysis_data = {
-            "brand_domain": brand_domain,
+            "brand_domain": self.brand_domain,
             "foundation_context": foundation_context,
             "web_research": web_research_data,
             "product_catalog": {
@@ -748,7 +734,6 @@ Structure your analysis as follows:
     
     async def _analyze_without_product_catalog(
         self,
-        brand_domain: str,
         foundation_context: Dict[str, Any],
         web_research_data: Dict[str, Any],
         tracker: ProgressTracker
@@ -763,7 +748,7 @@ Structure your analysis as follows:
         
         # Prepare analysis data
         analysis_data = {
-            "brand_domain": brand_domain,
+            "brand_domain": self.brand_domain,
             "foundation_context": foundation_context,
             "web_research": web_research_data,
             "note": "Limited to web research - product catalog not available"
@@ -1083,8 +1068,9 @@ Generate analysis covering these 6 sections:
                     self.storage_manager.base_dir, 
                     "accounts", 
                     brand_domain, 
-                    "research_phases", 
-                    "foundation_research.md"
+                    "research", 
+                    "foundation",
+                    "research.md"
                 )
                 
                 if os.path.exists(foundation_path):
@@ -1248,7 +1234,7 @@ WEB RESEARCH SOURCES:
                 {"role": "user", "content": final_prompt + "\n\n" + context}
             ],
             temperature=0.7,
-            max_tokens=4000
+            # max_tokens=4000
         )
         
         return response.get("content", "Analysis generation failed")
@@ -1298,7 +1284,7 @@ NOTE: Product catalog data is not available for this analysis.
                 {"role": "user", "content": final_prompt + "\n\n" + context}
             ],
             temperature=0.7,
-            max_tokens=3000
+            # max_tokens=3000
         )
         
         return response.get("content", "Analysis generation failed")
@@ -1356,58 +1342,58 @@ NOTE: Product catalog data is not available for this analysis.
         final_score = base_score + web_bonus + content_bonus + citation_bonus
         return min(0.8, final_score)  # Cap at 0.8 for web-only
 
-    async def _save_results(self, brand_domain: str, analysis_result: Dict[str, Any]) -> None:
-        """Save analysis results in three-file format."""
-        try:
-            # Check if we're using local storage (has base_dir) or GCP storage (has bucket)
-            if hasattr(self.storage_manager, 'base_dir'):
-                # Local storage
-                research_dir = os.path.join(
-                    self.storage_manager.base_dir, 
-                    "accounts", 
-                    brand_domain, 
-                    "research_phases"
-                )
-                os.makedirs(research_dir, exist_ok=True)
+    # async def _save_results(self, brand_domain: str, analysis_result: Dict[str, Any]) -> None:
+    #     """Save analysis results in three-file format."""
+    #     try:
+    #         # Check if we're using local storage (has base_dir) or GCP storage (has bucket)
+    #         if hasattr(self.storage_manager, 'base_dir'):
+    #             # Local storage
+    #             research_dir = os.path.join(
+    #                 self.storage_manager.base_dir, 
+    #                 "accounts", 
+    #                 brand_domain, 
+    #                 "research_phases"
+    #             )
+    #             os.makedirs(research_dir, exist_ok=True)
                 
-                # Save content
-                content_path = os.path.join(research_dir, "product_style_research.md")
-                with open(content_path, "w") as f:
-                    f.write(analysis_result["content"])
+    #             # Save content
+    #             content_path = os.path.join(research_dir, "product_style_research.md")
+    #             with open(content_path, "w") as f:
+    #                 f.write(analysis_result["content"])
                 
-                # Save metadata
-                metadata_path = os.path.join(research_dir, "product_style_research_metadata.json")
-                with open(metadata_path, "w") as f:
-                    json.dump(analysis_result["metadata"], f, indent=2)
+    #             # Save metadata
+    #             metadata_path = os.path.join(research_dir, "product_style_research_metadata.json")
+    #             with open(metadata_path, "w") as f:
+    #                 json.dump(analysis_result["metadata"], f, indent=2)
                 
-                # Save sources - convert SearchResult objects to dictionaries first
-                sources_path = os.path.join(research_dir, "product_style_research_sources.json")
-                with open(sources_path, "w") as f:
-                    serializable_sources = self._convert_sources_to_dict(analysis_result["sources"])
-                    json.dump(serializable_sources, f, indent=2)
+    #             # Save sources - convert SearchResult objects to dictionaries first
+    #             sources_path = os.path.join(research_dir, "product_style_research_sources.json")
+    #             with open(sources_path, "w") as f:
+    #                 serializable_sources = self._convert_sources_to_dict(analysis_result["sources"])
+    #                 json.dump(serializable_sources, f, indent=2)
                     
-            elif hasattr(self.storage_manager, 'bucket'):
-                # GCP storage
-                # Save content
-                content_blob = self.storage_manager.bucket.blob(f"accounts/{brand_domain}/research_phases/product_style_research.md")
-                content_blob.upload_from_string(analysis_result["content"], content_type="text/markdown")
+    #         elif hasattr(self.storage_manager, 'bucket'):
+    #             # GCP storage
+    #             # Save content
+    #             content_blob = self.storage_manager.bucket.blob(f"accounts/{brand_domain}/research_phases/product_style_research.md")
+    #             content_blob.upload_from_string(analysis_result["content"], content_type="text/markdown")
                 
-                # Save metadata
-                metadata_blob = self.storage_manager.bucket.blob(f"accounts/{brand_domain}/research_phases/product_style_research_metadata.json")
-                metadata_blob.upload_from_string(json.dumps(analysis_result["metadata"], indent=2), content_type="application/json")
+    #             # Save metadata
+    #             metadata_blob = self.storage_manager.bucket.blob(f"accounts/{brand_domain}/research_phases/product_style_research_metadata.json")
+    #             metadata_blob.upload_from_string(json.dumps(analysis_result["metadata"], indent=2), content_type="application/json")
                 
-                # Save sources - convert SearchResult objects to dictionaries first
-                sources_blob = self.storage_manager.bucket.blob(f"accounts/{brand_domain}/research_phases/product_style_research_sources.json")
-                serializable_sources = self._convert_sources_to_dict(analysis_result["sources"])
-                sources_blob.upload_from_string(json.dumps(serializable_sources, indent=2), content_type="application/json")
-            else:
-                raise Exception("Unknown storage provider type")
+    #             # Save sources - convert SearchResult objects to dictionaries first
+    #             sources_blob = self.storage_manager.bucket.blob(f"accounts/{brand_domain}/research_phases/product_style_research_sources.json")
+    #             serializable_sources = self._convert_sources_to_dict(analysis_result["sources"])
+    #             sources_blob.upload_from_string(json.dumps(serializable_sources, indent=2), content_type="application/json")
+    #         else:
+    #             raise Exception("Unknown storage provider type")
             
-            logger.info(f"Saved product style research for {brand_domain}")
+    #         logger.info(f"Saved product style research for {brand_domain}")
             
-        except Exception as e:
-            logger.error(f"Error saving results: {e}")
-            raise
+    #     except Exception as e:
+    #         logger.error(f"Error saving results: {e}")
+    #         raise
 
     def _convert_sources_to_dict(self, sources: List[Any]) -> List[Dict[str, Any]]:
         """Convert sources (including SearchResult objects) to JSON-serializable dictionaries."""
@@ -1509,6 +1495,6 @@ NOTE: Product catalog data is not available for this analysis.
             return f"Error serializing sources: {str(e)}"
 
 
-def get_product_style_researcher() -> ProductStyleResearcher:
+def get_product_style_researcher(brand_domain: str) -> ProductStyleResearcher:
     """Get product style researcher instance"""
-    return ProductStyleResearcher()
+    return ProductStyleResearcher(brand_domain)

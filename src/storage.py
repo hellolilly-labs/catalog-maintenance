@@ -56,6 +56,32 @@ class AccountStorageProvider(ABC):
         """Get product catalog metadata (size, count, last_updated)"""
         pass
     
+    # File System Methods for Workflow State Management
+    @abstractmethod
+    async def list_files(self, account: str, directory: str) -> List[str]:
+        """List files in a directory for an account"""
+        pass
+    
+    @abstractmethod
+    async def file_exists(self, account: str, file_path: str) -> bool:
+        """Check if a file exists for an account"""
+        pass
+    
+    @abstractmethod
+    async def read_file(self, account: str, file_path: str) -> Optional[str]:
+        """Read file content as string for an account"""
+        pass
+    
+    @abstractmethod
+    async def write_file(self, account: str, file_path: str, content: str, content_type: str = "text/plain") -> bool:
+        """Write file content as string for an account"""
+        pass
+    
+    @abstractmethod
+    async def get_file_metadata(self, account: str, file_path: str) -> Optional[Dict[str, Any]]:
+        """Get file metadata (size, modified_time, etc.)"""
+        pass
+    
     # Utility Methods
     def _should_compress_catalog(self, catalog_size: int) -> bool:
         """Determine if catalog should be compressed (>500KB)"""
@@ -264,6 +290,78 @@ class GCPAccountStorageProvider(AccountStorageProvider):
             return backup_path
         except Exception as e:
             logger.error(f"Error creating product catalog backup for {account}: {e}")
+            return None
+
+    # File System Methods for Workflow State Management
+    async def list_files(self, account: str, directory: str) -> List[str]:
+        """List files in a directory for an account"""
+        try:
+            prefix = f"accounts/{account}/{directory}/"
+            blobs = self.client.list_blobs(self.bucket, prefix=prefix)
+            
+            files = []
+            for blob in blobs:
+                # Remove the prefix to get just the filename
+                filename = blob.name[len(prefix):]
+                # Skip subdirectories (contains /)
+                if '/' not in filename and filename:
+                    files.append(filename)
+            
+            return files
+        except Exception as e:
+            logger.error(f"Error listing files in {directory} for {account}: {e}")
+            return []
+    
+    async def file_exists(self, account: str, file_path: str) -> bool:
+        """Check if a file exists for an account"""
+        try:
+            blob = self.bucket.blob(f"accounts/{account}/{file_path}")
+            return blob.exists()
+        except Exception as e:
+            logger.error(f"Error checking file existence {file_path} for {account}: {e}")
+            return False
+    
+    async def read_file(self, account: str, file_path: str) -> Optional[str]:
+        """Read file content as string for an account"""
+        try:
+            blob = self.bucket.blob(f"accounts/{account}/{file_path}")
+            if not blob.exists():
+                return None
+            return blob.download_as_text()
+        except Exception as e:
+            logger.error(f"Error reading file {file_path} for {account}: {e}")
+            return None
+    
+    async def write_file(self, account: str, file_path: str, content: str, content_type: str = "text/plain") -> bool:
+        """Write file content as string for an account"""
+        try:
+            blob = self.bucket.blob(f"accounts/{account}/{file_path}")
+            blob.upload_from_string(
+                content,
+                content_type=content_type
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error writing file {file_path} for {account}: {e}")
+            return False
+    
+    async def get_file_metadata(self, account: str, file_path: str) -> Optional[Dict[str, Any]]:
+        """Get file metadata (size, modified_time, etc.)"""
+        try:
+            blob = self.bucket.blob(f"accounts/{account}/{file_path}")
+            if not blob.exists():
+                return None
+            
+            blob.reload()  # Refresh metadata
+            
+            return {
+                "size": blob.size,
+                "modified_time": blob.updated.isoformat() if blob.updated else None,
+                "created_time": blob.time_created.isoformat() if blob.time_created else None,
+                "content_type": blob.content_type
+            }
+        except Exception as e:
+            logger.error(f"Error getting file metadata {file_path} for {account}: {e}")
             return None
 
 class LocalAccountStorageProvider(AccountStorageProvider):
@@ -484,6 +582,82 @@ class LocalAccountStorageProvider(AccountStorageProvider):
             return backup_path
         except Exception as e:
             logger.error(f"Error creating product catalog backup for {account}: {e}")
+            return None
+
+    # File System Methods for Workflow State Management
+    async def list_files(self, account: str, directory: str) -> List[str]:
+        """List files in a directory for an account"""
+        try:
+            dir_path = os.path.join(self.base_dir, "accounts", account, directory)
+            if not os.path.exists(dir_path):
+                return []
+            
+            files = []
+            for item in os.listdir(dir_path):
+                item_path = os.path.join(dir_path, item)
+                if os.path.isfile(item_path):
+                    files.append(item)
+            
+            return files
+        except Exception as e:
+            logger.error(f"Error listing files in {directory} for {account}: {e}")
+            return []
+    
+    async def file_exists(self, account: str, file_path: str) -> bool:
+        """Check if a file exists for an account"""
+        try:
+            full_path = os.path.join(self.base_dir, "accounts", account, file_path)
+            return os.path.exists(full_path)
+        except Exception as e:
+            logger.error(f"Error checking file existence {file_path} for {account}: {e}")
+            return False
+    
+    async def read_file(self, account: str, file_path: str) -> Optional[str]:
+        """Read file content as string for an account"""
+        try:
+            full_path = os.path.join(self.base_dir, "accounts", account, file_path)
+            if not os.path.exists(full_path):
+                return None
+            
+            with open(full_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except Exception as e:
+            logger.error(f"Error reading file {file_path} for {account}: {e}")
+            return None
+    
+    async def write_file(self, account: str, file_path: str, content: str, content_type: str = "text/plain") -> bool:
+        """Write file content as string for an account"""
+        try:
+            full_path = os.path.join(self.base_dir, "accounts", account, file_path)
+            
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            
+            with open(full_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error writing file {file_path} for {account}: {e}")
+            return False
+    
+    async def get_file_metadata(self, account: str, file_path: str) -> Optional[Dict[str, Any]]:
+        """Get file metadata (size, modified_time, etc.)"""
+        try:
+            full_path = os.path.join(self.base_dir, "accounts", account, file_path)
+            if not os.path.exists(full_path):
+                return None
+            
+            stat = os.stat(full_path)
+            
+            return {
+                "size": stat.st_size,
+                "modified_time": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                "created_time": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                "content_type": "text/plain"  # Could be enhanced to detect MIME type
+            }
+        except Exception as e:
+            logger.error(f"Error getting file metadata {file_path} for {account}: {e}")
             return None
 
 def get_account_storage_provider() -> AccountStorageProvider:

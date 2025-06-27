@@ -21,72 +21,63 @@ from src.storage import get_account_storage_provider
 from src.progress_tracker import ProgressTracker, StepType, create_console_listener
 from src.llm.simple_factory import LLMFactory
 from src.llm.prompt_manager import PromptManager
+from src.research.base_researcher import BaseResearcher
 
 logger = logging.getLogger(__name__)
 
 
-class ResearchIntegrationProcessor:
+class ResearchIntegrationProcessor(BaseResearcher):
     """Research Integration Phase Implementation"""
     
-    def __init__(self, storage_manager=None):
-        self.storage_manager = storage_manager or get_account_storage_provider()
-        self.quality_threshold = 8.0
-        self.cache_duration_days = 30  # 1 month default
+    def __init__(self, brand_domain: str, storage_manager=None):
+        super().__init__(brand_domain, "research_integration", StepType.SYNTHESIS, storage_manager=storage_manager)
         
-        self.progress_tracker = ProgressTracker(storage_manager=self.storage_manager, enable_checkpoints=True)
-        console_listener = create_console_listener()
-        self.progress_tracker.add_progress_listener(console_listener)
-        
-        # Initialize prompt manager
-        self.prompt_manager = PromptManager()
-        
-    async def integrate_research(self, brand_domain: str, force_refresh: bool = False) -> Dict[str, Any]:
+    async def research(self, force_refresh: bool = False) -> Dict[str, Any]:
         """Integrate all research phases for a brand"""
         start_time = time.time()
         
-        logger.info(f"🔗 Starting Research Integration for {brand_domain}")
+        logger.info(f"🔗 Starting Research Integration for {self.brand_domain}")
         
-        step_id = self.progress_tracker.create_step(
+        step_id = await self.progress_tracker.create_step(
             step_type=StepType.SYNTHESIS,
-            brand=brand_domain,
+            brand=self.brand_domain,
             phase_name="Research Integration",
             total_operations=8
         )
         
         try:
-            self.progress_tracker.start_step(step_id, "Checking cache and initializing...")
+            await self.progress_tracker.start_step(step_id, "Checking cache and initializing...")
             
             if not force_refresh:
-                cached_result = await self._load_cached_research_integration(brand_domain)
+                cached_result = await self._load_cached_results()
                 if cached_result:
-                    self.progress_tracker.complete_step(step_id, cache_hit=True)
+                    await self.progress_tracker.complete_step(step_id, cache_hit=True)
                     return cached_result
             
-            self.progress_tracker.update_progress(step_id, 1, "📋 Loading all research phases...")
+            await self.progress_tracker.update_progress(step_id, 1, "📋 Loading all research phases...")
             
             # Load complete research foundation from all phases
-            research_foundation = await self._load_complete_research_foundation(brand_domain)
+            context = await self._gather_data()
             
-            self.progress_tracker.update_progress(step_id, 2, "🔗 Integrating research insights...")
+            await self.progress_tracker.update_progress(step_id, 2, "🔗 Integrating research insights...")
             
             # Conduct comprehensive research integration 
             integration_result = await self._integrate_all_research_phases(
-                brand_domain,
-                research_foundation,
+                context,
                 step_id
             )
             
-            self.progress_tracker.update_progress(step_id, 6, "💾 Saving integrated research...")
+            await self.progress_tracker.update_progress(step_id, 6, "💾 Saving integrated research...")
             
             # Save integration results in 3-file format
-            saved_files = await self._save_research_integration(brand_domain, integration_result)
+            saved_files = await self._save_results(integration_result)
             
-            self.progress_tracker.update_progress(step_id, 7, "✅ Finalizing research integration...")
+            await self.progress_tracker.update_progress(step_id, 7, "✅ Finalizing research integration...")
             
             duration = time.time() - start_time
             logger.info(f"✅ Research Integration completed in {duration:.1f}s")
             
-            self.progress_tracker.complete_step(
+            await self.progress_tracker.complete_step(
                 step_id,
                 output_files=saved_files,
                 quality_score=integration_result.get("confidence", 0.9),
@@ -94,7 +85,7 @@ class ResearchIntegrationProcessor:
             )
             
             return {
-                "brand": brand_domain,
+                "brand_domain": self.brand_domain,
                 "research_integration_content": integration_result.get("content", ""),
                 "quality_score": integration_result.get("confidence", 0.9),
                 "files": saved_files,
@@ -103,108 +94,102 @@ class ResearchIntegrationProcessor:
             }
             
         except Exception as e:
-            self.progress_tracker.fail_step(step_id, str(e))
+            await self.progress_tracker.fail_step(step_id, str(e))
             logger.error(f"❌ Error in research integration: {e}")
             raise
 
-    async def _load_complete_research_foundation(self, brand_domain: str) -> Dict[str, Any]:
+    async def _gather_data(self) -> Dict[str, Any]:
         """Load complete research foundation from all 7 previous phases"""
         
-        research_foundation = {}
+        context = {}
         
         try:
-            # Determine storage base path
-            if hasattr(self.storage_manager, 'base_dir'):
-                # Local storage
-                research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research_phases")
-            else:
-                # GCP storage - we'll adapt this for file reading
-                research_dir = f"accounts/{brand_domain}/research_phases"
-            
-            # Load all research phases
-            research_files = [
-                ("foundation_research.md", "foundation"),
-                ("market_positioning.md", "market_positioning"),
-                ("product_style_research.md", "product_style"),
-                ("customer_cultural_research.md", "customer_cultural"),
-                ("voice_messaging_research.md", "voice_messaging"),
-                ("interview_synthesis_research.md", "interview_synthesis"),
-                ("linearity_analysis_research.md", "linearity_analysis")
+            # Load foundation research
+            foundation_files = [
+                "foundation",
+                "market_positioning",
+                "product_style",
+                "customer_cultural",
+                "voice_messaging",
+                "interview_synthesis",
+                "linearity_analysis"
             ]
             
-            for filename, phase_key in research_files:
+            for phase_key in foundation_files:
                 try:
-                    if hasattr(self.storage_manager, 'base_dir'):
-                        # Local storage
-                        file_path = os.path.join(research_dir, filename)
-                        if os.path.exists(file_path):
-                            with open(file_path, 'r') as f:
-                                research_foundation[phase_key] = f.read()
-                    else:
-                        # GCP storage
-                        blob_path = f"{research_dir}/{filename}"
-                        if hasattr(self.storage_manager, 'bucket'):
-                            blob = self.storage_manager.bucket.blob(blob_path)
-                            if blob.exists():
-                                research_foundation[phase_key] = blob.download_as_text()
+                    blob_path = f"research/{phase_key}/research.md"
+                    context[phase_key] = await self.storage_manager.read_file(account=self.brand_domain, file_path=blob_path)
                                 
                 except Exception as e:
-                    logger.debug(f"Could not load {filename}: {e}")
+                    logger.debug(f"Could not load {phase_key} research: {e}")
             
-            logger.info(f"📋 Loaded {len(research_foundation)} research phases for integration")
+            logger.info(f"📋 Loaded {len(context)} foundation research phases for context")
+            
+            # Return in format expected by base class
+            return {
+                "brand_domain": self.brand_domain,
+                "brand_name": self.brand_domain.replace('.com', '').replace('.', ' ').title(),
+                "search_results": [],  # Voice analysis doesn't use web search
+                "detailed_sources": [],
+                "context": context,
+                "total_sources": len(context),
+                "search_stats": {
+                    "successful_searches": len(context),
+                    "failed_searches": 0,
+                    "success_rate": 1.0 if context else 0.0,
+                    "ssl_errors": 0
+                }
+            }
             
         except Exception as e:
-            logger.warning(f"Error loading research foundation: {e}")
-        
-        return research_foundation
+            logger.warning(f"Error loading foundation context: {e}")
+            raise RuntimeError(f"Failed to load foundation context: {e}")
+
 
     async def _integrate_all_research_phases(
         self,
-        brand_domain: str,
-        research_foundation: Dict[str, Any],
+        context: Dict[str, Any],
         step_id: str
     ) -> Dict[str, Any]:
         """Integrate all research phases into comprehensive brand intelligence"""
         
-        self.progress_tracker.update_progress(step_id, 3, "🎯 Synthesizing brand intelligence...")
+        await self.progress_tracker.update_progress(step_id, 3, "🎯 Synthesizing brand intelligence...")
         
-        # Get research integration prompt
-        prompt_template = await self._get_research_integration_prompt()
+        await self.progress_tracker.update_progress(step_id, 4, "🔗 Cross-validating insights...")
         
-        self.progress_tracker.update_progress(step_id, 4, "🔗 Cross-validating insights...")
+        context_data = context.get('context')
         
         # Prepare integration data
         integration_data = {
-            "brand_domain": brand_domain,
-            "foundation_research": research_foundation.get("foundation", ""),
-            "market_positioning": research_foundation.get("market_positioning", ""),
-            "product_style": research_foundation.get("product_style", ""),
-            "customer_cultural": research_foundation.get("customer_cultural", ""),
-            "voice_messaging": research_foundation.get("voice_messaging", ""),
-            "interview_synthesis": research_foundation.get("interview_synthesis", ""),
-            "linearity_analysis": research_foundation.get("linearity_analysis", "")
+            "brand_domain": self.brand_domain,
+            "foundation": context_data.get("foundation", ""),
+            "market_positioning": context_data.get("market_positioning", ""),
+            "product_style": context_data.get("product_style", ""),
+            "customer_cultural": context_data.get("customer_cultural", ""),
+            "voice_messaging": context_data.get("voice_messaging", ""),
+            "interview_synthesis": context_data.get("interview_synthesis", ""),
+            "linearity_analysis": context_data.get("linearity_analysis", "")
         }
         
         # Generate comprehensive research integration using LLM
         integration_content = await self._generate_research_integration(
-            prompt_template, 
             integration_data
         )
         
-        self.progress_tracker.update_progress(step_id, 5, "📊 Calculating integration quality...")
+        await self.progress_tracker.update_progress(step_id, 5, "📊 Calculating integration quality...")
         
         # Calculate quality score based on research foundation completeness
-        quality_score = self._calculate_research_integration_quality_score(research_foundation, integration_content)
+        quality_score = self._calculate_research_integration_quality_score(context_data, integration_content)
         
         return {
             "content": integration_content,
             "confidence": quality_score,
-            "source_count": len(research_foundation),
+            "source_count": len(context_data),
             "analysis_type": "comprehensive_research_integration",
-            "research_phases": list(research_foundation.keys())
+            "research_phases": list(context_data.keys())
         }
 
-    async def _get_research_integration_prompt(self) -> str:
+    def _get_default_user_prompt(self) -> str:
         """Get research integration prompt from Langfuse"""
         
         default_prompt = """
@@ -213,15 +198,6 @@ You are conducting comprehensive Research Integration for {{brand_domain}} acros
 You have access to the complete brand research foundation to create the definitive, integrated brand intelligence document.
 
 Your task is to synthesize all research phases into a cohesive, actionable brand intelligence framework suitable for strategic decision-making.
-
-**COMPLETE RESEARCH FOUNDATION:**
-Foundation Research: {{foundation_research}}
-Market Positioning: {{market_positioning}}
-Product Style: {{product_style}}
-Customer Cultural Intelligence: {{customer_cultural}}
-Voice & Messaging: {{voice_messaging}}
-Interview Synthesis: {{interview_synthesis}}
-Linearity Analysis: {{linearity_analysis}}
 
 **RESEARCH INTEGRATION REQUIREMENTS:**
 
@@ -295,18 +271,39 @@ Document research quality and confidence levels:
 Write professional research integration suitable for strategic brand development and executive decision-making.
 Focus on synthesized insights that leverage the full spectrum of completed research.
 Include confidence levels and validation evidence for all major recommendations.
+
+BRAND: {{brand_domain}}
+
+COMPLETE RESEARCH FOUNDATION FOR INTEGRATION:
+Foundation Research: {{foundation}}
+
+Market Positioning: {{market_positioning}}
+
+Product Style: {{product_style}}
+
+Customer Cultural: {{customer_cultural}}
+
+Voice & Messaging: {{voice_messaging}}
+
+Interview Synthesis: {{interview_synthesis}}
+
+Linearity Analysis: {{linearity_analysis}}
+
 """
 
-        prompt = await self.prompt_manager.get_prompt(
-            "research_integration",
-            default_prompt
-        )
+        return default_prompt
+
+    def _get_default_instruction_prompt(self) -> str:
+        """Get research integration prompt from Langfuse"""
         
-        return prompt.prompt if prompt else default_prompt
+        default_prompt = """
+You are an expert brand strategist specializing in comprehensive research integration and synthesis. Generate definitive brand intelligence frameworks suitable for strategic decision-making based on complete multi-phase research foundations.
+"""
+        
+        return default_prompt
 
     async def _generate_research_integration(
         self, 
-        prompt_template: str, 
         integration_data: Dict[str, Any]
     ) -> str:
         """Generate comprehensive research integration using all research phases"""
@@ -314,56 +311,52 @@ Include confidence levels and validation evidence for all major recommendations.
         # Prepare template variables
         template_vars = {
             "brand_domain": integration_data["brand_domain"],
-            "foundation_research": integration_data["foundation_research"][:1400] if integration_data["foundation_research"] else "No foundation research available",
-            "market_positioning": integration_data["market_positioning"][:1000] if integration_data["market_positioning"] else "No market positioning available",
-            "product_style": integration_data["product_style"][:1000] if integration_data["product_style"] else "No product style research available",
-            "customer_cultural": integration_data["customer_cultural"][:1000] if integration_data["customer_cultural"] else "No customer cultural research available",
-            "voice_messaging": integration_data["voice_messaging"][:1000] if integration_data["voice_messaging"] else "No voice messaging research available",
-            "interview_synthesis": integration_data["interview_synthesis"][:1000] if integration_data["interview_synthesis"] else "No interview synthesis available",
-            "linearity_analysis": integration_data["linearity_analysis"][:1000] if integration_data["linearity_analysis"] else "No linearity analysis available"
+            "foundation": integration_data["foundation"][:5000] if integration_data["foundation"] else "No foundation research available",
+            "market_positioning": integration_data["market_positioning"][:2000] if integration_data["market_positioning"] else "No market positioning available",
+            "product_style": integration_data["product_style"][:2000] if integration_data["product_style"] else "No product style research available",
+            "customer_cultural": integration_data["customer_cultural"][:2000] if integration_data["customer_cultural"] else "No customer cultural research available",
+            "voice_messaging": integration_data["voice_messaging"][:2000] if integration_data["voice_messaging"] else "No voice messaging research available",
+            "interview_synthesis": integration_data["interview_synthesis"][:2000] if integration_data["interview_synthesis"] else "No interview synthesis available",
+            "linearity_analysis": integration_data["linearity_analysis"][:2000] if integration_data["linearity_analysis"] else "No linearity analysis available"
         }
         
-        # Replace template variables
-        final_prompt = prompt_template
-        for var, value in template_vars.items():
-            final_prompt = final_prompt.replace(f"{{{{{var}}}}}", str(value))
+        # Get prompt from Langfuse
+        prompt_template = await self.prompt_manager.get_prompt(
+            prompt_name="internal/researcher/research_integration",
+            prompt_type="chat",
+            prompt=[
+                {"role": "system", "content": self._get_default_instruction_prompt()},
+                {"role": "user", "content": self._get_default_user_prompt()}
+            ]
+        )
+        prompts = prompt_template.prompt
         
-        # Prepare context for LLM
-        context = f"""
-BRAND: {integration_data['brand_domain']}
-
-COMPLETE RESEARCH FOUNDATION FOR INTEGRATION:
-Foundation Research: {integration_data['foundation_research'][:500] if integration_data['foundation_research'] else 'Not available'}
-
-Market Positioning: {integration_data['market_positioning'][:400] if integration_data['market_positioning'] else 'Not available'}
-
-Product Style: {integration_data['product_style'][:400] if integration_data['product_style'] else 'Not available'}
-
-Customer Cultural: {integration_data['customer_cultural'][:400] if integration_data['customer_cultural'] else 'Not available'}
-
-Voice & Messaging: {integration_data['voice_messaging'][:400] if integration_data['voice_messaging'] else 'Not available'}
-
-Interview Synthesis: {integration_data['interview_synthesis'][:400] if integration_data['interview_synthesis'] else 'Not available'}
-
-Linearity Analysis: {integration_data['linearity_analysis'][:400] if integration_data['linearity_analysis'] else 'Not available'}
-"""
+        system_prompt = next((msg["content"] for msg in prompts if msg["role"] == "system"), None)
+        user_prompt = next((msg["content"] for msg in prompts if msg["role"] == "user"), None)
+        
+        # for var, value in system_prompt_vars.items():
+        #     system_prompt = system_prompt.replace(f"{{{{{var}}}}}", str(value))
+        
+        for var, value in template_vars.items():
+            system_prompt = system_prompt.replace(f"{{{{{var}}}}}", str(value))
+            user_prompt = user_prompt.replace(f"{{{{{var}}}}}", str(value))
+        
         
         response = await LLMFactory.chat_completion(
             task="research_integration",
-            system="You are an expert brand strategist specializing in comprehensive research integration and synthesis. Generate definitive brand intelligence frameworks suitable for strategic decision-making based on complete multi-phase research foundations.",
+            system=system_prompt,
             messages=[
-                {"role": "system", "content": final_prompt},
-                {"role": "user", "content": context}
+                {"role": "user", "content": user_prompt}
             ],
             temperature=0.5,
-            max_tokens=5000
+            # max_tokens=5000
         )
         
         return response.get("content", "Research integration generation failed")
 
     def _calculate_research_integration_quality_score(
         self, 
-        research_foundation: Dict[str, Any], 
+        context_data: Dict[str, Any], 
         integration_content: str
     ) -> float:
         """Calculate quality score for research integration"""
@@ -371,7 +364,7 @@ Linearity Analysis: {integration_data['linearity_analysis'][:400] if integration
         base_score = 0.75  # Base score for research integration
         
         # Research foundation completeness
-        foundation_count = len(research_foundation)
+        foundation_count = len(context_data)
         foundation_bonus = min(0.15, foundation_count * 0.02)  # Up to 0.15 for 7+ phases
         
         # Integration content quality
@@ -393,176 +386,176 @@ Linearity Analysis: {integration_data['linearity_analysis'][:400] if integration
         final_score = base_score + foundation_bonus + content_bonus + citation_bonus + strategy_bonus + validation_bonus
         return min(0.92, final_score)  # Cap at 0.92 for research integration
 
-    async def _save_research_integration(self, brand_domain: str, integration_result: Dict[str, Any]) -> List[str]:
-        """Save research integration in three-file format"""
+    # async def _save_results(self, brand_domain: str, integration_result: Dict[str, Any]) -> List[str]:
+    #     """Save research integration in three-file format"""
         
-        saved_files = []
+    #     saved_files = []
         
-        try:
-            if hasattr(self.storage_manager, 'base_dir'):
-                # Local storage
-                research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research_phases")
-                os.makedirs(research_dir, exist_ok=True)
+    #     try:
+    #         if hasattr(self.storage_manager, 'base_dir'):
+    #             # Local storage
+    #             research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research_phases")
+    #             os.makedirs(research_dir, exist_ok=True)
                 
-                # Save content
-                content_path = os.path.join(research_dir, "research_integration.md")
-                with open(content_path, "w") as f:
-                    f.write(integration_result["content"])
-                saved_files.append(content_path)
+    #             # Save content
+    #             content_path = os.path.join(research_dir, "research_integration.md")
+    #             with open(content_path, "w") as f:
+    #                 f.write(integration_result["content"])
+    #             saved_files.append(content_path)
                 
-                # Save metadata
-                metadata = {
-                    "phase": "research_integration",
-                    "confidence_score": integration_result.get("confidence", 0.9),
-                    "analysis_type": integration_result.get("analysis_type", "comprehensive_research_integration"),
-                    "research_phases": integration_result.get("research_phases", []),
-                    "source_count": integration_result.get("source_count", 0),
-                    "research_metadata": {
-                        "phase": "research_integration", 
-                        "research_duration_seconds": time.time(),
-                        "timestamp": datetime.now().isoformat() + "Z",
-                        "quality_threshold": self.quality_threshold,
-                        "cache_expires": (datetime.now() + timedelta(days=self.cache_duration_days)).isoformat() + "Z",
-                        "version": "2.0_enhanced"
-                    }
-                }
+    #             # Save metadata
+    #             metadata = {
+    #                 "phase": "research_integration",
+    #                 "confidence_score": integration_result.get("confidence", 0.9),
+    #                 "analysis_type": integration_result.get("analysis_type", "comprehensive_research_integration"),
+    #                 "research_phases": integration_result.get("research_phases", []),
+    #                 "source_count": integration_result.get("source_count", 0),
+    #                 "research_metadata": {
+    #                     "phase": "research_integration", 
+    #                     "research_duration_seconds": time.time(),
+    #                     "timestamp": datetime.now().isoformat() + "Z",
+    #                     "quality_threshold": self.quality_threshold,
+    #                     "cache_expires": (datetime.now() + timedelta(days=self.cache_duration_days)).isoformat() + "Z",
+    #                     "version": "2.0_enhanced"
+    #                 }
+    #             }
                 
-                metadata_path = os.path.join(research_dir, "research_integration_metadata.json")
-                with open(metadata_path, "w") as f:
-                    json.dump(metadata, f, indent=2)
-                saved_files.append(metadata_path)
+    #             metadata_path = os.path.join(research_dir, "research_integration_metadata.json")
+    #             with open(metadata_path, "w") as f:
+    #                 json.dump(metadata, f, indent=2)
+    #             saved_files.append(metadata_path)
                 
-                # Save sources/data
-                sources_data = {
-                    "integration_sources": integration_result.get("research_phases", []),
-                    "total_research_phases": len(integration_result.get("research_phases", [])),
-                    "collection_timestamp": datetime.now().isoformat() + "Z"
-                }
+    #             # Save sources/data
+    #             sources_data = {
+    #                 "integration_sources": integration_result.get("research_phases", []),
+    #                 "total_research_phases": len(integration_result.get("research_phases", [])),
+    #                 "collection_timestamp": datetime.now().isoformat() + "Z"
+    #             }
                 
-                sources_path = os.path.join(research_dir, "research_integration_sources.json")
-                with open(sources_path, "w") as f:
-                    json.dump(sources_data, f, indent=2)
-                saved_files.append(sources_path)
+    #             sources_path = os.path.join(research_dir, "research_integration_sources.json")
+    #             with open(sources_path, "w") as f:
+    #                 json.dump(sources_data, f, indent=2)
+    #             saved_files.append(sources_path)
                 
-            else:
-                # GCP storage
-                research_dir = f"accounts/{brand_domain}/research_phases"
+    #         else:
+    #             # GCP storage
+    #             research_dir = f"accounts/{brand_domain}/research_phases"
                 
-                # Save content
-                content_blob = f"{research_dir}/research_integration.md"
-                blob = self.storage_manager.bucket.blob(content_blob)
-                blob.upload_from_string(integration_result["content"])
-                saved_files.append(content_blob)
+    #             # Save content
+    #             content_blob = f"{research_dir}/research_integration.md"
+    #             blob = self.storage_manager.bucket.blob(content_blob)
+    #             blob.upload_from_string(integration_result["content"])
+    #             saved_files.append(content_blob)
                 
-                # Save metadata  
-                metadata = {
-                    "phase": "research_integration",
-                    "confidence_score": integration_result.get("confidence", 0.9),
-                    "analysis_type": integration_result.get("analysis_type", "comprehensive_research_integration"),
-                    "research_phases": integration_result.get("research_phases", []),
-                    "source_count": integration_result.get("source_count", 0),
-                    "research_metadata": {
-                        "phase": "research_integration",
-                        "research_duration_seconds": time.time(),
-                        "timestamp": datetime.now().isoformat() + "Z",
-                        "quality_threshold": self.quality_threshold,
-                        "cache_expires": (datetime.now() + timedelta(days=self.cache_duration_days)).isoformat() + "Z",
-                        "version": "2.0_enhanced"
-                    }
-                }
+    #             # Save metadata  
+    #             metadata = {
+    #                 "phase": "research_integration",
+    #                 "confidence_score": integration_result.get("confidence", 0.9),
+    #                 "analysis_type": integration_result.get("analysis_type", "comprehensive_research_integration"),
+    #                 "research_phases": integration_result.get("research_phases", []),
+    #                 "source_count": integration_result.get("source_count", 0),
+    #                 "research_metadata": {
+    #                     "phase": "research_integration",
+    #                     "research_duration_seconds": time.time(),
+    #                     "timestamp": datetime.now().isoformat() + "Z",
+    #                     "quality_threshold": self.quality_threshold,
+    #                     "cache_expires": (datetime.now() + timedelta(days=self.cache_duration_days)).isoformat() + "Z",
+    #                     "version": "2.0_enhanced"
+    #                 }
+    #             }
                 
-                metadata_blob = f"{research_dir}/research_integration_metadata.json"
-                blob = self.storage_manager.bucket.blob(metadata_blob)
-                blob.upload_from_string(json.dumps(metadata, indent=2))
-                saved_files.append(metadata_blob)
+    #             metadata_blob = f"{research_dir}/research_integration_metadata.json"
+    #             blob = self.storage_manager.bucket.blob(metadata_blob)
+    #             blob.upload_from_string(json.dumps(metadata, indent=2))
+    #             saved_files.append(metadata_blob)
                 
-                # Save sources
-                sources_data = {
-                    "integration_sources": integration_result.get("research_phases", []),
-                    "total_research_phases": len(integration_result.get("research_phases", [])),
-                    "collection_timestamp": datetime.now().isoformat() + "Z"
-                }
+    #             # Save sources
+    #             sources_data = {
+    #                 "integration_sources": integration_result.get("research_phases", []),
+    #                 "total_research_phases": len(integration_result.get("research_phases", [])),
+    #                 "collection_timestamp": datetime.now().isoformat() + "Z"
+    #             }
                 
-                sources_blob = f"{research_dir}/research_integration_sources.json"
-                blob = self.storage_manager.bucket.blob(sources_blob)
-                blob.upload_from_string(json.dumps(sources_data, indent=2))
-                saved_files.append(sources_blob)
+    #             sources_blob = f"{research_dir}/research_integration_sources.json"
+    #             blob = self.storage_manager.bucket.blob(sources_blob)
+    #             blob.upload_from_string(json.dumps(sources_data, indent=2))
+    #             saved_files.append(sources_blob)
             
-            logger.info(f"✅ Saved research integration for {brand_domain}")
+    #         logger.info(f"✅ Saved research integration for {brand_domain}")
             
-        except Exception as e:
-            logger.error(f"❌ Error saving research integration: {e}")
-            raise
+    #     except Exception as e:
+    #         logger.error(f"❌ Error saving research integration: {e}")
+    #         raise
         
-        return saved_files
+    #     return saved_files
 
-    async def _load_cached_research_integration(self, brand_domain: str) -> Optional[Dict[str, Any]]:
-        """Load cached research integration"""
-        try:
-            if hasattr(self.storage_manager, 'base_dir'):
-                # Local storage
-                research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research_phases")
+    # async def _load_cached_results(self, brand_domain: str) -> Optional[Dict[str, Any]]:
+    #     """Load cached research integration"""
+    #     try:
+    #         if hasattr(self.storage_manager, 'base_dir'):
+    #             # Local storage
+    #             research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research_phases")
                 
-                content_path = os.path.join(research_dir, "research_integration.md")
-                metadata_path = os.path.join(research_dir, "research_integration_metadata.json")
+    #             content_path = os.path.join(research_dir, "research_integration.md")
+    #             metadata_path = os.path.join(research_dir, "research_integration_metadata.json")
                 
-                if all(os.path.exists(p) for p in [content_path, metadata_path]):
-                    # Check cache expiry
-                    with open(metadata_path, "r") as f:
-                        metadata = json.load(f)
+    #             if all(os.path.exists(p) for p in [content_path, metadata_path]):
+    #                 # Check cache expiry
+    #                 with open(metadata_path, "r") as f:
+    #                     metadata = json.load(f)
                     
-                    research_metadata = metadata.get("research_metadata", {})
-                    cache_expires = research_metadata.get("cache_expires")
+    #                 research_metadata = metadata.get("research_metadata", {})
+    #                 cache_expires = research_metadata.get("cache_expires")
                     
-                    if cache_expires and datetime.now() < datetime.fromisoformat(cache_expires.replace("Z", "")):
-                        # Load cached data
-                        with open(content_path, "r") as f:
-                            content = f.read()
+    #                 if cache_expires and datetime.now() < datetime.fromisoformat(cache_expires.replace("Z", "")):
+    #                     # Load cached data
+    #                     with open(content_path, "r") as f:
+    #                         content = f.read()
                         
-                        return {
-                            "brand": brand_domain,
-                            "research_integration_content": content,
-                            "quality_score": metadata.get("confidence_score", 0.9),
-                            "files": [content_path, metadata_path],
-                            "data_sources": metadata.get("source_count", 0),
-                            "research_method": metadata.get("analysis_type", "cached_integration")
-                        }
-            else:
-                # GCP storage 
-                research_dir = f"accounts/{brand_domain}/research_phases"
+    #                     return {
+    #                         "brand": brand_domain,
+    #                         "research_integration_content": content,
+    #                         "quality_score": metadata.get("confidence_score", 0.9),
+    #                         "files": [content_path, metadata_path],
+    #                         "data_sources": metadata.get("source_count", 0),
+    #                         "research_method": metadata.get("analysis_type", "cached_integration")
+    #                     }
+    #         else:
+    #             # GCP storage 
+    #             research_dir = f"accounts/{brand_domain}/research_phases"
                 
-                content_blob = f"{research_dir}/research_integration.md"
-                metadata_blob = f"{research_dir}/research_integration_metadata.json"
+    #             content_blob = f"{research_dir}/research_integration.md"
+    #             metadata_blob = f"{research_dir}/research_integration_metadata.json"
                 
-                content_blob_obj = self.storage_manager.bucket.blob(content_blob)
-                metadata_blob_obj = self.storage_manager.bucket.blob(metadata_blob)
+    #             content_blob_obj = self.storage_manager.bucket.blob(content_blob)
+    #             metadata_blob_obj = self.storage_manager.bucket.blob(metadata_blob)
                 
-                if content_blob_obj.exists() and metadata_blob_obj.exists():
-                    # Check cache expiry
-                    metadata_content = metadata_blob_obj.download_as_text()
-                    metadata = json.loads(metadata_content)
+    #             if content_blob_obj.exists() and metadata_blob_obj.exists():
+    #                 # Check cache expiry
+    #                 metadata_content = metadata_blob_obj.download_as_text()
+    #                 metadata = json.loads(metadata_content)
                     
-                    research_metadata = metadata.get("research_metadata", {})
-                    cache_expires = research_metadata.get("cache_expires")
+    #                 research_metadata = metadata.get("research_metadata", {})
+    #                 cache_expires = research_metadata.get("cache_expires")
                     
-                    if cache_expires and datetime.now() < datetime.fromisoformat(cache_expires.replace("Z", "")):
-                        # Load cached data
-                        content = content_blob_obj.download_as_text()
+    #                 if cache_expires and datetime.now() < datetime.fromisoformat(cache_expires.replace("Z", "")):
+    #                     # Load cached data
+    #                     content = content_blob_obj.download_as_text()
                         
-                        return {
-                            "brand": brand_domain,
-                            "research_integration_content": content,
-                            "quality_score": metadata.get("confidence_score", 0.9),
-                            "files": [content_blob, metadata_blob],
-                            "data_sources": metadata.get("source_count", 0),
-                            "research_method": metadata.get("analysis_type", "cached_integration")
-                        }
-        except Exception as e:
-            logger.debug(f"Cache check failed: {e}")
+    #                     return {
+    #                         "brand": brand_domain,
+    #                         "research_integration_content": content,
+    #                         "quality_score": metadata.get("confidence_score", 0.9),
+    #                         "files": [content_blob, metadata_blob],
+    #                         "data_sources": metadata.get("source_count", 0),
+    #                         "research_method": metadata.get("analysis_type", "cached_integration")
+    #                     }
+    #     except Exception as e:
+    #         logger.debug(f"Cache check failed: {e}")
         
-        return None
+    #     return None
 
 
-def get_research_integration_processor() -> ResearchIntegrationProcessor:
+def get_research_integration_processor(brand_domain: str) -> ResearchIntegrationProcessor:
     """Get research integration processor instance"""
-    return ResearchIntegrationProcessor()
+    return ResearchIntegrationProcessor(brand_domain)

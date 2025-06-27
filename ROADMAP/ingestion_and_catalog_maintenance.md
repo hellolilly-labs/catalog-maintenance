@@ -205,7 +205,7 @@ python src/research/brand_researcher.py --brand specialized.com --force-regenera
 
 Brand research is divided into **6 distinct phases**, each with different refresh frequencies and cache durations:
 
-```python
+  ```python
 research_phases = {
     "foundation": {
         "cache_duration": "6-12 months",  # Very stable
@@ -442,7 +442,7 @@ nonlinear_intelligence_requirements = {
 #### **The Style Guide Problem (Fashion Brands)**
 High fashion brands like Balenciaga often have **undocumented style guides** that can only be captured through brand interviews:
 
-```python
+  ```python
 fashion_style_capture_questions = [
     "Do you have internal style guides or brand books that define your aesthetic?",
     "What visual elements must be present for something to 'look like' your brand?", 
@@ -1123,7 +1123,7 @@ class LinearityAdaptiveDescriptorGenerator:
         technical_themes = self.extract_technical_themes(brand_voice)
         
         return await self.llm_router.chat_completion(
-            model="gpt-4",
+            model="gpt-4.1",
             system=technical_prompt.format(
                 brand_voice=technical_themes,
                 performance_focus=brand_intelligence.get('key_differentiators', []),
@@ -1147,7 +1147,7 @@ class LinearityAdaptiveDescriptorGenerator:
         emotional_themes = self.extract_emotional_themes(brand_voice)
         
         return await self.llm_router.chat_completion(
-            model="gpt-4",
+            model="gpt-4.1",
             system=emotional_prompt.format(
                 brand_voice=emotional_themes,
                 lifestyle_focus=brand_intelligence.get('target_audience', {}),
@@ -1393,7 +1393,7 @@ technical_specs_chunk = {
 
 ### 7.1 Command-Line Interface
 
-```bash
+  ```bash
 # Phase 0: Brand Intelligence Generation
 
 ## Full Brand Research (New Brands)
@@ -2347,7 +2347,7 @@ class DescriptorGenerator(AIDecisionTracker):
         
         # Generate descriptor with LLM
         llm_response = await self.llm_service.chat_completion(
-            model="gpt-4-turbo",
+            model="gpt-4.1",
             system=descriptor_prompt["system"],
             messages=descriptor_prompt["messages"],
             temperature=0.3
@@ -2390,7 +2390,7 @@ class DescriptorGenerator(AIDecisionTracker):
             evidence=evidence,
             method="brand_aware_descriptor_generation",
             start_time=start_time,
-            model_used="gpt-4-turbo",
+            model_used="gpt-4.1",
             temperature=0.3,
             context={
                 "product_id": getattr(product, 'id', 'unknown'),
@@ -2400,7 +2400,7 @@ class DescriptorGenerator(AIDecisionTracker):
                 "brand_voice_style": brand_voice.get("style"),
                 "descriptor_length": len(descriptor_result["descriptor"]),
                 "approach_used": descriptor_result.get("approach"),
-                "generation_model": "gpt-4-turbo"
+                "generation_model": "gpt-4.1"
             }
         )
 ```
@@ -2465,7 +2465,7 @@ class EnhancedPhaseEvaluator(AIDecisionTracker):
             evidence=evidence,
             method="multi_factor_quality_assessment",
             start_time=start_time,
-            model_used="gpt-4-turbo",
+            model_used="gpt-4.1",
             temperature=0.0,
             context={
                 "original_decision_type": decision.decision_type,

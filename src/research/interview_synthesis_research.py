@@ -21,94 +21,43 @@ from src.storage import get_account_storage_provider
 from src.progress_tracker import ProgressTracker, StepType, create_console_listener
 from src.llm.simple_factory import LLMFactory
 from src.llm.prompt_manager import PromptManager
+from src.research.base_researcher import BaseResearcher
 
 logger = logging.getLogger(__name__)
 
 
-class InterviewSynthesisResearcher:
+class InterviewSynthesisResearcher(BaseResearcher):
     """AI Brand Ethos Voice Interview Synthesis Research Phase Implementation"""
     
-    def __init__(self, storage_manager=None):
-        self.storage_manager = storage_manager or get_account_storage_provider()
-        self.quality_threshold = 8.0
-        self.cache_duration_days = 150  # 5 months default
-        
-        self.progress_tracker = ProgressTracker(storage_manager=self.storage_manager, enable_checkpoints=True)
-        console_listener = create_console_listener()
-        self.progress_tracker.add_progress_listener(console_listener)
-        
-        # Initialize prompt manager
-        self.prompt_manager = PromptManager()
-        
-    async def research_interview_synthesis(self, brand_domain: str, force_refresh: bool = False) -> Dict[str, Any]:
-        """Research interview synthesis phase for a brand"""
-        start_time = time.time()
-        
-        logger.info(f"🤖 Starting AI Brand Ethos Voice Interview Synthesis Research for {brand_domain}")
-        
-        step_id = self.progress_tracker.create_step(
+    def __init__(self, brand_domain: str, storage_manager=None):
+        super().__init__(
+            brand_domain=brand_domain,
+            researcher_name="interview_synthesis",
             step_type=StepType.INTERVIEW_INTEGRATION,
-            brand=brand_domain,
-            phase_name="AI Brand Ethos Voice Interview Synthesis Research",
-            total_operations=8
+            quality_threshold=8.0,
+            cache_duration_days=150,
+            storage_manager=storage_manager
         )
         
-        try:
-            self.progress_tracker.start_step(step_id, "Checking cache and initializing...")
-            
-            if not force_refresh:
-                cached_result = await self._load_cached_interview_synthesis(brand_domain)
-                if cached_result:
-                    self.progress_tracker.complete_step(step_id, cache_hit=True)
-                    return cached_result
-            
-            self.progress_tracker.update_progress(step_id, 1, "📋 Loading foundation research context...")
-            
-            # Load foundation context from previous research phases
-            foundation_context = await self._load_foundation_context(brand_domain)
-            
-            self.progress_tracker.update_progress(step_id, 2, "🤖 Synthesizing AI brand ethos voice...")
-            
-            # Conduct interview synthesis using foundation context
-            analysis_result = await self._synthesize_brand_ethos_interview(
-                brand_domain,
-                foundation_context,
-                step_id
-            )
-            
-            self.progress_tracker.update_progress(step_id, 6, "💾 Saving interview synthesis research...")
-            
-            # Save research results in 3-file format
-            saved_files = await self._save_interview_synthesis_research(brand_domain, analysis_result)
-            
-            self.progress_tracker.update_progress(step_id, 7, "✅ Finalizing interview synthesis...")
-            
-            duration = time.time() - start_time
-            logger.info(f"✅ AI Brand Ethos Voice Interview Synthesis Research completed in {duration:.1f}s")
-            
-            self.progress_tracker.complete_step(
-                step_id,
-                output_files=saved_files,
-                quality_score=analysis_result.get("confidence", 0.8),
-                cache_hit=False
-            )
-            
-            return {
-                "brand": brand_domain,
-                "interview_synthesis_content": analysis_result.get("content", ""),
-                "quality_score": analysis_result.get("confidence", 0.8),
-                "files": saved_files,
-                "data_sources": analysis_result.get("source_count", 0),
-                "research_method": analysis_result.get("analysis_type", "enhanced_interview_synthesis")
-            }
-            
-        except Exception as e:
-            self.progress_tracker.fail_step(step_id, str(e))
-            logger.error(f"❌ Error in interview synthesis research: {e}")
-            raise
+    # async def research_interview_synthesis(self, brand_domain: str, force_refresh: bool = False) -> Dict[str, Any]:
+    #     """Research interview synthesis phase for a brand"""
+        
+    #     logger.info(f"🤖 Starting AI Brand Ethos Voice Interview Synthesis Research for {brand_domain}")
+        
+    #     # Use the base class research method
+    #     result = await self.research(force_refresh=force_refresh)
+        
+    #     return {
+    #         "brand": brand_domain,
+    #         "interview_synthesis_content": result.get("content", ""),
+    #         "quality_score": result.get("quality_score", 0.8),
+    #         "files": result.get("files", []),
+    #         "data_sources": result.get("data_sources", 0),
+    #         "research_method": result.get("research_method", "enhanced_interview_synthesis")
+    #     }
 
-    async def _load_foundation_context(self, brand_domain: str) -> Dict[str, Any]:
-        """Load foundation context from previous research phases"""
+    async def _gather_data(self) -> Dict[str, Any]:
+        """Load foundation context from previous research phases - implements BaseResearcher abstract method"""
         
         foundation_context = {}
         
@@ -116,10 +65,10 @@ class InterviewSynthesisResearcher:
             # Determine storage base path
             if hasattr(self.storage_manager, 'base_dir'):
                 # Local storage
-                research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research_phases")
+                research_dir = os.path.join(self.storage_manager.base_dir, "accounts", self.brand_domain, "research_phases")
             else:
                 # GCP storage - we'll adapt this for file reading
-                research_dir = f"accounts/{brand_domain}/research_phases"
+                research_dir = f"accounts/{self.brand_domain}/research_phases"
             
             # Load all previous research phases
             foundation_files = [
@@ -151,10 +100,106 @@ class InterviewSynthesisResearcher:
             
             logger.info(f"📋 Loaded {len(foundation_context)} foundation research phases for interview synthesis")
             
+            # Return in format expected by base class
+            return {
+                "brand_domain": self.brand_domain,
+                "brand_name": self.brand_domain.replace('.com', '').replace('.', ' ').title(),
+                "search_results": [],  # Interview synthesis doesn't use web search
+                "detailed_sources": [],
+                "foundation_context": foundation_context,
+                "total_sources": len(foundation_context),
+                "search_stats": {
+                    "successful_searches": len(foundation_context),
+                    "failed_searches": 0,
+                    "success_rate": 1.0 if foundation_context else 0.0,
+                    "ssl_errors": 0
+                }
+            }
+            
         except Exception as e:
             logger.warning(f"Error loading foundation context: {e}")
+            raise RuntimeError(f"Failed to load foundation context: {e}")
+
+    def _get_default_user_prompt(self) -> str:
+        """Get the default user prompt for interview synthesis - implements BaseResearcher abstract method"""
         
-        return foundation_context
+        default_prompt = """Synthesize foundation research data to create comprehensive AI brand ethos voice interview synthesis.
+
+**Brand:** {{brand_name}}
+**Domain:** {{brand_domain}}
+
+## Foundation Research Context:
+{{search_context}}
+
+## AI Brand Ethos Voice Interview Synthesis Requirements:
+
+Create a comprehensive AI brand ethos voice interview synthesis in **markdown format**.
+
+Structure your synthesis as follows:
+
+# AI Brand Ethos Voice Interview Synthesis: {{brand_name}}
+
+## 1. AI Brand Personality Profile
+- **Personality Traits:** [Authoritative, approachable, innovative, reliable characteristics] [cite sources]
+- **Communication Style:** [Speaking patterns and conversational approach] [cite sources]
+- **Emotional Intelligence:** [Responsiveness style and emotional approach] [cite sources]
+- **Expertise Areas:** [Knowledge depth and specialization areas] [cite sources]
+
+## 2. Interview Voice & Tone Framework
+- **Response Patterns:** [Question response depth and style] [cite sources]
+- **Language Balance:** [Technical vs. accessible communication] [cite sources]
+- **Storytelling Style:** [Narrative approach and structure] [cite sources]
+- **Tone Adaptation:** [Professional vs. conversational flexibility] [cite sources]
+
+## 3. Brand Ethos Expression Patterns
+- **Innovation Leadership:** [How to express innovation in conversations] [cite sources]
+- **Customer Philosophy:** [Customer-first approach in responses] [cite sources]
+- **Quality Emphasis:** [Performance and quality discussion style] [cite sources]
+- **Heritage Showcase:** [Expertise and legacy presentation] [cite sources]
+
+## 4. Conversation Context Adaptation
+- **Technical Discussions:** [Product and technical conversation approach] [cite sources]
+- **Strategy Conversations:** [Business vision and strategy style] [cite sources]
+- **Customer Stories:** [Experience sharing and storytelling] [cite sources]
+- **Thought Leadership:** [Industry positioning and expertise] [cite sources]
+
+## 5. AI Response Authenticity Guidelines
+- **Messaging Consistency:** [Consistent themes across conversations] [cite sources]
+- **Brand Terminology:** [Specific language and vocabulary patterns] [cite sources]
+- **Expertise Demonstration:** [Knowledge showcase without overselling] [cite sources]
+- **Passion Areas:** [Genuine energy and enthusiasm points] [cite sources]
+
+## 6. Interview Implementation Framework
+- **Voice Do's:** [Recommended AI interview practices] [cite sources]
+- **Voice Don'ts:** [Practices to avoid in conversations] [cite sources]
+- **Response Guidelines:** [Depth and detail standards] [cite sources]
+- **Quality Standards:** [Authenticity and brand representation criteria] [cite sources]
+
+## Analysis Quality & Confidence
+
+**Foundation Sources:** {{total_sources}} research phases analyzed
+**Information Quality:** {{information_quality}}
+**Confidence Level:** {{confidence_level}} confidence in synthesis
+
+## Summary
+
+[Provide a 2-3 sentence executive summary of the AI brand ethos voice approach]
+
+---
+
+**Important Instructions:**
+- Base synthesis on comprehensive foundation research from all phases
+- Focus on AI implementation guidelines and authentic voice patterns
+- Provide actionable voice guidelines for AI brand representation
+- Include confidence levels based on foundation data quality
+- Use markdown formatting for structure and readability"""
+
+        return default_prompt
+
+    def _get_default_instruction_prompt(self) -> str:
+        """Get the default instruction prompt for interview synthesis - implements BaseResearcher abstract method"""
+        
+        return "You are an expert AI brand voice specialist creating authentic brand ethos interview synthesis. Generate comprehensive, implementation-ready AI voice guidelines based on complete foundation research from all previous brand research phases. Focus on creating authentic, conversational AI voice patterns."
 
     async def _synthesize_brand_ethos_interview(
         self,
@@ -164,17 +209,17 @@ class InterviewSynthesisResearcher:
     ) -> Dict[str, Any]:
         """Synthesize AI brand ethos voice interview from research"""
         
-        self.progress_tracker.update_progress(step_id, 3, "🎯 Analyzing brand personality patterns...")
+        await self.progress_tracker.update_progress(step_id, 3, "🎯 Analyzing brand personality patterns...")
         
         # Get interview synthesis prompt
         prompt_template = await self._get_interview_synthesis_prompt()
         
-        self.progress_tracker.update_progress(step_id, 4, "🗣️ Generating AI brand interview voice...")
+        await self.progress_tracker.update_progress(step_id, 4, "🗣️ Generating AI brand interview voice...")
         
         # Prepare synthesis data
         synthesis_data = {
             "brand_domain": brand_domain,
-            "foundation_research": foundation_context.get("foundation", ""),
+            "foundation": foundation_context.get("foundation", ""),
             "market_positioning": foundation_context.get("market_positioning", ""),
             "product_style": foundation_context.get("product_style", ""),
             "customer_cultural": foundation_context.get("customer_cultural", ""),
@@ -187,7 +232,7 @@ class InterviewSynthesisResearcher:
             synthesis_data
         )
         
-        self.progress_tracker.update_progress(step_id, 5, "📊 Calculating synthesis quality...")
+        await self.progress_tracker.update_progress(step_id, 5, "📊 Calculating synthesis quality...")
         
         # Calculate quality score based on foundation context richness
         quality_score = self._calculate_interview_synthesis_quality_score(foundation_context, synthesis_content)
@@ -298,7 +343,7 @@ Include confidence levels based on foundation data quality.
         # Prepare template variables
         template_vars = {
             "brand_domain": synthesis_data["brand_domain"],
-            "foundation_research": synthesis_data["foundation_research"][:2000] if synthesis_data["foundation_research"] else "No foundation research available",
+            "foundation": synthesis_data["foundation"][:2000] if synthesis_data["foundation"] else "No foundation research available",
             "market_positioning": synthesis_data["market_positioning"][:1500] if synthesis_data["market_positioning"] else "No market positioning available",
             "product_style": synthesis_data["product_style"][:1500] if synthesis_data["product_style"] else "No product style research available",
             "customer_cultural": synthesis_data["customer_cultural"][:1500] if synthesis_data["customer_cultural"] else "No customer cultural research available",
@@ -315,7 +360,7 @@ Include confidence levels based on foundation data quality.
 BRAND: {synthesis_data['brand_domain']}
 
 FOUNDATION RESEARCH SYNTHESIS:
-Foundation Research: {synthesis_data['foundation_research'][:800] if synthesis_data['foundation_research'] else 'Not available'}
+Foundation Research: {synthesis_data['foundation'][:800] if synthesis_data['foundation'] else 'Not available'}
 
 Market Positioning: {synthesis_data['market_positioning'][:600] if synthesis_data['market_positioning'] else 'Not available'}
 
@@ -327,14 +372,14 @@ Voice & Messaging: {synthesis_data['voice_messaging'][:600] if synthesis_data['v
 """
         
         response = await LLMFactory.chat_completion(
-            task="interview_synthesis_research",
+            task="interview_synthesis",
             system="You are an expert AI brand voice specialist creating authentic brand ethos interview synthesis. Generate comprehensive, implementation-ready AI voice guidelines based on complete foundation research.",
             messages=[
                 {"role": "system", "content": final_prompt},
                 {"role": "user", "content": context}
             ],
             temperature=0.7,
-            max_tokens=4000
+            # max_tokens=4000
         )
         
         return response.get("content", "Interview synthesis generation failed")
@@ -541,6 +586,6 @@ Voice & Messaging: {synthesis_data['voice_messaging'][:600] if synthesis_data['v
         return None
 
 
-def get_interview_synthesis_researcher() -> InterviewSynthesisResearcher:
+def get_interview_synthesis_researcher(brand_domain: str) -> InterviewSynthesisResearcher:
     """Get interview synthesis researcher instance"""
-    return InterviewSynthesisResearcher() 
+    return InterviewSynthesisResearcher(brand_domain) 

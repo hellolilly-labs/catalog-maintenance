@@ -267,7 +267,7 @@ async def demo_integrated_foundation_research():
         
         # Run foundation research with observability
         start_time = time.time()
-        result = await researcher.research_foundation(brand, force_refresh=True)
+        result = await researcher.research(brand, force_refresh=True)
         duration = time.time() - start_time
         
         print(f"\n📊 **RESULTS SUMMARY**")

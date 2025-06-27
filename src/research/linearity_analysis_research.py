@@ -21,204 +21,228 @@ from src.storage import get_account_storage_provider
 from src.progress_tracker import ProgressTracker, StepType, create_console_listener
 from src.llm.simple_factory import LLMFactory
 from src.llm.prompt_manager import PromptManager
+from src.research.base_researcher import BaseResearcher
 
 logger = logging.getLogger(__name__)
 
 
-class LinearityAnalysisResearcher:
+class LinearityAnalysisResearcher(BaseResearcher):
     """Linearity Analysis Research Phase Implementation"""
     
-    def __init__(self, storage_manager=None):
-        self.storage_manager = storage_manager or get_account_storage_provider()
-        self.quality_threshold = 7.5
-        self.cache_duration_days = 45  # 1.5 months default
-        
-        self.progress_tracker = ProgressTracker(storage_manager=self.storage_manager, enable_checkpoints=True)
-        console_listener = create_console_listener()
-        self.progress_tracker.add_progress_listener(console_listener)
-        
-        # Initialize prompt manager
-        self.prompt_manager = PromptManager()
-        
-    async def research_linearity_analysis(self, brand_domain: str, force_refresh: bool = False) -> Dict[str, Any]:
-        """Research linearity analysis phase for a brand"""
-        start_time = time.time()
-        
-        logger.info(f"📊 Starting Linearity Analysis Research for {brand_domain}")
-        
-        step_id = self.progress_tracker.create_step(
+    def __init__(self, brand_domain: str, storage_manager=None):
+        super().__init__(
+            brand_domain=brand_domain,
+            researcher_name="linearity_analysis",
             step_type=StepType.SYNTHESIS,
-            brand=brand_domain,
-            phase_name="Linearity Analysis Research",
-            total_operations=8
+            quality_threshold=7.5,
+            cache_duration_days=45,
+            storage_manager=storage_manager
         )
         
+    # async def research_linearity_analysis(self, brand_domain: str, force_refresh: bool = False) -> Dict[str, Any]:
+    #     """Research linearity analysis phase for a brand"""
+        
+    #     logger.info(f"📊 Starting Linearity Analysis Research for {brand_domain}")
+        
+    #     # Use the base class research method
+    #     result = await self.research(force_refresh=force_refresh)
+        
+    #     return {
+    #         "brand": brand_domain,
+    #         "linearity_analysis_content": result.get("content", ""),
+    #         "quality_score": result.get("quality_score", 0.8),
+    #         "files": result.get("files", []),
+    #         "data_sources": result.get("data_sources", 0),
+    #         "research_method": result.get("research_method", "enhanced_linearity_analysis")
+    #     }
+
+    async def _gather_data(self) -> Dict[str, Any]:
+        """Load foundation context from all previous research phases - implements BaseResearcher abstract method"""
+        
+        context = {}
+        
         try:
-            self.progress_tracker.start_step(step_id, "Checking cache and initializing...")
+            # Load all previous research phases
+            foundation_files = [
+                "foundation",
+                "market_positioning",
+                "product_style",
+                "customer_cultural",
+                "voice_messaging",
+                "interview_synthesis"
+            ]
             
-            if not force_refresh:
-                cached_result = await self._load_cached_linearity_analysis(brand_domain)
-                if cached_result:
-                    self.progress_tracker.complete_step(step_id, cache_hit=True)
-                    return cached_result
+            for phase_key in foundation_files:
+                try:
+                    blob_path = f"research/{phase_key}/research.md"
+                    context[phase_key] = await self.storage_manager.read_file(account=self.brand_domain, file_path=blob_path)
+                                
+                except Exception as e:
+                    logger.debug(f"Could not load {phase_key} research: {e}")
             
-            self.progress_tracker.update_progress(step_id, 1, "📋 Loading foundation research context...")
+            logger.info(f"📋 Loaded {len(context)} foundation research phases for linearity analysis")
             
-            # Load foundation context from all previous research phases
-            foundation_context = await self._load_foundation_context(brand_domain)
-            
-            self.progress_tracker.update_progress(step_id, 2, "📊 Analyzing brand linearity and consistency...")
-            
-            # Conduct linearity analysis using foundation context
-            analysis_result = await self._analyze_brand_linearity(
-                brand_domain,
-                foundation_context,
-                step_id
-            )
-            
-            self.progress_tracker.update_progress(step_id, 6, "💾 Saving linearity analysis research...")
-            
-            # Save research results in 3-file format
-            saved_files = await self._save_linearity_analysis_research(brand_domain, analysis_result)
-            
-            self.progress_tracker.update_progress(step_id, 7, "✅ Finalizing linearity analysis...")
-            
-            duration = time.time() - start_time
-            logger.info(f"✅ Linearity Analysis Research completed in {duration:.1f}s")
-            
-            self.progress_tracker.complete_step(
-                step_id,
-                output_files=saved_files,
-                quality_score=analysis_result.get("confidence", 0.8),
-                cache_hit=False
-            )
-            
+            # Return in format expected by base class
             return {
-                "brand": brand_domain,
-                "linearity_analysis_content": analysis_result.get("content", ""),
-                "quality_score": analysis_result.get("confidence", 0.8),
-                "files": saved_files,
-                "data_sources": analysis_result.get("source_count", 0),
-                "research_method": analysis_result.get("analysis_type", "enhanced_linearity_analysis")
+                "brand_domain": self.brand_domain,
+                "brand_name": self.brand_domain.replace('.com', '').replace('.', ' ').title(),
+                "search_results": [],  # Linearity analysis doesn't use web search
+                "detailed_sources": [],
+                "context": context,
+                "total_sources": len(context),
+                "search_stats": {
+                    "successful_searches": len(context),
+                    "failed_searches": 0,
+                    "success_rate": 1.0 if context else 0.0,
+                    "ssl_errors": 0
+                }
             }
             
         except Exception as e:
-            self.progress_tracker.fail_step(step_id, str(e))
-            logger.error(f"❌ Error in linearity analysis research: {e}")
-            raise
-
-    async def _load_foundation_context(self, brand_domain: str) -> Dict[str, Any]:
-        """Load foundation context from all previous research phases"""
-        
-        foundation_context = {}
-        
-        try:
-            # Determine storage base path
-            if hasattr(self.storage_manager, 'base_dir'):
-                # Local storage
-                research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research_phases")
-            else:
-                # GCP storage - we'll adapt this for file reading
-                research_dir = f"accounts/{brand_domain}/research_phases"
-            
-            # Load all previous research phases
-            foundation_files = [
-                ("foundation_research.md", "foundation"),
-                ("market_positioning.md", "market_positioning"),
-                ("product_style_research.md", "product_style"),
-                ("customer_cultural_research.md", "customer_cultural"),
-                ("voice_messaging_research.md", "voice_messaging"),
-                ("interview_synthesis_research.md", "interview_synthesis")
-            ]
-            
-            for filename, phase_key in foundation_files:
-                try:
-                    if hasattr(self.storage_manager, 'base_dir'):
-                        # Local storage
-                        file_path = os.path.join(research_dir, filename)
-                        if os.path.exists(file_path):
-                            with open(file_path, 'r') as f:
-                                foundation_context[phase_key] = f.read()
-                    else:
-                        # GCP storage
-                        blob_path = f"{research_dir}/{filename}"
-                        if hasattr(self.storage_manager, 'bucket'):
-                            blob = self.storage_manager.bucket.blob(blob_path)
-                            if blob.exists():
-                                foundation_context[phase_key] = blob.download_as_text()
-                                
-                except Exception as e:
-                    logger.debug(f"Could not load {filename}: {e}")
-            
-            logger.info(f"📋 Loaded {len(foundation_context)} foundation research phases for linearity analysis")
-            
-        except Exception as e:
             logger.warning(f"Error loading foundation context: {e}")
-        
-        return foundation_context
+            raise RuntimeError(f"Failed to load foundation context: {e}")
 
-    async def _analyze_brand_linearity(
+    def _get_default_user_prompt(self) -> str:
+        """Get the default user prompt for linearity analysis - implements BaseResearcher abstract method"""
+        
+        default_prompt = """Analyze foundation research data to create comprehensive linearity analysis across all research phases.
+
+**Brand:** {{brand_name}}
+**Domain:** {{brand_domain}}
+
+## Foundation Research Context:
+{{search_context}}
+
+## Linearity Analysis Requirements:
+
+Create a comprehensive linearity analysis in **markdown format** that examines consistency across all research phases.
+
+Structure your analysis as follows:
+
+# Linearity Analysis: {{brand_name}}
+
+## 1. Cross-Phase Consistency Analysis
+- **Brand Value Alignment:** [Consistency across foundation, positioning, and voice research] [cite sources]
+- **Product-Customer Alignment:** [Product style vs. customer cultural intelligence consistency] [cite sources]
+- **Message Consistency:** [Voice messaging vs. interview synthesis alignment] [cite sources]
+- **Quality Themes:** [Reliability and quality themes throughout all phases] [cite sources]
+
+## 2. Brand Positioning Linearity Assessment
+- **Market vs. Product Alignment:** [Market positioning vs. actual product offering] [cite sources]
+- **Customer Segmentation Consistency:** [Cultural and voice research alignment] [cite sources]
+- **Competitive Positioning:** [Positioning vs. brand personality consistency] [cite sources]
+- **Innovation Claims:** [Innovation leadership vs. product style evidence] [cite sources]
+
+## 3. Voice & Messaging Alignment Evaluation
+- **Foundation Values vs. Voice:** [Brand values vs. voice messaging patterns] [cite sources]
+- **Interview Authenticity:** [Interview synthesis vs. customer cultural insights] [cite sources]
+- **Technical Balance:** [Expertise demonstration vs. accessibility balance] [cite sources]
+- **Professional Consistency:** [Tone consistency across customer touchpoints] [cite sources]
+
+## 4. Product-Brand Integration Analysis
+- **Style-Foundation Alignment:** [Product style vs. brand foundation consistency] [cite sources]
+- **Customer-Product Alignment:** [Customer insights vs. product positioning] [cite sources]
+- **Innovation Evidence:** [Innovation claims vs. product feature evidence] [cite sources]
+- **Quality Messaging:** [Quality messaging vs. product characteristics] [cite sources]
+
+## 5. Market-Customer Alignment Review
+- **Market-Customer Consistency:** [Market positioning vs. customer intelligence] [cite sources]
+- **Competitive Landscape:** [Competition vs. customer preference alignment] [cite sources]
+- **Price Positioning:** [Price positioning vs. customer segmentation] [cite sources]
+- **Heritage Alignment:** [Brand heritage vs. customer expectations] [cite sources]
+
+## 6. Overall Linearity & Recommendations
+- **Consistency Score:** [Overall brand consistency assessment] [cite sources]
+- **Linear Strengths:** [Key consistent areas to leverage] [cite sources]
+- **Critical Inconsistencies:** [Areas needing attention] [cite sources]
+- **Integration Recommendations:** [Actions for maintaining brand linearity] [cite sources]
+
+## Analysis Quality & Confidence
+
+**Foundation Sources:** {{total_sources}} research phases analyzed
+**Information Quality:** {{information_quality}}
+**Confidence Level:** {{confidence_level}} confidence in analysis
+
+## Summary
+
+[Provide a 2-3 sentence executive summary of the brand's linearity across research phases]
+
+---
+
+**Important Instructions:**
+- Base analysis on cross-phase patterns and consistency themes
+- Provide specific examples from each research phase with citations
+- Quantify consistency levels where possible (e.g., "85% alignment")
+- Focus on actionable insights for brand development and integration
+- Use markdown formatting for structure and readability"""
+
+        return default_prompt
+
+    def _get_default_instruction_prompt(self) -> str:
+        """Get the default instruction prompt for linearity analysis - implements BaseResearcher abstract method"""
+        
+        return "You are an expert brand consistency analyst specializing in cross-phase research linearity analysis. Generate comprehensive consistency assessments and actionable insights based on complete foundation research across multiple phases. Focus on identifying patterns, alignments, and areas for improvement in brand consistency."
+
+    async def _analyze_data(
         self,
-        brand_domain: str,
-        foundation_context: Dict[str, Any],
-        step_id: str
+        context: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Analyze brand linearity and consistency across research phases"""
         
-        self.progress_tracker.update_progress(step_id, 3, "🔍 Analyzing consistency patterns...")
+        step_id = await self.progress_tracker.create_step(
+            step_type=StepType.LINEARITY_ANALYSIS,
+            brand=self.brand_domain,
+            phase_name="Linearity Analysis",
+            total_operations=2
+        )
         
-        # Get linearity analysis prompt
-        prompt_template = await self._get_linearity_analysis_prompt()
+        await self.progress_tracker.update_progress(step_id, 1, "🔍 Analyzing consistency patterns...")
         
-        self.progress_tracker.update_progress(step_id, 4, "📊 Evaluating brand alignment...")
-        
+        context_data = context.get('context')
         # Prepare analysis data
         analysis_data = {
-            "brand_domain": brand_domain,
-            "foundation_research": foundation_context.get("foundation", ""),
-            "market_positioning": foundation_context.get("market_positioning", ""),
-            "product_style": foundation_context.get("product_style", ""),
-            "customer_cultural": foundation_context.get("customer_cultural", ""),
-            "voice_messaging": foundation_context.get("voice_messaging", ""),
-            "interview_synthesis": foundation_context.get("interview_synthesis", "")
+            "brand_domain": self.brand_domain,
+            "foundation": context_data.get("foundation", ""),
+            "market_positioning": context_data.get("market_positioning", ""),
+            "product_style": context_data.get("product_style", ""),
+            "customer_cultural": context_data.get("customer_cultural", ""),
+            "voice_messaging": context_data.get("voice_messaging", ""),
+            "interview_synthesis": context_data.get("interview_synthesis", "")
         }
         
         # Generate linearity analysis using LLM
         analysis_content = await self._generate_linearity_analysis(
-            prompt_template, 
             analysis_data
         )
         
-        self.progress_tracker.update_progress(step_id, 5, "📈 Calculating consistency score...")
+        await self.progress_tracker.update_progress(step_id, 2, "📈 Calculating consistency score...")
         
         # Calculate quality score based on foundation context richness
-        quality_score = self._calculate_linearity_analysis_quality_score(foundation_context, analysis_content)
+        quality_score = self._calculate_linearity_analysis_quality_score(context_data, analysis_content)
         
         return {
             "content": analysis_content,
             "confidence": quality_score,
-            "source_count": len(foundation_context),
+            "source_count": len(context_data),
             "analysis_type": "foundation_enhanced_linearity_analysis",
-            "foundation_phases": list(foundation_context.keys())
+            "foundation_phases": list(context_data.keys())
         }
 
-    async def _get_linearity_analysis_prompt(self) -> str:
+    def _get_default_instruction_prompt(self) -> str:
         """Get linearity analysis prompt from Langfuse"""
         
-        default_prompt = """
-You are conducting comprehensive Linearity Analysis for {{brand_domain}} across all completed research phases.
+        default_prompt = """You are an expert brand consistency analyst specializing in cross-phase research linearity analysis. Generate comprehensive consistency assessments and actionable insights based on complete foundation research across multiple phases."""
+
+        return default_prompt
+    
+    def _get_default_user_prompt(self) -> str:
+        """Get the default user prompt for linearity analysis - implements BaseResearcher abstract method"""
+        
+        default_prompt = """You are conducting comprehensive Linearity Analysis for {{brand_domain}} across all completed research phases.
 
 You have access to complete foundation research from 6 research phases to analyze brand consistency, alignment, and linearity.
 
 Your task is to identify patterns, consistencies, inconsistencies, and overall brand linearity across all research dimensions.
-
-**FOUNDATION RESEARCH CONTEXT:**
-Foundation Research: {{foundation_research}}
-Market Positioning: {{market_positioning}}
-Product Style: {{product_style}}
-Customer Cultural Intelligence: {{customer_cultural}}
-Voice & Messaging: {{voice_messaging}}
-Interview Synthesis: {{interview_synthesis}}
 
 **LINEARITY ANALYSIS REQUIREMENTS:**
 
@@ -283,18 +307,26 @@ Provide comprehensive linearity assessment:
 Write professional linearity analysis suitable for strategic brand development.
 Focus on cross-phase insights and patterns that support comprehensive brand understanding.
 Include confidence levels based on foundation data quality and consistency patterns.
-"""
 
-        prompt = await self.prompt_manager.get_prompt(
-            "linearity_analysis",
-            default_prompt
-        )
-        
-        return prompt.prompt if prompt else default_prompt
+BRAND: {{brand_domain}}
+
+COMPREHENSIVE RESEARCH FOUNDATION FOR LINEARITY ANALYSIS:
+Foundation Research: {{foundation}}
+
+Market Positioning: {{market_positioning}}
+
+Product Style: {{product_style}}
+
+Customer Cultural: {{customer_cultural}}
+
+Voice & Messaging: {{voice_messaging}}
+
+Interview Synthesis: {{interview_synthesis}}        
+"""
+        return default_prompt
 
     async def _generate_linearity_analysis(
         self, 
-        prompt_template: str, 
         analysis_data: Dict[str, Any]
     ) -> str:
         """Generate linearity analysis using foundation research"""
@@ -302,46 +334,41 @@ Include confidence levels based on foundation data quality and consistency patte
         # Prepare template variables
         template_vars = {
             "brand_domain": analysis_data["brand_domain"],
-            "foundation_research": analysis_data["foundation_research"][:1500] if analysis_data["foundation_research"] else "No foundation research available",
-            "market_positioning": analysis_data["market_positioning"][:1200] if analysis_data["market_positioning"] else "No market positioning available",
-            "product_style": analysis_data["product_style"][:1200] if analysis_data["product_style"] else "No product style research available",
-            "customer_cultural": analysis_data["customer_cultural"][:1200] if analysis_data["customer_cultural"] else "No customer cultural research available",
-            "voice_messaging": analysis_data["voice_messaging"][:1200] if analysis_data["voice_messaging"] else "No voice messaging research available",
-            "interview_synthesis": analysis_data["interview_synthesis"][:1200] if analysis_data["interview_synthesis"] else "No interview synthesis available"
+            "foundation": analysis_data["foundation"][:5000] if analysis_data["foundation"] else "No foundation research available",
+            "market_positioning": analysis_data["market_positioning"][:2000] if analysis_data["market_positioning"] else "No market positioning available",
+            "product_style": analysis_data["product_style"][:2000] if analysis_data["product_style"] else "No product style research available",
+            "customer_cultural": analysis_data["customer_cultural"][:2000] if analysis_data["customer_cultural"] else "No customer cultural research available",
+            "voice_messaging": analysis_data["voice_messaging"][:2000] if analysis_data["voice_messaging"] else "No voice messaging research available",
+            "interview_synthesis": analysis_data["interview_synthesis"][:2000] if analysis_data["interview_synthesis"] else "No interview synthesis available"
         }
         
+        # Get prompt from Langfuse
+        prompt_template = await self.prompt_manager.get_prompt(
+            prompt_name="internal/researcher/linearity_analysis",
+            prompt_type="chat",
+            prompt=[
+                {"role": "system", "content": self._get_default_instruction_prompt()},
+                {"role": "user", "content": self._get_default_user_prompt()}
+            ]
+        )
+        prompts = prompt_template.prompt
+        
+        system_prompt = next((msg["content"] for msg in prompts if msg["role"] == "system"), None)
+        user_prompt = next((msg["content"] for msg in prompts if msg["role"] == "user"), None)
+        
         # Replace template variables
-        final_prompt = prompt_template
         for var, value in template_vars.items():
-            final_prompt = final_prompt.replace(f"{{{{{var}}}}}", str(value))
-        
-        # Prepare context for LLM
-        context = f"""
-BRAND: {analysis_data['brand_domain']}
-
-COMPREHENSIVE RESEARCH FOUNDATION FOR LINEARITY ANALYSIS:
-Foundation Research: {analysis_data['foundation_research'][:600] if analysis_data['foundation_research'] else 'Not available'}
-
-Market Positioning: {analysis_data['market_positioning'][:500] if analysis_data['market_positioning'] else 'Not available'}
-
-Product Style: {analysis_data['product_style'][:500] if analysis_data['product_style'] else 'Not available'}
-
-Customer Cultural: {analysis_data['customer_cultural'][:500] if analysis_data['customer_cultural'] else 'Not available'}
-
-Voice & Messaging: {analysis_data['voice_messaging'][:500] if analysis_data['voice_messaging'] else 'Not available'}
-
-Interview Synthesis: {analysis_data['interview_synthesis'][:500] if analysis_data['interview_synthesis'] else 'Not available'}
-"""
-        
+            system_prompt = system_prompt.replace(f"{{{{{var}}}}}", str(value))
+            user_prompt = user_prompt.replace(f"{{{{{var}}}}}", str(value))
+                
         response = await LLMFactory.chat_completion(
             task="linearity_analysis_research",
-            system="You are an expert brand consistency analyst specializing in cross-phase research linearity analysis. Generate comprehensive consistency assessments and actionable insights based on complete foundation research across multiple phases.",
+            system=system_prompt,
             messages=[
-                {"role": "system", "content": final_prompt},
-                {"role": "user", "content": context}
+                {"role": "user", "content": user_prompt}
             ],
             temperature=0.6,
-            max_tokens=4000
+            # max_tokens=4000
         )
         
         return response.get("content", "Linearity analysis generation failed")
@@ -548,6 +575,6 @@ Interview Synthesis: {analysis_data['interview_synthesis'][:500] if analysis_dat
         return None
 
 
-def get_linearity_analysis_researcher() -> LinearityAnalysisResearcher:
+def get_linearity_analysis_researcher(brand_domain: str) -> LinearityAnalysisResearcher:
     """Get linearity analysis researcher instance"""
-    return LinearityAnalysisResearcher()
+    return LinearityAnalysisResearcher(brand_domain)

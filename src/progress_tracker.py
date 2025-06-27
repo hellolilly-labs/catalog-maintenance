@@ -25,14 +25,12 @@ class StepStatus(Enum):
 class StepType(Enum):
     """Types of research steps for all 8 research phases"""
     # Main research phases (8 phases total per ROADMAP)
-    FOUNDATION_RESEARCH = "foundation_research"
+    FOUNDATION_RESEARCH = "foundation"
     MARKET_POSITIONING = "market_positioning" 
-    MARKET_POSITIONING_RESEARCH = "market_positioning_research"
+    MARKET_POSITIONING_RESEARCH = "market_positioning"
     PRODUCT_INTELLIGENCE = "product_intelligence"
     PRODUCT_STYLE = "product_style"
-    CUSTOMER_INTELLIGENCE = "customer_intelligence"
     CUSTOMER_CULTURAL = "customer_cultural"
-    VOICE_ANALYSIS = "voice_analysis"
     VOICE_MESSAGING = "voice_messaging"
     INTERVIEW_INTEGRATION = "interview_integration"
     INTERVIEW_SYNTHESIS = "interview_synthesis"
@@ -166,7 +164,31 @@ class ProgressTracker:
         self._research_session_id: str = str(uuid.uuid4())
         self._checkpoints: List[Checkpoint] = []
     
-    def create_step(
+    async def _create_checkpoint(self, step: StepProgress, operation: str):
+        """Create a progress checkpoint for audit trail and immediately persist to disk"""
+        checkpoint = Checkpoint(
+            checkpoint_id=str(uuid.uuid4()),
+            timestamp=datetime.utcnow(),
+            step_id=step.step_id,
+            step_type=step.step_type.value,
+            status=step.status.value,
+            progress_percentage=step.metrics.progress_percentage,
+            duration_seconds=step.metrics.duration_seconds,
+            current_operation=operation,
+            quality_score=step.quality_score,
+            error_message=step.error_message,
+            warnings=step.warnings.copy()
+        )
+        
+        with self._lock:
+            self._checkpoints.append(checkpoint)
+        
+        logger.debug(f"📊 Checkpoint: {step.phase_name} - {operation} ({step.metrics.progress_percentage:.1f}%)")
+        
+        # 🔥 IMMEDIATELY PERSIST TO DISK - File-System-as-State!
+        await self._save_progress_log(step.brand, step.step_type.value)
+    
+    async def create_step(
         self, 
         step_type: StepType, 
         brand: str, 
@@ -188,14 +210,14 @@ class ProgressTracker:
             self._steps[step_id] = step
             self._active_step_id = step_id
         
-        # Create initial checkpoint
+        # Create initial checkpoint (now persisted immediately)
         if self.enable_checkpoints:
-            self._create_checkpoint(step, "Step created")
+            await self._create_checkpoint(step, "Step created")
         
         self._notify_listeners(step)
         return step_id
     
-    def start_step(self, step_id: str, current_operation: str = ""):
+    async def start_step(self, step_id: str, current_operation: str = ""):
         """Mark step as started"""
         with self._lock:
             if step_id not in self._steps:
@@ -208,13 +230,13 @@ class ProgressTracker:
             step.updated_at = datetime.utcnow()
             self._active_step_id = step_id
         
-        # Create checkpoint for step start
+        # Create checkpoint for step start (now persisted immediately)
         if self.enable_checkpoints:
-            self._create_checkpoint(step, "Step started")
+            await self._create_checkpoint(step, "Step started")
         
         self._notify_listeners(step)
     
-    def update_progress(
+    async def update_progress(
         self, 
         step_id: str, 
         completed_operations: int = None,
@@ -245,15 +267,16 @@ class ProgressTracker:
                 )
         
         # Create checkpoint for progress updates (every 10% or significant operations)
+        # NOW PERSISTED IMMEDIATELY TO DISK!
         if self.enable_checkpoints and (
             step.metrics.progress_percentage % 10 < 5 or  # Every ~10%
             current_operation  # Significant operation changes
         ):
-            self._create_checkpoint(step, "Progress update")
+            await self._create_checkpoint(step, "Progress update")
         
         self._notify_listeners(step)
     
-    def complete_step(
+    async def complete_step(
         self, 
         step_id: str, 
         output_files: List[str] = None,
@@ -278,15 +301,13 @@ class ProgressTracker:
             if quality_score is not None:
                 step.quality_score = quality_score
         
-        # Create completion checkpoint
+        # Create completion checkpoint (already persisted via _create_checkpoint)
         if self.enable_checkpoints:
-            self._create_checkpoint(step, "Step completed")
-            # Save checkpoints to persistent storage
-            self._save_progress_log(step.brand, step.step_type.value)
+            await self._create_checkpoint(step, "Step completed")
         
         self._notify_listeners(step)
     
-    def fail_step(self, step_id: str, error_message: str):
+    async def fail_step(self, step_id: str, error_message: str):
         """Mark step as failed"""
         with self._lock:
             if step_id not in self._steps:
@@ -298,15 +319,13 @@ class ProgressTracker:
             step.metrics.end_time = datetime.utcnow()
             step.updated_at = datetime.utcnow()
         
-        # Create failure checkpoint
+        # Create failure checkpoint (already persisted via _create_checkpoint)
         if self.enable_checkpoints:
-            self._create_checkpoint(step, "Step failed")
-            # Save checkpoints for debugging failed operations
-            self._save_progress_log(step.brand, step.step_type.value)
+            await self._create_checkpoint(step, "Step failed")
         
         self._notify_listeners(step)
     
-    def add_warning(self, step_id: str, warning: str):
+    async def add_warning(self, step_id: str, warning: str):
         """Add warning to step"""
         with self._lock:
             if step_id not in self._steps:
@@ -316,99 +335,24 @@ class ProgressTracker:
             step.warnings.append(warning)
             step.updated_at = datetime.utcnow()
         
-        # Create checkpoint for warnings (important for debugging)
+        # Create checkpoint for warnings (important for debugging) - NOW PERSISTED IMMEDIATELY
         if self.enable_checkpoints:
-            self._create_checkpoint(step, f"Warning: {warning}")
+            await self._create_checkpoint(step, f"Warning: {warning}")
         
         self._notify_listeners(step)
-    
-    def _create_checkpoint(self, step: StepProgress, operation: str):
-        """Create a progress checkpoint for audit trail"""
-        checkpoint = Checkpoint(
-            checkpoint_id=str(uuid.uuid4()),
-            timestamp=datetime.utcnow(),
-            step_id=step.step_id,
-            step_type=step.step_type.value,
-            status=step.status.value,
-            progress_percentage=step.metrics.progress_percentage,
-            duration_seconds=step.metrics.duration_seconds,
-            current_operation=operation,
-            quality_score=step.quality_score,
-            error_message=step.error_message,
-            warnings=step.warnings.copy()
-        )
-        
-        with self._lock:
-            self._checkpoints.append(checkpoint)
-        
-        logger.debug(f"📊 Checkpoint: {step.phase_name} - {operation} ({step.metrics.progress_percentage:.1f}%)")
-    
-    def _save_progress_log(self, brand: str, phase: str):
-        """Save progress checkpoints to persistent storage"""
-        if not self.enable_checkpoints:
-            return
-            
-        try:
-            # Filter checkpoints for this brand/phase
-            relevant_checkpoints = [
-                cp for cp in self._checkpoints 
-                if any(step.brand == brand and step.step_type.value == phase 
-                      for step in self._steps.values() 
-                      if step.step_id == cp.step_id)
-            ]
-            
-            if not relevant_checkpoints:
-                return
-            
-            # Create progress log document
-            progress_log = {
-                "research_session_id": self._research_session_id,
-                "brand_domain": brand,
-                "phase": phase,
-                "session_start": min(cp.timestamp for cp in relevant_checkpoints).isoformat() + "Z",
-                "session_end": max(cp.timestamp for cp in relevant_checkpoints).isoformat() + "Z",
-                "total_checkpoints": len(relevant_checkpoints),
-                "final_status": relevant_checkpoints[-1].status if relevant_checkpoints else "unknown",
-                "total_duration_seconds": max(cp.duration_seconds for cp in relevant_checkpoints) if relevant_checkpoints else 0,
-                "quality_score": relevant_checkpoints[-1].quality_score if relevant_checkpoints else None,
-                "checkpoints": [cp.to_dict() for cp in relevant_checkpoints]
-            }
-            
-            # Save to storage
-            if hasattr(self.storage_manager, 'save_account_file') and self.storage_manager:
-                # Use storage manager if available
-                file_path = f"research_phases/{phase}_progress.json"
-                self.storage_manager.save_account_file(
-                    brand_domain=brand,
-                    file_path=file_path,
-                    content=json.dumps(progress_log, indent=2)
-                )
-                logger.info(f"💾 Saved progress log: {brand}/{file_path}")
-            else:
-                # Fallback to local storage
-                local_dir = f"local/account_storage/accounts/{brand}/research_phases"
-                os.makedirs(local_dir, exist_ok=True)
-                
-                local_file = f"{local_dir}/{phase}_progress.json"
-                with open(local_file, 'w', encoding='utf-8') as f:
-                    json.dump(progress_log, f, indent=2)
-                logger.info(f"💾 Saved progress log locally: {local_file}")
-                
-        except Exception as e:
-            logger.error(f"❌ Failed to save progress log for {brand}/{phase}: {e}")
     
     def load_progress_log(self, brand: str, phase: str) -> Optional[Dict[str, Any]]:
         """Load progress checkpoints from persistent storage for analysis"""
         try:
             if hasattr(self.storage_manager, 'load_account_file') and self.storage_manager:
                 # Use storage manager if available
-                file_path = f"research_phases/{phase}_progress.json"
+                file_path = f"research/{phase}/progress.json"
                 content = self.storage_manager.load_account_file(brand, file_path)
                 if content:
                     return json.loads(content)
             else:
                 # Fallback to local storage
-                local_file = f"local/account_storage/accounts/{brand}/research_phases/{phase}_progress.json"
+                local_file = f"local/account_storage/accounts/{brand}/research/{phase}/progress.json"
                 if os.path.exists(local_file):
                     with open(local_file, 'r', encoding='utf-8') as f:
                         return json.load(f)
@@ -575,6 +519,53 @@ class ProgressTracker:
             checkpoints = self.get_progress_checkpoints(brand=brand)
             if checkpoints:
                 print(f"\n📊 **CHECKPOINT SUMMARY**: {len(checkpoints)} checkpoints recorded")
+    
+    async def _save_progress_log(self, brand: str, phase: str):
+        """Save progress checkpoints to persistent storage"""
+        if not self.enable_checkpoints or not self.storage_manager:
+            return
+            
+        try:
+            # Filter checkpoints for this brand/phase
+            relevant_checkpoints = [
+                cp for cp in self._checkpoints 
+                if any(step.brand == brand and step.step_type.value == phase 
+                      for step in self._steps.values() 
+                      if step.step_id == cp.step_id)
+            ]
+            
+            if not relevant_checkpoints:
+                return
+            
+            # Create progress log document
+            progress_log = {
+                "research_session_id": self._research_session_id,
+                "brand_domain": brand,
+                "phase": phase,
+                "session_start": min(cp.timestamp for cp in relevant_checkpoints).isoformat() + "Z",
+                "session_end": max(cp.timestamp for cp in relevant_checkpoints).isoformat() + "Z",
+                "total_checkpoints": len(relevant_checkpoints),
+                "final_status": relevant_checkpoints[-1].status if relevant_checkpoints else "unknown",
+                "total_duration_seconds": max(cp.duration_seconds for cp in relevant_checkpoints) if relevant_checkpoints else 0,
+                "quality_score": relevant_checkpoints[-1].quality_score if relevant_checkpoints else None,
+                "checkpoints": [cp.to_dict() for cp in relevant_checkpoints]
+            }
+            
+            # Save to storage using storage manager
+            success = await self.storage_manager.write_file(
+                account=brand,
+                file_path=f"research/{phase}/progress.json",
+                content=json.dumps(progress_log, indent=2),
+                content_type="application/json"
+            )
+            
+            if success:
+                logger.debug(f"💾 Saved progress log: {brand}/research/{phase}/progress.json")
+            else:
+                logger.warning(f"⚠️ Failed to save progress log for {brand}/{phase}")
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to save progress log for {brand}/{phase}: {e}")
 
 # Global progress tracker instance
 _global_tracker: Optional[ProgressTracker] = None

@@ -16,7 +16,7 @@ class ResearchPhaseTracker:
     def get_required_research_phases(self) -> Dict[str, Dict[str, Any]]:
         """Get the complete list of required research phases per ROADMAP Section 4.2"""
         return {
-            "foundation_research": {
+            "foundation": {
                 "name": "Foundation Research",
                 "cache_duration_days": 180,  # 6 months
                 "research_time_minutes": "3-5",
@@ -77,13 +77,13 @@ class ResearchPhaseTracker:
     def get_next_research_phase(self, brand_domain: str) -> Optional[str]:
         """Get the next research phase that needs to be completed"""
         if not self.workflow_manager:
-            return "foundation_research"  # Default start
+            return "foundation"  # Default start
             
         workflow_info = self.workflow_manager.get_brand_info(brand_domain)
         
         # Check each required phase in order
         phase_order = [
-            "foundation_research",
+            "foundation",
             "market_positioning", 
             "product_style",
             "customer_cultural",
@@ -143,7 +143,7 @@ class ResearchPhaseTracker:
         
         # Map phases to their CLI commands
         phase_commands = {
-            "foundation_research": f"python src/research/brand_researcher.py --brand {brand_domain} --foundation",
+            "foundation": f"python src/research/brand_researcher.py --brand {brand_domain} --foundation",
             "market_positioning": f"python src/research/brand_researcher.py --brand {brand_domain} --market-positioning",
             "product_style": f"python src/research/brand_researcher.py --brand {brand_domain} --product-style",
             "customer_cultural": f"python src/research/brand_researcher.py --brand {brand_domain} --customer-cultural",

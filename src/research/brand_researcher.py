@@ -42,13 +42,13 @@ class BrandResearcher:
         self.workflow_manager.update_brand_state(
             brand_domain, 
             WorkflowState.RESEARCH_IN_PROGRESS, 
-            phase_name="foundation_research"
+            phase_name="foundation"
         )
         
         start_time = time.time()
         
         try:
-            result = await self.foundation_researcher.research_foundation(
+            result = await self.foundation_researcher.research(
                 brand_domain=brand_domain,
                 force_refresh=force_refresh
             )
@@ -59,7 +59,7 @@ class BrandResearcher:
             # Mark foundation research phase as complete
             self.workflow_manager.mark_phase_complete(
                 brand_domain, 
-                "foundation_research", 
+                "foundation", 
                 quality_score=quality_score, 
                 duration=duration / 60.0
             )
@@ -81,7 +81,7 @@ class BrandResearcher:
                 self.workflow_manager.update_brand_state(
                     brand_domain,
                     WorkflowState.RESEARCH_IN_PROGRESS,
-                    phase_name="foundation_research"
+                    phase_name="foundation"
                 )
                 next_phase = research_summary["next_phase"]
                 logger.info(f"📋 Research phase complete: {brand_domain} → RESEARCH_IN_PROGRESS")
@@ -97,7 +97,7 @@ class BrandResearcher:
             self.workflow_manager.update_brand_state(
                 brand_domain,
                 WorkflowState.FAILED,
-                phase_name="foundation_research",
+                phase_name="foundation",
                 error=str(e)
             )
             
@@ -114,13 +114,13 @@ class BrandResearcher:
         self.workflow_manager.update_brand_state(
             brand_domain, 
             WorkflowState.RESEARCH_IN_PROGRESS, 
-            phase_name="market_positioning_research"
+            phase_name="market_positioning"
         )
         
         start_time = time.time()
         
         try:
-            result = await self.market_positioning_researcher.research_market_positioning(
+            result = await self.market_positioning_researcher.research(
                 brand_domain=brand_domain,
                 force_refresh=force_refresh
             )
@@ -131,7 +131,7 @@ class BrandResearcher:
             # Mark market positioning research phase as complete
             self.workflow_manager.mark_phase_complete(
                 brand_domain, 
-                "market_positioning_research", 
+                "market_positioning", 
                 quality_score=quality_score, 
                 duration=duration / 60.0
             )
@@ -153,7 +153,7 @@ class BrandResearcher:
                 self.workflow_manager.update_brand_state(
                     brand_domain,
                     WorkflowState.RESEARCH_IN_PROGRESS,
-                    phase_name="market_positioning_research"
+                    phase_name="market_positioning"
                 )
                 next_phase = research_summary["next_phase"]
                 logger.info(f"📋 Research phase complete: {brand_domain} → RESEARCH_IN_PROGRESS")
@@ -169,7 +169,7 @@ class BrandResearcher:
             self.workflow_manager.update_brand_state(
                 brand_domain,
                 WorkflowState.FAILED,
-                phase_name="market_positioning_research",
+                phase_name="market_positioning",
                 error=str(e)
             )
             

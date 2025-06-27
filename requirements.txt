@@ -74,3 +74,6 @@ typing-extensions>=4.8.0
 # pytest-asyncio>=0.21.0
 
 langfuse>=3.0.0
+
+# Redis
+redis>=5.0.0

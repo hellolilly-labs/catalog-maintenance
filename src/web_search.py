@@ -9,19 +9,24 @@ import asyncio
 import logging
 import json
 import ssl
+import hashlib
 from typing import Dict, List, Optional, Any
 import aiohttp
 import certifi
 from tavily import TavilyClient
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from abc import ABC, abstractmethod
 import os
 from urllib.parse import urlparse
 
 from configs.settings import get_settings
+from src.redis_client import get_redis_client
 
 logger = logging.getLogger(__name__)
 
+# Cache settings
+SEARCH_CACHE_TTL = 2 * 24 * 60 * 60  # 2 days in seconds
+SEARCH_CACHE_PREFIX = "tavily_search:"
 
 @dataclass 
 class SearchResult:
@@ -91,36 +96,57 @@ def create_ssl_context() -> ssl.SSLContext:
         return ssl.create_default_context()
 
 
-class WebSearchProvider(ABC):
-    """Abstract base class for web search providers"""
+def _generate_cache_key(query: str, search_params: Dict[str, Any]) -> str:
+    """Generate a unique cache key based on query and parameters"""
+    # Create a deterministic string from query and parameters
+    cache_data = {
+        "query": query,
+        "params": search_params
+    }
     
-    @abstractmethod
-    async def search(self, query: str, **kwargs) -> List[SearchResult]:
-        pass
+    # Sort parameters to ensure consistent key generation
+    cache_string = json.dumps(cache_data, sort_keys=True)
     
-    async def crawl_site(self, base_url: str, instructions: str = "") -> Optional[CrawlResult]:
-        """Crawl a website (if supported by provider)"""
-        raise NotImplementedError("Crawl not supported by this provider")
+    # Create hash of the cache string
+    cache_hash = hashlib.md5(cache_string.encode()).hexdigest()
     
-    async def map_site(self, base_url: str) -> Optional[SitemapResult]:
-        """Get sitemap of a website (if supported by provider)"""
-        raise NotImplementedError("Site mapping not supported by this provider")
+    return f"{SEARCH_CACHE_PREFIX}{cache_hash}"
+
+
+def _serialize_search_results(results: List[SearchResult]) -> str:
+    """Serialize search results for caching"""
+    try:
+        serializable_results = [asdict(result) for result in results]
+        return json.dumps(serializable_results)
+    except Exception as e:
+        logger.warning(f"Failed to serialize search results: {e}")
+        return "[]"
+
+
+def _deserialize_search_results(cached_data: str) -> List[SearchResult]:
+    """Deserialize cached search results"""
+    try:
+        data = json.loads(cached_data)
+        return [SearchResult(**item) for item in data]
+    except Exception as e:
+        logger.warning(f"Failed to deserialize cached search results: {e}")
+        return []
 
 
 class TavilySearchProvider(WebSearchProvider):
-    """Tavily AI-optimized search provider using official tavily-python library"""
+    """Tavily AI-optimized search provider using official tavily-python library with Redis caching"""
     
     def __init__(self, api_key: str = None):
         self.api_key = api_key or get_settings().TAVILY_API_KEY or os.getenv("TAVILY_API_KEY")
         self.base_url = "https://api.tavily.com"
         self.client = TavilyClient(api_key=api_key)
+        self.redis_client = get_redis_client()
     
     async def search(self, query: str, **kwargs) -> List[SearchResult]:
-        """Search using official Tavily library"""
+        """Search using official Tavily library with Redis caching"""
         try:
             # Prepare search parameters for the official library
             search_params = {
-                "query": query,
                 "search_depth": kwargs.get("search_depth", "advanced"),
                 "topic": kwargs.get("topic", "general"),
                 "include_answer": kwargs.get("include_answer", True),
@@ -133,20 +159,50 @@ class TavilySearchProvider(WebSearchProvider):
                 "days": kwargs.get("days", 0)
             }
             
-            # Remove None values
+            # Remove None values for consistent cache keys
             search_params = {k: v for k, v in search_params.items() if v is not None}
+            
+            # Generate cache key
+            cache_key = _generate_cache_key(query, search_params)
+            
+            # Try to get from cache first
+            if self.redis_client:
+                try:
+                    cached_results = self.redis_client.get(cache_key)
+                    if cached_results:
+                        logger.info(f"🔄 Cache HIT for query: {query[:50]}...")
+                        return _deserialize_search_results(cached_results)
+                except Exception as e:
+                    logger.warning(f"Redis cache read failed: {e}")
+            
+            # Cache miss or Redis unavailable - make API call
+            logger.info(f"🔍 Cache MISS - API call for query: {query[:50]}...")
+            
+            # Add query to search params for API call
+            api_params = {"query": query, **search_params}
             
             # Run the synchronous client method in a thread pool to make it async
             loop = asyncio.get_event_loop()
             data = await loop.run_in_executor(
                 None,
-                lambda: self.client.search(**search_params)
+                lambda: self.client.search(**api_params)
             )
             
-            return self._parse_search_results(data)
+            results = self._parse_search_results(data)
+            
+            # Cache the results if Redis is available
+            if self.redis_client and results:
+                try:
+                    cached_data = _serialize_search_results(results)
+                    self.redis_client.setex(cache_key, SEARCH_CACHE_TTL, cached_data)
+                    logger.debug(f"💾 Cached {len(results)} results for 2 days")
+                except Exception as e:
+                    logger.warning(f"Redis cache write failed: {e}")
+            
+            return results
                         
         except Exception as e:
-            print(f"Error in Tavily search: {e}")
+            logger.error(f"Error in Tavily search: {e}")
             return []
     
     async def crawl_site(self, base_url: str, instructions: str = "") -> Optional[CrawlResult]:
@@ -167,7 +223,7 @@ class TavilySearchProvider(WebSearchProvider):
             )
                         
         except Exception as e:
-            print(f"Error in Tavily crawl: {e}")
+            logger.error(f"Error in Tavily crawl: {e}")
             return None
     
     async def map_site(self, base_url: str) -> Optional[SitemapResult]:
