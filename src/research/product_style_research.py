@@ -29,6 +29,7 @@ from src.web_search import TavilySearchProvider
 from src.storage import get_account_storage_provider, AccountStorageProvider
 from configs.settings import get_settings
 from src.research.base_researcher import BaseResearcher
+from src.research.data_sources import WebSearchDataSource, DataGatheringContext
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ class ProductStyleResearcher(BaseResearcher):
     #     }
 
     async def _gather_data(self) -> Dict[str, Any]:
-        """Gather comprehensive product style data - implements BaseResearcher abstract method"""
+        """Gather comprehensive product style data using WebSearchDataSource"""
         
         brand_name = self.brand_domain.replace('.com', '').replace('.', ' ').title()
         research_queries = [
@@ -83,97 +84,62 @@ class ProductStyleResearcher(BaseResearcher):
             f"{brand_name} design trends influence aesthetic direction"
         ]
         
+        # Use WebSearchDataSource for data gathering
         try:
-            from src.web_search import get_web_search_engine
-            web_search = get_web_search_engine()
+            web_search_source = WebSearchDataSource()
             
-            if web_search and web_search.is_available():
-                all_results = []
-                detailed_sources = []
-                successful_searches = 0
-                failed_searches = 0
-                ssl_errors = 0
-                
-                for query_idx, query in enumerate(research_queries):
-                    try:
-                        results = await web_search.search(query)
-                        if results.get("results"):
-                            successful_searches += 1
-                            for result_idx, result in enumerate(results["results"][:3]):
-                                result_dict = {
-                                    "title": result.title,
-                                    "url": result.url,
-                                    "content": result.content,
-                                    "snippet": result.content,
-                                    "score": result.score,
-                                    "published_date": result.published_date,
-                                    "source_query": query,
-                                    "source_type": "research",
-                                    "query_index": query_idx,
-                                    "result_index": result_idx
-                                }
-                                all_results.append(result_dict)
-                                
-                                source_record = {
-                                    "source_id": f"query_{query_idx}_result_{result_idx}",
-                                    "title": result_dict.get("title", ""),
-                                    "url": result_dict.get("url", ""),
-                                    "snippet": result_dict.get("snippet", ""),
-                                    "search_query": query,
-                                    "search_score": result_dict.get("score", 0.0),
-                                    "collected_at": datetime.now().isoformat() + "Z",
-                                    "source_type": "web_search",
-                                    "provider": results.get("provider_used", "unknown")
-                                }
-                                detailed_sources.append(source_record)
-                        else:
-                            failed_searches += 1
-                            
-                        await asyncio.sleep(0.5)
-                        
-                    except Exception as e:
-                        failed_searches += 1
-                        error_msg = str(e).lower()
-                        if 'ssl' in error_msg and 'certificate' in error_msg:
-                            ssl_errors += 1
-                        logger.warning(f"Search failed for query '{query}': {e}")
-                
-                total_searches = len(research_queries)
-                success_rate = successful_searches / total_searches if total_searches > 0 else 0
-                
-                if ssl_errors >= 3:
-                    error_msg = f"ABORTING: SSL certificate verification failed for {ssl_errors} searches."
-                    logger.error(f"🚨 {error_msg}")
-                    raise RuntimeError(error_msg)
-                
-                if success_rate < 0.3:
-                    error_msg = f"ABORTING: Only {successful_searches}/{total_searches} searches succeeded ({success_rate:.1%})."
-                    logger.error(f"🚨 {error_msg}")
-                    raise RuntimeError(error_msg)
-                
-                if success_rate < 0.7:
-                    logger.warning(f"⚠️ Reduced data quality: Only {successful_searches}/{total_searches} searches succeeded ({success_rate:.1%})")
-                
-                logger.info(f"✅ Web search completed: {successful_searches}/{total_searches} successful searches, {len(all_results)} total sources")
-                
-                return {
-                    "brand_domain": self.brand_domain,
-                    "brand_name": brand_name,
-                    "search_results": all_results,
-                    "detailed_sources": detailed_sources,
-                    "research_queries": research_queries,
-                    "total_sources": len(all_results),
-                    "search_stats": {
-                        "successful_searches": successful_searches,
-                        "failed_searches": failed_searches,
-                        "success_rate": success_rate,
-                        "ssl_errors": ssl_errors
-                    }
-                }
-            else:
+            if not web_search_source.is_available():
                 error_msg = "ABORTING: Web search service not available."
                 logger.error(f"🚨 {error_msg}")
                 raise RuntimeError(error_msg)
+            
+            # Create data gathering context
+            context = DataGatheringContext(
+                brand_domain=self.brand_domain,
+                researcher_name=self.researcher_name,
+                phase_name="product_style"
+            )
+            
+            # Gather data using the data source strategy
+            search_result = await web_search_source.gather(research_queries, context)
+            
+            # 🚨 ABORT CONDITIONS - Don't continue with poor quality data
+            total_searches = len(research_queries)
+            success_rate = search_result.successful_searches / total_searches if total_searches > 0 else 0
+            
+            # Abort if we have SSL errors affecting most searches
+            if search_result.ssl_errors >= 3:
+                error_msg = f"ABORTING: SSL certificate verification failed for {search_result.ssl_errors} searches."
+                logger.error(f"🚨 {error_msg}")
+                raise RuntimeError(error_msg)
+            
+            # Abort if overall success rate is too low for quality research
+            if success_rate < 0.3:
+                error_msg = f"ABORTING: Only {search_result.successful_searches}/{total_searches} searches succeeded ({success_rate:.1%})."
+                logger.error(f"🚨 {error_msg}")
+                raise RuntimeError(error_msg)
+            
+            # Warn about reduced quality but continue if we have some data
+            if success_rate < 0.7:
+                logger.warning(f"⚠️ Reduced data quality: Only {search_result.successful_searches}/{total_searches} searches succeeded ({success_rate:.1%})")
+            
+            logger.info(f"✅ Web search completed: {search_result.successful_searches}/{total_searches} successful searches, {len(search_result.results)} total sources")
+            
+            # Return data in the expected format (maintaining backward compatibility)
+            return {
+                "brand_domain": self.brand_domain,
+                "brand_name": brand_name,
+                "search_results": search_result.results,
+                "detailed_sources": search_result.sources,
+                "research_queries": research_queries,
+                "total_sources": len(search_result.results),
+                "search_stats": {
+                    "successful_searches": search_result.successful_searches,
+                    "failed_searches": search_result.failed_searches,
+                    "success_rate": success_rate,
+                    "ssl_errors": search_result.ssl_errors
+                }
+            }
                 
         except RuntimeError:
             raise
