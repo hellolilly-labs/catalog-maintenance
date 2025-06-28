@@ -115,7 +115,7 @@ class EnhancedBrandResearcher:
         logger.info(f"🚀 Starting complete brand research pipeline for {brand_domain}")
         
         # Get phase order
-        required_phases = await self.workflow_manager.get_required_research_phases()
+        required_phases = self.workflow_manager.get_required_research_phases()
         phase_order = list(required_phases.keys())
         
         results = {}
