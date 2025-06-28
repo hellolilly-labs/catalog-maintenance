@@ -46,7 +46,7 @@ class WebSearchDataSource(DataSource):
         except ImportError:
             return False
     
-    async def gather(self, queries: List[str], context: DataGatheringContext) -> DataGatheringResult:
+    async def gather(self, queries: List[Any], context: DataGatheringContext) -> DataGatheringResult:
         """
         Gather data using web search queries.
         
@@ -78,13 +78,22 @@ class WebSearchDataSource(DataSource):
         # Execute search queries
         for query_idx, query in enumerate(queries):
             try:
-                search_results = await web_search.search(query)
+                # Handle both string queries and dictionary queries
+                if isinstance(query, dict):
+                    query_string = query.get("query", "")
+                    max_results = query.get("max_results", 3)
+                    include_domains = query.get("include_domains", None)
+                    search_results = await web_search.search(query_string, max_results=max_results, include_domains=include_domains)
+                else:
+                    query_string = str(query)
+                    max_results = 3
+                    search_results = await web_search.search(query_string)
                 
                 if search_results.get("results"):
                     successful_searches += 1
                     
-                    # Process top 3 results per query
-                    for result_idx, result in enumerate(search_results["results"][:3]):
+                    # Process results (limited by max_results)
+                    for result_idx, result in enumerate(search_results["results"][:max_results]):
                         # Convert SearchResult object to dictionary
                         result_dict = {
                             "title": result.title,
@@ -96,7 +105,7 @@ class WebSearchDataSource(DataSource):
                         }
                         
                         # Add search context to result
-                        result_dict["source_query"] = query
+                        result_dict["source_query"] = query if isinstance(query, str) else query_string
                         result_dict["source_type"] = context.researcher_name
                         result_dict["query_index"] = query_idx
                         result_dict["result_index"] = result_idx
@@ -108,7 +117,7 @@ class WebSearchDataSource(DataSource):
                             "title": result_dict.get("title", ""),
                             "url": result_dict.get("url", ""),
                             "snippet": result_dict.get("snippet", ""),
-                            "search_query": query,
+                            "search_query": query_string,
                             "search_score": result_dict.get("score", 0.0),
                             "published_date": result_dict.get("published_date"),
                             "collection_timestamp": "2024-12-20T12:00:00Z",  # TODO: Use actual timestamp
@@ -120,7 +129,7 @@ class WebSearchDataSource(DataSource):
                         
                 else:
                     failed_searches += 1
-                    logger.warning(f"No results found for query: {query}")
+                    logger.warning(f"No results found for query: {query_string}")
                     
             except Exception as e:
                 failed_searches += 1
@@ -128,9 +137,9 @@ class WebSearchDataSource(DataSource):
                 # Check for SSL errors specifically
                 if "ssl" in str(e).lower() or "certificate" in str(e).lower():
                     ssl_errors += 1
-                    logger.warning(f"SSL error for query '{query}': {e}")
+                    logger.warning(f"SSL error for query '{query_string}': {e}")
                 else:
-                    logger.error(f"Search error for query '{query}': {e}")
+                    logger.error(f"Search error for query '{query_string}': {e}")
         
         # Log search statistics
         total_queries = len(queries)

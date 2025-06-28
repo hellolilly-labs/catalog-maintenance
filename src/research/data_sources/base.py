@@ -6,7 +6,7 @@ Each strategy handles a specific type of data collection (web search, product ca
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Union
 from dataclasses import dataclass
 
 
@@ -44,7 +44,7 @@ class DataSource(ABC):
     """
     
     @abstractmethod
-    async def gather(self, queries: List[str], context: DataGatheringContext) -> DataGatheringResult:
+    async def gather(self, queries: List[Union[str, Dict[str, Any]]], context: DataGatheringContext) -> DataGatheringResult:
         """
         Gather data based on queries and context.
         

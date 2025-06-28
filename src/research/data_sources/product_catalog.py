@@ -45,7 +45,7 @@ class ProductCatalogDataSource(DataSource):
         except ImportError:
             return False
     
-    async def gather(self, queries: List[str], context: DataGatheringContext) -> DataGatheringResult:
+    async def gather(self, queries: List[Any], context: DataGatheringContext) -> DataGatheringResult:
         """
         Gather data from product catalog.
         
