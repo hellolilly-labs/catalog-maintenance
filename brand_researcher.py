@@ -8,6 +8,7 @@ Usage:
     python scripts/brand_researcher.py --brand specialized.com --phase all  
     python scripts/brand_researcher.py --brand specialized.com --auto-continue
     python scripts/brand_researcher.py --brand flexfits.com --auto-continue
+    python scripts/brand_researcher.py --brand darakayejewelry.com --auto-continue
     python scripts/brand_researcher.py --brand specialized.com --force-regenerate
 """
 

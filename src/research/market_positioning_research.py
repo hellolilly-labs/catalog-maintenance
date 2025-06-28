@@ -70,19 +70,36 @@ class MarketPositioningResearcher(BaseResearcher):
         # # Initialize prompt manager
         # self.prompt_manager = PromptManager()
         
-    async def research(self, force_refresh: bool = False) -> Dict[str, Any]:
+    async def research(self, force_refresh: bool = False, improvement_feedback: Optional[List[str]] = None) -> Dict[str, Any]:
         """
-        Research for a brand
+        Enhanced research method that properly handles improvement feedback
         
         Args:
             force_refresh: Force new research even if cached
+            improvement_feedback: Optional feedback from previous quality evaluation for iterative improvement
             
         Returns:
             Market positioning research results with metadata
         """
+        # CRITICAL: Use quality wrapper when quality evaluation is enabled
+        if self.enable_quality_evaluation:
+            return await self._research_with_quality_wrapper(force_refresh, improvement_feedback)
+        else:
+            return await self._execute_core_research(force_refresh, improvement_feedback)
+    
+    async def _execute_core_research(self, force_refresh: bool = False, improvement_feedback: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Core research execution method that handles improvement feedback
+        """
         start_time = time.time()
         
         logger.info(f"🏁 Starting Market Positioning Research for {self.brand_domain}")
+        
+        # Handle improvement feedback
+        feedback_context = ""
+        if improvement_feedback:
+            logger.info(f"📋 Incorporating {len(improvement_feedback)} improvement suggestions")
+            feedback_context = self._format_improvement_feedback(improvement_feedback)
         
         # Create main progress step
         step_id = await self.progress_tracker.create_step(
@@ -112,9 +129,9 @@ class MarketPositioningResearcher(BaseResearcher):
             await self.progress_tracker.update_progress(step_id, 1, "🏁 Step 1: Gathering competitive landscape data...")
             positioning_data = await self._gather_data()
             
-            # Step 2: Multi-round LLM analysis (60-90 seconds)
+            # Step 2: Multi-round LLM analysis with feedback integration (60-90 seconds)
             await self.progress_tracker.update_progress(step_id, 2, "🧠 Step 2: Analyzing market positioning with LLM...")
-            positioning_analysis = await self._analyze_data(positioning_data)
+            positioning_analysis = await self._analyze_data_with_feedback(positioning_data, feedback_context)
             
             # Step 3: Quality evaluation and synthesis (30-60 seconds)
             await self.progress_tracker.update_progress(step_id, 3, "🎯 Step 3: Quality evaluation and synthesis...")
@@ -128,7 +145,8 @@ class MarketPositioningResearcher(BaseResearcher):
                     "timestamp": datetime.now().isoformat() + "Z",
                     "cache_expires": (datetime.now() + timedelta(days=self.cache_duration_days)).isoformat() + "Z",
                     "quality_threshold": self.quality_threshold,
-                    "version": "1.0"
+                    "version": "1.0",
+                    "feedback_incorporated": len(improvement_feedback) if improvement_feedback else 0
                 }
             })
             
@@ -151,13 +169,160 @@ class MarketPositioningResearcher(BaseResearcher):
                 "quality_score": final_positioning.get("confidence_score", 0.75),
                 "files": saved_files,
                 "data_sources": len(positioning_data.get("search_results", [])),
-                "research_method": "enhanced_competitive_analysis"
+                "research_method": "enhanced_competitive_analysis",
+                "feedback_incorporated": len(improvement_feedback) if improvement_feedback else 0
             }
             
         except Exception as e:
             await self.progress_tracker.fail_step(step_id, str(e))
             logger.error(f"❌ Error in market positioning research for {self.brand_domain}: {e}")
             raise
+    
+    def _format_improvement_feedback(self, feedback: List[str]) -> str:
+        """
+        Format improvement feedback for inclusion in prompts
+        """
+        if not feedback:
+            return ""
+        
+        formatted = "\n\n## IMPROVEMENT FEEDBACK FROM PREVIOUS QUALITY EVALUATION:\n\n"
+        formatted += "Please address the following areas for improvement:\n\n"
+        
+        for i, suggestion in enumerate(feedback, 1):
+            formatted += f"{i}. {suggestion}\n"
+        
+        formatted += "\nPlease specifically address these points in your analysis to improve quality.\n"
+        return formatted
+    
+    async def _analyze_data_with_feedback(self, positioning_data: Dict[str, Any], feedback_context: str) -> Dict[str, Any]:
+        """
+        Analyze market positioning data using LLM with improvement feedback integration
+        """
+        # Check if we have sufficient data for analysis
+        total_sources = positioning_data.get("total_sources", 0)
+        search_stats = positioning_data.get("search_stats", {})
+        success_rate = search_stats.get("success_rate", 0)
+        
+        if total_sources == 0:
+            error_msg = "ANALYSIS ABORTED: No search results available for analysis. Cannot generate quality research without external data."
+            logger.error(f"🚨 {error_msg}")
+            raise RuntimeError(error_msg)
+        
+        # Compile search context with source IDs for citation
+        search_context = ""
+        source_citations = {}  # Map source_id to citation format
+        
+        for result in positioning_data["search_results"][:50]:  # Use top 50 results
+            source_id = result.get("source_id", f"source_{len(source_citations)}")
+            citation = f"[{len(source_citations) + 1}]"
+            source_citations[source_id] = citation
+            
+            search_context += f"**Source {citation}:**\n"
+            search_context += f"**Title:** {result.get('title', '')}\n"
+            search_context += f"**URL:** {result.get('url', '')}\n"
+            search_context += f"**Content:** {result.get('snippet', '')}\n"
+            search_context += f"**Query:** {result.get('source_query', '')}\n\n---\n\n"
+        
+        # Create source reference guide for LLM
+        source_reference_guide = "\n".join([
+            f"{citation} - {result.get('title', 'Untitled')} ({result.get('url', 'No URL')})"
+            for result, citation in zip(positioning_data["search_results"][:50], source_citations.values())
+        ])
+        
+        # Get enhanced prompt with feedback integration
+        enhanced_prompt = self._get_enhanced_prompt_with_feedback(positioning_data, search_context, source_reference_guide, feedback_context)
+        
+        try:
+            logger.info(f"🧠 Analyzing {total_sources} sources with LLM (success rate: {success_rate:.1%})")
+            if feedback_context:
+                logger.info("📋 Including improvement feedback in analysis prompt")
+            
+            response = await LLMFactory.chat_completion(
+                task="brand_research",
+                system=self._get_default_instruction_prompt(),
+                messages=[{
+                    "role": "user",
+                    "content": enhanced_prompt
+                }],
+                temperature=0.1
+            )
+            
+            if response and response.get("content"):
+                # Adjust confidence based on data quality and feedback integration
+                base_confidence = 0.75
+                if success_rate < 0.5:
+                    base_confidence = 0.5
+                elif success_rate < 0.7:
+                    base_confidence = 0.6
+                
+                if total_sources < 10:
+                    base_confidence *= 0.9
+                elif total_sources < 5:
+                    base_confidence *= 0.8
+                
+                # Boost confidence if feedback was incorporated
+                if feedback_context:
+                    base_confidence = min(0.95, base_confidence * 1.1)
+                
+                return {
+                    "content": response["content"],
+                    "analysis_method": "markdown_report_with_citations_and_feedback",
+                    "confidence": base_confidence,
+                    "data_sources": total_sources,
+                    "search_success_rate": success_rate,
+                    "detailed_sources": positioning_data.get('detailed_sources', []),
+                    "source_citations": source_citations,
+                    "search_stats": search_stats,
+                    "feedback_incorporated": bool(feedback_context)
+                }
+            else:
+                error_msg = "ANALYSIS FAILED: No response from LLM analysis despite having valid data"
+                logger.error(f"🚨 {error_msg}")
+                raise RuntimeError(error_msg)
+                
+        except Exception as e:
+            if isinstance(e, RuntimeError):
+                raise e
+            error_msg = f"ANALYSIS FAILED: Error in LLM analysis: {str(e)}"
+            logger.error(f"🚨 {error_msg}")
+            raise RuntimeError(error_msg)
+    
+    def _get_enhanced_prompt_with_feedback(self, positioning_data: Dict[str, Any], search_context: str, source_reference_guide: str, feedback_context: str) -> str:
+        """
+        Get enhanced prompt template that includes improvement feedback
+        """
+        total_sources = positioning_data.get("total_sources", 0)
+        search_stats = positioning_data.get("search_stats", {})
+        success_rate = search_stats.get("success_rate", 0)
+        
+        # Prepare template variables
+        template_vars = {
+            "brand_name": positioning_data.get('brand_name', self.brand_domain),
+            "brand_domain": self.brand_domain,
+            "total_sources": str(total_sources),
+            "success_rate": f"{success_rate:.1%}",
+            "data_quality": "High" if success_rate > 0.7 else "Medium" if success_rate > 0.5 else "Limited",
+            "search_context": search_context,
+            "source_reference_guide": source_reference_guide,
+            "information_quality": "High quality with comprehensive data" if success_rate > 0.7 else "Medium quality with adequate data" if success_rate > 0.5 else "Limited quality with minimal data",
+            "confidence_level": "High" if success_rate > 0.7 and total_sources >= 20 else "Medium" if success_rate > 0.5 and total_sources >= 10 else "Low",
+            "data_quality_text": "high" if success_rate > 0.7 else "medium" if success_rate > 0.5 else "limited"
+        }
+        
+        # Get base prompt and add feedback context
+        base_prompt = self._get_default_user_prompt()
+        
+        # Replace template variables
+        enhanced_prompt = base_prompt
+        for var, value in template_vars.items():
+            enhanced_prompt = enhanced_prompt.replace(f"{{{{{var}}}}}", str(value))
+        
+        # Add feedback context if available
+        if feedback_context:
+            enhanced_prompt += feedback_context
+            enhanced_prompt += "\n\nEnsure your analysis specifically addresses the improvement feedback above to enhance quality and completeness."
+        
+        return enhanced_prompt
     
     async def _gather_data(self) -> Dict[str, Any]:
         """Gather comprehensive market positioning data from multiple sources"""

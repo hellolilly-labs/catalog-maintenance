@@ -26,37 +26,49 @@ class BaseResearcher:
     Base class for all researchers with integrated quality evaluation
     """
     
-    def __init__(self, brand_domain: str, researcher_name: str, step_type: StepType, quality_threshold: float = 8.0, cache_duration_days: int = 180, storage_manager=None):
-        self.storage_manager = storage_manager or get_account_storage_provider()
-        self.brand_domain = brand_domain.lower()
-        self.researcher_name = researcher_name.lower()
-        self.step_type = step_type
-        self.settings = get_settings()
-        self.quality_threshold = quality_threshold
-        self.cache_duration_days = cache_duration_days  # 6 months default
+    def __init__(self, brand_domain: str, researcher_name: str, step_type: StepType, quality_threshold: float = 8.0, cache_duration_days: int = 7, storage_manager=None, enable_quality_evaluation: bool = True):
+        """
+        Initialize base researcher
         
-        # Create progress tracker with storage integration and checkpoint logging
+        Args:
+            brand_domain: Domain to research
+            storage_manager: Storage manager instance
+            enable_quality_evaluation: Whether to enable quality evaluation with feedback loops
+        """
+        self.brand_domain = brand_domain
+        self.researcher_name = researcher_name
+        self.step_type = step_type
+        self.quality_threshold = quality_threshold
+        self.cache_duration_days = cache_duration_days
+        self.storage_manager = storage_manager or get_account_storage_provider()
+        self.enable_quality_evaluation = enable_quality_evaluation
+        
+        # Quality evaluation settings
+        self.quality_threshold = 8.0
+        self.max_quality_attempts = 3
+        self.cache_duration_days = 7
+        
+        # Initialize evaluators
+        self._initialize_quality_evaluators()
+        
+        # Initialize progress tracker
         self.progress_tracker = ProgressTracker(
             storage_manager=self.storage_manager,
-            enable_checkpoints=True  # Enable persistent checkpoint logging
+            enable_checkpoints=True
         )
         
-        # Add console listener for real-time updates
-        console_listener = create_console_listener()
-        self.progress_tracker.add_progress_listener(console_listener)
-        
-        # Initialize prompt manager
+        # Initialize prompt manager for Langfuse integration
         self.prompt_manager = PromptManager()
-
+        
+        # Researcher identification
+        # self.researcher_name = self.__class__.__name__
+        # self.step_type = getattr(StepType, self.researcher_name.upper().replace('RESEARCHER', ''), StepType.RESEARCH)
+        
         try:
-            api_key = getattr(self.settings, 'TAVILY_API_KEY', None)
+            api_key = getattr(get_settings(), 'TAVILY_API_KEY', None)
             self.web_search = TavilySearchProvider(api_key) if api_key else None
         except Exception:
             self.web_search = None
-        
-        # Quality evaluation settings
-        self.enable_quality_evaluation = True
-        self.max_quality_attempts = 3
         
         # Quality evaluator models by phase
         self.quality_evaluator_models = {
@@ -70,16 +82,40 @@ class BaseResearcher:
             "research_integration": "o3"
         }
 
-    async def research(self, force_refresh: bool = False) -> Dict[str, Any]:
+    def _initialize_quality_evaluators(self):
+        """
+        Initialize single quality evaluation component
+        All researchers use the same QualityEvaluator class with enable_web_search flag
+        """
+        
+        try:
+            from src.research.quality.quality_evaluator import QualityEvaluator
+            
+            # Single evaluator class for ALL researchers
+            # Web search enhancement enabled by default (assume web search is available)
+            self.quality_evaluator = QualityEvaluator(enable_web_search=True)
+            
+            logger.info("✅ Quality evaluator initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Quality evaluator initialization failed: {e}")
+            # This should never happen - if it does, we have bigger problems
+            raise RuntimeError(f"Cannot initialize quality evaluator: {e}")
+
+    async def research(self, force_refresh: bool = False, improvement_feedback: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Main research method with automatic quality evaluation wrapping
+        
+        Args:
+            force_refresh: Force refresh of cached results
+            improvement_feedback: Optional feedback from previous quality evaluation for iterative improvement
         """
         if self.enable_quality_evaluation:
-            return await self._research_with_quality_wrapper(force_refresh)
+            return await self._research_with_quality_wrapper(force_refresh, improvement_feedback)
         else:
-            return await self._execute_core_research(force_refresh)
+            return await self._execute_core_research(force_refresh, improvement_feedback)
     
-    async def _research_with_quality_wrapper(self, force_refresh: bool) -> Dict[str, Any]:
+    async def _research_with_quality_wrapper(self, force_refresh: bool, initial_improvement_feedback: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Quality evaluation wrapper around core research logic
         Handles feedback loops and quality control automatically
@@ -88,7 +124,8 @@ class BaseResearcher:
         
         best_result = None
         best_quality_score = 0.0
-        improvement_context = None
+        # Start with any externally provided feedback, then use evaluation feedback for subsequent iterations
+        improvement_context = initial_improvement_feedback
         
         for attempt in range(1, self.max_quality_attempts + 1):
             logger.info(f"🔄 Quality attempt {attempt}/{self.max_quality_attempts}")
@@ -98,7 +135,7 @@ class BaseResearcher:
                 should_force = force_refresh or (attempt > 1)
                 core_result = await self._execute_core_research(
                     force_refresh=should_force,
-                    improvement_context=improvement_context
+                    improvement_feedback=improvement_context
                 )
                 
                 # Run quality evaluation
@@ -124,7 +161,7 @@ class BaseResearcher:
                     best_result = enhanced_result
                     best_quality_score = quality_score
                 
-                # Prepare for next attempt
+                # Prepare for next attempt using evaluation feedback
                 if attempt < self.max_quality_attempts:
                     improvement_context = quality_evaluation.get("improvement_feedback", [])
                     logger.warning(f"⚠️ Quality below threshold ({quality_score:.1f}/{self.quality_threshold:.1f}). Retrying...")
@@ -151,10 +188,14 @@ class BaseResearcher:
         else:
             raise RuntimeError(f"Quality control failed after {self.max_quality_attempts} attempts")
     
-    async def _execute_core_research(self, force_refresh: bool = False, improvement_context: Optional[List[str]] = None) -> Dict[str, Any]:
+    async def _execute_core_research(self, force_refresh: bool = False, improvement_feedback: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Core research execution method - this is what subclasses should override
         Clean separation from quality evaluation logic
+        
+        Args:
+            force_refresh: Force refresh of cached results
+            improvement_feedback: Optional feedback from quality evaluation for iterative improvement
         """
         start_time = time.time()
         
@@ -171,8 +212,8 @@ class BaseResearcher:
         try:
             await self.progress_tracker.start_step(step_id, "Checking cache and initializing...")
             
-            # Check for cached results first (only on first attempt without improvement context)
-            if not force_refresh and not improvement_context:
+            # Check for cached results first (only on first attempt without improvement feedback)
+            if not force_refresh and not improvement_feedback:
                 cached_result = await self._load_cached_results()
                 if cached_result:
                     await self.progress_tracker.complete_step(
@@ -188,10 +229,10 @@ class BaseResearcher:
             await self.progress_tracker.update_progress(step_id, 1, f"📊 Step 1: Gathering comprehensive {self.researcher_name} data...")
             data = await self._gather_data()
             
-            # Add improvement context if available (for quality retries)
-            if improvement_context:
-                data["improvement_context"] = improvement_context
-                logger.info(f"💡 Incorporating {len(improvement_context)} improvement suggestions")
+            # Add improvement feedback if available (for quality retries)
+            if improvement_feedback:
+                data["improvement_context"] = improvement_feedback
+                logger.info(f"💡 Incorporating {len(improvement_feedback)} improvement suggestions")
             
             # Step 2: Multi-round LLM analysis
             await self.progress_tracker.update_progress(step_id, 2, f"🧠 Step 2: Analyzing {self.researcher_name} data with LLM...")
@@ -242,78 +283,19 @@ class BaseResearcher:
     
     async def _evaluate_research_quality(self, research_results: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Evaluate research quality using LLM judge
+        Evaluate research quality using the unified QualityEvaluator
         Returns quality evaluation data to be stored in research_metadata.json
         """
         
         try:
-            # Get evaluator model for this phase
-            evaluator_model = self.quality_evaluator_models.get(self.researcher_name, "o3")
-            
-            # Get quality evaluation prompt
-            evaluator_prompt = await self._get_quality_evaluator_prompt()
-            
-            # Prepare evaluation context
-            research_content = research_results.get("content", "")
-            current_confidence = research_results.get("confidence_score", 0.0)
-            
-            evaluation_context = {
-                "phase_name": self.researcher_name,
-                "brand_domain": self.brand_domain,
-                "research_content": research_content[:8000],  # Limit for token management
-                "current_confidence_score": current_confidence,
-                "quality_threshold": self.quality_threshold
-            }
-            
-            # Format user prompt with context
-            user_prompt = evaluator_prompt["user_template"].format(**evaluation_context)
-            
-            # Map model to task
-            task_mapping = {
-                "o4-mini": "quality_evaluation",
-                "o3": "quality_evaluation_advanced"
-            }
-            task_name = task_mapping.get(evaluator_model, "quality_evaluation")
-            
-            # Run LLM evaluation
-            response = await LLMFactory.chat_completion(
-                task=task_name,
-                system=evaluator_prompt["system"],
-                messages=[{
-                    "role": "user",
-                    "content": user_prompt
-                }],
-                temperature=0.1,  # Low temperature for consistent evaluation
+            # All researchers use the same QualityEvaluator class
+            # Just call the main evaluation method
+            return await self.quality_evaluator.evaluate_with_search_recommendations(
+                research_result=research_results,
+                phase_name=self.researcher_name,
+                brand_domain=self.brand_domain,
+                quality_threshold=self.quality_threshold
             )
-            
-            # Parse evaluation results
-            evaluation_content = response.get("content", "")
-            quality_score = self._extract_quality_score(evaluation_content)
-            improvement_feedback = self._extract_improvement_suggestions(evaluation_content)
-            criteria_met = self._extract_criteria_compliance(evaluation_content)
-            
-            # Determine confidence level
-            confidence_level = self._determine_confidence_level(quality_score, criteria_met)
-            
-            quality_evaluation = {
-                "quality_score": quality_score,
-                "passes_threshold": quality_score >= self.quality_threshold,
-                "improvement_feedback": improvement_feedback,
-                "criteria_met": criteria_met,
-                "evaluator_model": evaluator_model,
-                "evaluation_timestamp": datetime.now().isoformat(),
-                "confidence_level": confidence_level,
-                "raw_evaluation": evaluation_content[:1000]  # Store first 1000 chars for debugging
-            }
-            
-            # Log evaluation results
-            status_icon = "✅" if quality_evaluation["passes_threshold"] else "⚠️"
-            logger.info(f"{status_icon} Quality evaluation: {quality_score:.1f}/{self.quality_threshold:.1f} ({confidence_level} confidence)")
-            
-            if improvement_feedback and not quality_evaluation["passes_threshold"]:
-                logger.warning(f"💡 Improvement suggestions: {'; '.join(improvement_feedback[:2])}")
-            
-            return quality_evaluation
             
         except Exception as e:
             logger.error(f"❌ Quality evaluation failed: {e}")
@@ -325,184 +307,9 @@ class BaseResearcher:
                 "evaluator_model": "evaluation_failed",
                 "evaluation_timestamp": datetime.now().isoformat(),
                 "confidence_level": "low",
+                "evaluation_method": "error_fallback",
                 "error": str(e)
             }
-    
-    async def _get_quality_evaluator_prompt(self) -> Dict[str, str]:
-        """Get phase-specific quality evaluator prompt"""
-        
-        default_prompts = self._get_fallback_quality_evaluator_prompt()
-        try:
-            # Try to get phase-specific prompt from Langfuse
-            prompt_key = f"liddy/catalog/quality/{self.researcher_name}_evaluator"
-            prompt_client = await self.prompt_manager.get_prompt(
-                prompt_name=prompt_key, 
-                prompt_type="chat",
-                prompt=[
-                    ChatMessageDict(role="system", content=default_prompts["system"]),
-                    ChatMessageDict(role="user", content=default_prompts["user_template"])
-                ]
-            )
-            
-            if prompt_client and prompt_client.prompt:
-                return {
-                    "system": next((msg["content"] for msg in prompt_client.prompt if msg["role"] == "system"), None),
-                    "user_template": next((msg["content"] for msg in prompt_client.prompt if msg["role"] == "user"), None)
-                }
-            
-        except Exception as e:
-            logger.warning(f"Using fallback evaluator prompt for {self.researcher_name}: {e}")
-        
-        return self._get_fallback_quality_evaluator_prompt()
-    
-    def _get_fallback_quality_evaluator_prompt(self) -> Dict[str, str]:
-        """Fallback quality evaluator prompt when Langfuse is unavailable"""
-        
-        system_prompt = f"""You are an expert quality evaluator for {self.researcher_name} brand research.
-
-Evaluate the research quality on a scale of 0.0 to 10.0 based on these criteria:
-
-EVALUATION CRITERIA:
-- Accuracy: Information is factual and well-sourced (0-2 points)
-- Completeness: All required elements present (0-2 points)  
-- Consistency: No contradictions or conflicts (0-2 points)
-- Authenticity: Captures genuine brand voice (0-2 points)
-- Actionability: Provides implementable insights (0-2 points)
-
-QUALITY STANDARDS:
-- 9.0-10.0: Exceptional quality, production ready
-- 8.0-8.9: High quality, minor improvements possible
-- 7.0-7.9: Good quality, some improvements needed
-- 6.0-6.9: Acceptable quality, significant improvements needed
-- Below 6.0: Poor quality, major rework required
-
-Respond in JSON format with your evaluation."""
-
-        user_template = """Evaluate this {phase_name} research for {brand_domain}:
-
-RESEARCH CONTENT:
-{research_content}
-
-CONTEXT:
-- Current confidence score: {current_confidence_score}
-- Quality threshold: {quality_threshold}/10.0
-
-Provide evaluation in this JSON format:
-{{
-    "quality_score": 8.2,
-    "criteria_met": {{
-        "accuracy": true,
-        "completeness": true, 
-        "consistency": true,
-        "authenticity": true,
-        "actionability": true
-    }},
-    "improvement_feedback": [
-        "Specific suggestion 1",
-        "Specific suggestion 2"
-    ],
-    "confidence_level": "high"
-}}"""
-
-        return {
-            "system": system_prompt,
-            "user_template": user_template
-        }
-    
-    def _extract_quality_score(self, evaluation_content: str) -> float:
-        """Extract quality score from LLM evaluation"""
-        
-        try:
-            # Try JSON parsing first
-            if evaluation_content.strip().startswith("{"):
-                import json
-                evaluation_json = json.loads(evaluation_content)
-                return float(evaluation_json.get("quality_score", 5.0))
-            
-            # Fallback: regex patterns
-            import re
-            patterns = [
-                r"quality[_\s]*score[:\s]*(\d+\.?\d*)",
-                r"score[:\s]*(\d+\.?\d*)",
-                r"(\d+\.?\d*)\s*/\s*10"
-            ]
-            
-            for pattern in patterns:
-                match = re.search(pattern, evaluation_content, re.IGNORECASE)
-                if match:
-                    score = float(match.group(1))
-                    return min(10.0, max(0.0, score))
-            
-            return 5.0  # Default
-            
-        except Exception as e:
-            logger.error(f"Error extracting quality score: {e}")
-            return 5.0
-    
-    def _extract_improvement_suggestions(self, evaluation_content: str) -> List[str]:
-        """Extract improvement suggestions from evaluation"""
-        
-        try:
-            # Try JSON parsing first
-            if evaluation_content.strip().startswith("{"):
-                import json
-                evaluation_json = json.loads(evaluation_content)
-                return evaluation_json.get("improvement_feedback", [])
-            
-            # Fallback: extract from text
-            suggestions = []
-            lines = evaluation_content.split('\n')
-            
-            for line in lines:
-                line = line.strip()
-                if line.startswith('-') or line.startswith('•') or line.startswith('*'):
-                    suggestion = line[1:].strip()
-                    if suggestion and len(suggestion) > 10:
-                        suggestions.append(suggestion)
-                        if len(suggestions) >= 5:
-                            break
-            
-            return suggestions
-            
-        except Exception as e:
-            logger.error(f"Error extracting improvement suggestions: {e}")
-            return []
-    
-    def _extract_criteria_compliance(self, evaluation_content: str) -> Dict[str, bool]:
-        """Extract criteria compliance from evaluation"""
-        
-        try:
-            # Try JSON parsing first
-            if evaluation_content.strip().startswith("{"):
-                import json
-                evaluation_json = json.loads(evaluation_content)
-                return evaluation_json.get("criteria_met", {})
-            
-            # Fallback: basic analysis
-            return {
-                "accuracy": "accuracy" in evaluation_content.lower() and "good" in evaluation_content.lower(),
-                "completeness": "complete" in evaluation_content.lower(),
-                "consistency": "consistent" in evaluation_content.lower(),
-                "authenticity": "authentic" in evaluation_content.lower(),
-                "actionability": "actionable" in evaluation_content.lower()
-            }
-            
-        except Exception as e:
-            logger.error(f"Error extracting criteria compliance: {e}")
-            return {}
-    
-    def _determine_confidence_level(self, quality_score: float, criteria_met: Dict[str, bool]) -> str:
-        """Determine confidence level for the evaluation"""
-        
-        criteria_count = sum(1 for met in criteria_met.values() if met)
-        criteria_ratio = criteria_count / max(1, len(criteria_met))
-        
-        if quality_score >= 8.0 and criteria_ratio >= 0.8:
-            return "high"
-        elif quality_score >= 6.0 and criteria_ratio >= 0.6:
-            return "medium"
-        else:
-            return "low"
     
     async def _gather_data(self) -> Dict[str, Any]:
         """

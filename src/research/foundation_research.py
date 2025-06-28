@@ -56,7 +56,7 @@ class FoundationResearcher(BaseResearcher):
             brand_domain (str): _description_
             storage_manager (_type_, optional): _description_. Defaults to None.
         """
-        super().__init__(brand_domain=brand_domain, researcher_name="foundation", step_type=StepType.FOUNDATION_RESEARCH, quality_threshold=8.0, cache_duration_days=180, storage_manager=storage_manager)
+        super().__init__(brand_domain=brand_domain, researcher_name="foundation", step_type=StepType.FOUNDATION_RESEARCH, quality_threshold=8.0, cache_duration_days=180, storage_manager=storage_manager, enable_quality_evaluation=True)
         # self.settings = get_settings()
         # self.quality_threshold = 8.0
         # self.cache_duration_days = 180  # 6 months default

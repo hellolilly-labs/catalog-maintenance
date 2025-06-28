@@ -570,15 +570,36 @@ Structure your analysis as follows:
 
     async def research(
         self, 
-        force_refresh: bool = False
+        force_refresh: bool = False,
+        improvement_feedback: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
-        Research comprehensive product and style intelligence.
+        Enhanced research comprehensive product and style intelligence with feedback integration.
         
+        Args:
+            force_refresh: Force refresh of cached results
+            improvement_feedback: Optional feedback from previous quality evaluation for iterative improvement
+            
         Returns:
             Dictionary with research results and metadata
         """
+        # CRITICAL: Use quality wrapper when quality evaluation is enabled
+        if self.enable_quality_evaluation:
+            return await self._research_with_quality_wrapper(force_refresh, improvement_feedback)
+        else:
+            return await self._execute_core_research(force_refresh, improvement_feedback)
+    
+    async def _execute_core_research(self, force_refresh: bool = False, improvement_feedback: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Core research execution method that handles improvement feedback
+        """
         session_id = f"product_style_{int(time.time())}"
+        
+        # Handle improvement feedback
+        feedback_context = ""
+        if improvement_feedback:
+            logger.info(f"📋 Incorporating {len(improvement_feedback)} improvement suggestions")
+            feedback_context = self._format_improvement_feedback(improvement_feedback)
         
         # Initialize progress tracker with correct parameters
         tracker = ProgressTracker(
@@ -623,22 +644,24 @@ Structure your analysis as follows:
             await tracker.update_progress(step_id, 4, "Conducting product-focused web research")
             web_research_data = await self._conduct_product_research(self.brand_domain, tracker)
             
-            # ENHANCED: Comprehensive product analysis
+            # ENHANCED: Comprehensive product analysis with feedback integration
             await tracker.update_progress(step_id, 5, "Analyzing product catalog and design patterns")
             
             if product_catalog:
                 logger.info(f"Analyzing {len(product_catalog)} products from catalog")
-                analysis_result = await self._analyze_with_product_catalog(
+                analysis_result = await self._analyze_with_product_catalog_and_feedback(
                     foundation_context=foundation_context,
                     web_research_data=web_research_data,
                     product_catalog=product_catalog,
+                    feedback_context=feedback_context,
                     tracker=tracker
                 )
             else:
                 logger.info("No product catalog available, using web research only")
-                analysis_result = await self._analyze_without_product_catalog(
+                analysis_result = await self._analyze_without_product_catalog_and_feedback(
                     foundation_context=foundation_context,
                     web_research_data=web_research_data,
+                    feedback_context=feedback_context,
                     tracker=tracker
                 )
             
@@ -655,6 +678,9 @@ Structure your analysis as follows:
                 cache_hit=False
             )
             
+            # Add feedback metadata
+            analysis_result['metadata']['feedback_incorporated'] = len(improvement_feedback) if improvement_feedback else 0
+            
             return analysis_result
             
         except Exception as e:
@@ -667,29 +693,43 @@ Structure your analysis as follows:
                 "metadata": {
                     "success": False,
                     "session_id": session_id,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
+                    "feedback_incorporated": len(improvement_feedback) if improvement_feedback else 0
                 }
             }
-
-    async def _analyze_with_product_catalog(
+    
+    def _format_improvement_feedback(self, feedback: List[str]) -> str:
+        """
+        Format improvement feedback for inclusion in prompts
+        """
+        if not feedback:
+            return ""
+        
+        formatted = "\n\n## IMPROVEMENT FEEDBACK FROM PREVIOUS QUALITY EVALUATION:\n\n"
+        formatted += "Please address the following areas for improvement:\n\n"
+        
+        for i, suggestion in enumerate(feedback, 1):
+            formatted += f"{i}. {suggestion}\n"
+        
+        formatted += "\nPlease specifically address these points in your analysis to improve quality.\n"
+        return formatted
+    
+    async def _analyze_with_product_catalog_and_feedback(
         self,
         foundation_context: Dict[str, Any],
         web_research_data: Dict[str, Any],
         product_catalog: List[Dict[str, Any]],
+        feedback_context: str,
         tracker: ProgressTracker
     ) -> Dict[str, Any]:
         """
-        Enhanced analysis using actual product catalog data.
-        
-        This provides much more specific and accurate insights compared to web-only research.
+        Enhanced analysis using actual product catalog data with feedback integration.
         """
-        # Note: tracker parameter is passed in but we don't have step_id, so we skip progress updates here
-        
         # Analyze product catalog structure
         catalog_analysis = await self._analyze_product_catalog(product_catalog)
         
-        # Get enhanced prompt for catalog-based analysis
-        prompt_template = await self._get_catalog_analysis_prompt()
+        # Get enhanced prompt for catalog-based analysis with feedback
+        prompt_template = await self._get_catalog_analysis_prompt_with_feedback(feedback_context)
         
         # Prepare comprehensive analysis data
         analysis_data = {
@@ -706,19 +746,24 @@ Structure your analysis as follows:
             }
         }
         
-        # Generate enhanced analysis using LLM
-        analysis_content = await self._generate_enhanced_analysis(
+        # Generate enhanced analysis using LLM with feedback
+        analysis_content = await self._generate_enhanced_analysis_with_feedback(
             prompt_template, 
             analysis_data, 
+            feedback_context,
             tracker
         )
         
-        # Calculate quality score based on available data richness
+        # Calculate quality score based on available data richness and feedback integration
         quality_score = self._calculate_enhanced_quality_score(
             web_research_data, 
             product_catalog, 
             analysis_content
         )
+        
+        # Boost quality score if feedback was incorporated
+        if feedback_context:
+            quality_score = min(0.95, quality_score * 1.1)
         
         return {
             "content": analysis_content,
@@ -727,24 +772,24 @@ Structure your analysis as follows:
                 "confidence": quality_score,
                 "source_count": len(web_research_data.get("sources", [])),
                 "product_count": len(product_catalog),
-                "analysis_type": "catalog_enhanced",
-                "timestamp": datetime.now().isoformat()
+                "analysis_type": "catalog_enhanced_with_feedback" if feedback_context else "catalog_enhanced",
+                "timestamp": datetime.now().isoformat(),
+                "feedback_incorporated": bool(feedback_context)
             }
         }
     
-    async def _analyze_without_product_catalog(
+    async def _analyze_without_product_catalog_and_feedback(
         self,
         foundation_context: Dict[str, Any],
         web_research_data: Dict[str, Any],
+        feedback_context: str,
         tracker: ProgressTracker
     ) -> Dict[str, Any]:
         """
-        Fallback analysis using web research only (original implementation).
+        Fallback analysis using web research only with feedback integration.
         """
-        # await tracker.log_checkpoint("web_only_analysis", "Analyzing using web research only")
-        
-        # Get standard prompt for web-only analysis
-        prompt_template = await self._get_web_analysis_prompt()
+        # Get standard prompt for web-only analysis with feedback
+        prompt_template = await self._get_web_analysis_prompt_with_feedback(feedback_context)
         
         # Prepare analysis data
         analysis_data = {
@@ -754,10 +799,11 @@ Structure your analysis as follows:
             "note": "Limited to web research - product catalog not available"
         }
         
-        # Generate analysis using LLM
-        analysis_content = await self._generate_standard_analysis(
+        # Generate analysis using LLM with feedback
+        analysis_content = await self._generate_standard_analysis_with_feedback(
             prompt_template, 
-            analysis_data, 
+            analysis_data,
+            feedback_context,
             tracker
         )
         
@@ -767,6 +813,10 @@ Structure your analysis as follows:
             analysis_content
         )
         
+        # Boost quality score if feedback was incorporated
+        if feedback_context:
+            quality_score = min(0.95, quality_score * 1.1)
+        
         return {
             "content": analysis_content,
             "sources": web_research_data.get("sources", []),
@@ -774,11 +824,117 @@ Structure your analysis as follows:
                 "confidence": quality_score,
                 "source_count": len(web_research_data.get("sources", [])),
                 "product_count": 0,
-                "analysis_type": "web_only",
-                "timestamp": datetime.now().isoformat()
+                "analysis_type": "web_only_with_feedback" if feedback_context else "web_only",
+                "timestamp": datetime.now().isoformat(),
+                "feedback_incorporated": bool(feedback_context)
             }
         }
     
+    async def _get_catalog_analysis_prompt_with_feedback(self, feedback_context: str) -> str:
+        """Get enhanced prompt template for catalog-based analysis with feedback integration."""
+        
+        base_prompt = await self._get_catalog_analysis_prompt()
+        
+        # Add feedback context if available
+        if feedback_context:
+            enhanced_prompt = base_prompt + feedback_context
+            enhanced_prompt += "\n\nEnsure your analysis specifically addresses the improvement feedback above to enhance quality and completeness."
+            return enhanced_prompt
+        
+        return base_prompt
+    
+    async def _get_web_analysis_prompt_with_feedback(self, feedback_context: str) -> str:
+        """Get standard prompt template for web-only analysis with feedback integration."""
+        
+        base_prompt = await self._get_web_analysis_prompt()
+        
+        # Add feedback context if available
+        if feedback_context:
+            enhanced_prompt = base_prompt + feedback_context
+            enhanced_prompt += "\n\nEnsure your analysis specifically addresses the improvement feedback above to enhance quality and completeness."
+            return enhanced_prompt
+        
+        return base_prompt
+    
+    async def _generate_enhanced_analysis_with_feedback(
+        self, 
+        prompt_template: str, 
+        analysis_data: Dict[str, Any], 
+        feedback_context: str,
+        tracker: ProgressTracker
+    ) -> str:
+        """Generate comprehensive analysis using all research phases with feedback integration"""
+        
+        # Log feedback integration
+        if feedback_context:
+            logger.info("📋 Including improvement feedback in enhanced analysis prompt")
+        
+        # Prepare template variables (same as original method)
+        template_vars = {
+            "brand_domain": analysis_data["brand_domain"],
+            "foundation_summary": str(analysis_data.get("foundation_context", {}))[:1000],
+            "web_source_count": len(analysis_data.get("web_research", {}).get("sources", [])),
+            "product_count": analysis_data.get("product_catalog", {}).get("total_products", 0),
+            "available_fields": ", ".join(analysis_data.get("product_catalog", {}).get("structure_analysis", {}).get("available_fields", [])),
+            "categories": str(analysis_data.get("product_catalog", {}).get("category_breakdown", {}))[:500],
+            "price_range": str(analysis_data.get("product_catalog", {}).get("price_analysis", {}))[:300],
+            "feature_patterns": str(analysis_data.get("product_catalog", {}).get("feature_patterns", {}))[:300],
+            "sample_products": str(analysis_data.get("product_catalog", {}).get("sample_products", []))[:1000]
+        }
+        
+        # Replace template variables
+        final_prompt = prompt_template
+        for var, value in template_vars.items():
+            final_prompt = final_prompt.replace(f"{{{{{var}}}}}", str(value))
+        
+        response = await LLMFactory.chat_completion(
+            task="product_style_research",
+            system="You are an expert product and style analyst specializing in comprehensive brand intelligence research. Generate detailed, well-structured analysis with specific examples and actionable insights.",
+            messages=[
+                {"role": "user", "content": final_prompt}
+            ],
+            temperature=0.3
+        )
+        
+        return response.get("content", "Product style analysis generation failed")
+    
+    async def _generate_standard_analysis_with_feedback(
+        self, 
+        prompt_template: str, 
+        analysis_data: Dict[str, Any],
+        feedback_context: str,
+        tracker: ProgressTracker
+    ) -> str:
+        """Generate standard analysis using web research only with feedback integration"""
+        
+        # Log feedback integration
+        if feedback_context:
+            logger.info("📋 Including improvement feedback in standard analysis prompt")
+        
+        # Prepare template variables (same as original method)
+        template_vars = {
+            "brand_domain": analysis_data["brand_domain"],
+            "foundation_summary": str(analysis_data.get("foundation_context", {}))[:1000],
+            "web_source_count": len(analysis_data.get("web_research", {}).get("sources", [])),
+            "note": analysis_data.get("note", "")
+        }
+        
+        # Replace template variables
+        final_prompt = prompt_template
+        for var, value in template_vars.items():
+            final_prompt = final_prompt.replace(f"{{{{{var}}}}}", str(value))
+        
+        response = await LLMFactory.chat_completion(
+            task="product_style_research",
+            system="You are an expert product and style analyst specializing in web-based brand research. Generate comprehensive analysis based on available web sources with clear limitations noted.",
+            messages=[
+                {"role": "user", "content": final_prompt}
+            ],
+            temperature=0.3
+        )
+        
+        return response.get("content", "Product style analysis generation failed")
+
     async def _analyze_product_catalog(self, products: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Analyze the structure and patterns in the product catalog."""
         
@@ -1174,120 +1330,6 @@ Generate analysis covering these 6 sections:
             "search_results": search_results,
             "total_sources": len(all_sources)
         }
-
-    async def _generate_enhanced_analysis(
-        self, 
-        prompt_template: str, 
-        analysis_data: Dict[str, Any], 
-        tracker: ProgressTracker
-    ) -> str:
-        """Generate enhanced analysis using product catalog data."""
-        
-        # Prepare template variables
-        template_vars = {
-            "brand_domain": analysis_data["brand_domain"],
-            "foundation_summary": analysis_data["foundation_context"].get("summary", "Not available"),
-            "web_source_count": len(analysis_data["web_research"].get("sources", [])),
-            "product_count": analysis_data["product_catalog"]["total_products"],
-            "available_fields": ", ".join(analysis_data["product_catalog"]["structure_analysis"]["available_fields"]),
-            "categories": str(analysis_data["product_catalog"]["category_breakdown"]),
-            "price_range": str(analysis_data["product_catalog"]["price_analysis"]),
-            "feature_patterns": str(analysis_data["product_catalog"]["feature_patterns"]),
-            "sample_products": str(analysis_data["product_catalog"]["sample_products"][:3])  # First 3 for prompt
-        }
-        
-        # Replace template variables
-        final_prompt = prompt_template
-        for var, value in template_vars.items():
-            final_prompt = final_prompt.replace(f"{{{{{var}}}}}", str(value))
-        
-        # Prepare complete context for LLM
-        context = f"""
-BRAND: {analysis_data['brand_domain']}
-
-FOUNDATION CONTEXT:
-{analysis_data['foundation_context']}
-
-WEB RESEARCH SUMMARY:
-- Total Sources: {len(analysis_data['web_research'].get('sources', []))}
-- Search Results: {len(analysis_data['web_research'].get('search_results', {}))} queries
-
-PRODUCT CATALOG DATA:
-- Total Products: {analysis_data['product_catalog']['total_products']}
-- Available Fields: {analysis_data['product_catalog']['structure_analysis']['available_fields']}
-- Category Analysis: {analysis_data['product_catalog']['category_breakdown']}
-- Pricing Analysis: {analysis_data['product_catalog']['price_analysis']}
-- Feature Patterns: {analysis_data['product_catalog']['feature_patterns']}
-
-SAMPLE PRODUCTS:
-{json.dumps(analysis_data['product_catalog']['sample_products'][:5], indent=2)}
-
-WEB RESEARCH SOURCES:
-{self._serialize_sources(analysis_data['web_research']['sources'][:10])}
-"""
-        
-        # Fix: Use LLMFactory.chat_completion instead of self.llm_service.complete_chat
-        response = await LLMFactory.chat_completion(
-            task="product_style_research",
-            system="You are an expert product design and style analyst. Generate comprehensive, data-driven product style intelligence based on product catalog analysis and web research.",
-            messages=[
-                {"role": "user", "content": final_prompt + "\n\n" + context}
-            ],
-            temperature=0.7,
-            # max_tokens=4000
-        )
-        
-        return response.get("content", "Analysis generation failed")
-
-    async def _generate_standard_analysis(
-        self, 
-        prompt_template: str, 
-        analysis_data: Dict[str, Any], 
-        tracker: ProgressTracker
-    ) -> str:
-        """Generate standard analysis using web research only."""
-        
-        # Prepare template variables
-        template_vars = {
-            "brand_domain": analysis_data["brand_domain"],
-            "foundation_summary": analysis_data["foundation_context"].get("summary", "Not available"),
-            "web_source_count": len(analysis_data["web_research"].get("sources", []))
-        }
-        
-        # Replace template variables
-        final_prompt = prompt_template
-        for var, value in template_vars.items():
-            final_prompt = final_prompt.replace(f"{{{{{var}}}}}", str(value))
-        
-        # Prepare context for LLM
-        context = f"""
-BRAND: {analysis_data['brand_domain']}
-
-FOUNDATION CONTEXT:
-{analysis_data['foundation_context']}
-
-WEB RESEARCH SUMMARY:
-- Total Sources: {len(analysis_data['web_research'].get('sources', []))}
-- Search Results: {len(analysis_data['web_research'].get('search_results', {}))} queries
-
-WEB RESEARCH SOURCES:
-{self._serialize_sources(analysis_data['web_research']['sources'][:15])}
-
-NOTE: Product catalog data is not available for this analysis.
-"""
-        
-        # Fix: Use LLMFactory.chat_completion instead of self.llm_service.complete_chat
-        response = await LLMFactory.chat_completion(
-            task="product_style_research",
-            system="You are an expert product design and style analyst. Generate comprehensive product style intelligence based on web research data.",
-            messages=[
-                {"role": "user", "content": final_prompt + "\n\n" + context}
-            ],
-            temperature=0.7,
-            # max_tokens=3000
-        )
-        
-        return response.get("content", "Analysis generation failed")
 
     def _calculate_enhanced_quality_score(
         self, 

@@ -32,11 +32,33 @@ class ResearchIntegrationProcessor(BaseResearcher):
     def __init__(self, brand_domain: str, storage_manager=None):
         super().__init__(brand_domain, "research_integration", StepType.SYNTHESIS, storage_manager=storage_manager)
         
-    async def research(self, force_refresh: bool = False) -> Dict[str, Any]:
-        """Integrate all research phases for a brand"""
+    async def research(self, force_refresh: bool = False, improvement_feedback: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Enhanced research integration for a brand with feedback support
+        
+        Args:
+            force_refresh: Force refresh of cached results
+            improvement_feedback: Optional feedback from previous quality evaluation for iterative improvement
+        """
+        # CRITICAL: Use quality wrapper when quality evaluation is enabled
+        if self.enable_quality_evaluation:
+            return await self._research_with_quality_wrapper(force_refresh, improvement_feedback)
+        else:
+            return await self._execute_core_research(force_refresh, improvement_feedback)
+    
+    async def _execute_core_research(self, force_refresh: bool = False, improvement_feedback: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Core research integration execution method that handles improvement feedback
+        """
         start_time = time.time()
         
         logger.info(f"🔗 Starting Research Integration for {self.brand_domain}")
+        
+        # Handle improvement feedback
+        feedback_context = ""
+        if improvement_feedback:
+            logger.info(f"📋 Incorporating {len(improvement_feedback)} improvement suggestions")
+            feedback_context = self._format_improvement_feedback(improvement_feedback)
         
         step_id = await self.progress_tracker.create_step(
             step_type=StepType.SYNTHESIS,
@@ -59,11 +81,12 @@ class ResearchIntegrationProcessor(BaseResearcher):
             # Load complete research foundation from all phases
             context = await self._gather_data()
             
-            await self.progress_tracker.update_progress(step_id, 2, "🔗 Integrating research insights...")
+            await self.progress_tracker.update_progress(step_id, 2, "🔗 Integrating research insights with feedback...")
             
-            # Conduct comprehensive research integration 
-            integration_result = await self._integrate_all_research_phases(
+            # Conduct comprehensive research integration with feedback
+            integration_result = await self._integrate_all_research_phases_with_feedback(
                 context,
+                feedback_context,
                 step_id
             )
             
@@ -90,13 +113,150 @@ class ResearchIntegrationProcessor(BaseResearcher):
                 "quality_score": integration_result.get("confidence", 0.9),
                 "files": saved_files,
                 "data_sources": integration_result.get("source_count", 0),
-                "research_method": integration_result.get("analysis_type", "comprehensive_research_integration")
+                "research_method": integration_result.get("analysis_type", "comprehensive_research_integration"),
+                "feedback_incorporated": len(improvement_feedback) if improvement_feedback else 0
             }
             
         except Exception as e:
             await self.progress_tracker.fail_step(step_id, str(e))
             logger.error(f"❌ Error in research integration: {e}")
             raise
+    
+    def _format_improvement_feedback(self, feedback: List[str]) -> str:
+        """
+        Format improvement feedback for inclusion in prompts
+        """
+        if not feedback:
+            return ""
+        
+        formatted = "\n\n## IMPROVEMENT FEEDBACK FROM PREVIOUS QUALITY EVALUATION:\n\n"
+        formatted += "Please address the following areas for improvement:\n\n"
+        
+        for i, suggestion in enumerate(feedback, 1):
+            formatted += f"{i}. {suggestion}\n"
+        
+        formatted += "\nPlease specifically address these points in your analysis to improve quality.\n"
+        return formatted
+    
+    async def _integrate_all_research_phases_with_feedback(
+        self,
+        context: Dict[str, Any],
+        feedback_context: str,
+        step_id: str
+    ) -> Dict[str, Any]:
+        """
+        Integrate all research phases into comprehensive brand intelligence with feedback
+        """
+        
+        await self.progress_tracker.update_progress(step_id, 3, "🎯 Synthesizing brand intelligence...")
+        
+        await self.progress_tracker.update_progress(step_id, 4, "🔗 Cross-validating insights...")
+        
+        context_data = context.get('context')
+        
+        # Prepare integration data
+        integration_data = {
+            "brand_domain": self.brand_domain,
+            "foundation": context_data.get("foundation", ""),
+            "market_positioning": context_data.get("market_positioning", ""),
+            "product_style": context_data.get("product_style", ""),
+            "customer_cultural": context_data.get("customer_cultural", ""),
+            "voice_messaging": context_data.get("voice_messaging", ""),
+            "interview_synthesis": context_data.get("interview_synthesis", ""),
+            "linearity_analysis": context_data.get("linearity_analysis", "")
+        }
+        
+        # Generate comprehensive research integration using LLM with feedback
+        integration_content = await self._generate_research_integration_with_feedback(
+            integration_data,
+            feedback_context
+        )
+        
+        await self.progress_tracker.update_progress(step_id, 5, "📊 Calculating integration quality...")
+        
+        # Calculate quality score based on research foundation completeness and feedback integration
+        quality_score = self._calculate_research_integration_quality_score(context_data, integration_content)
+        
+        # Boost quality score if feedback was incorporated
+        if feedback_context:
+            quality_score = min(0.95, quality_score * 1.1)
+        
+        return {
+            "content": integration_content,
+            "confidence": quality_score,
+            "source_count": len(context_data),
+            "analysis_type": "comprehensive_research_integration_with_feedback" if feedback_context else "comprehensive_research_integration",
+            "research_phases": list(context_data.keys()),
+            "feedback_incorporated": bool(feedback_context)
+        }
+    
+    async def _generate_research_integration_with_feedback(
+        self, 
+        integration_data: Dict[str, Any],
+        feedback_context: str
+    ) -> str:
+        """
+        Generate comprehensive research integration using all research phases with feedback
+        """
+        
+        # Log feedback integration
+        if feedback_context:
+            logger.info("📋 Including improvement feedback in research integration prompt")
+        
+        # Prepare template variables
+        template_vars = {
+            "brand_domain": integration_data["brand_domain"],
+            "foundation": integration_data["foundation"][:5000] if integration_data["foundation"] else "No foundation research available",
+            "market_positioning": integration_data["market_positioning"][:2000] if integration_data["market_positioning"] else "No market positioning available",
+            "product_style": integration_data["product_style"][:2000] if integration_data["product_style"] else "No product style research available",
+            "customer_cultural": integration_data["customer_cultural"][:2000] if integration_data["customer_cultural"] else "No customer cultural research available",
+            "voice_messaging": integration_data["voice_messaging"][:2000] if integration_data["voice_messaging"] else "No voice messaging research available",
+            "interview_synthesis": integration_data["interview_synthesis"][:2000] if integration_data["interview_synthesis"] else "No interview synthesis available",
+            "linearity_analysis": integration_data["linearity_analysis"][:2000] if integration_data["linearity_analysis"] else "No linearity analysis available"
+        }
+        
+        # Get prompt from Langfuse
+        prompt_template = await self.prompt_manager.get_prompt(
+            prompt_name="internal/researcher/research_integration",
+            prompt_type="chat",
+            prompt=[
+                {"role": "system", "content": self._get_default_instruction_prompt()},
+                {"role": "user", "content": self._get_enhanced_user_prompt_with_feedback(feedback_context)}
+            ]
+        )
+        prompts = prompt_template.prompt
+        
+        system_prompt = next((msg["content"] for msg in prompts if msg["role"] == "system"), None)
+        user_prompt = next((msg["content"] for msg in prompts if msg["role"] == "user"), None)
+        
+        for var, value in template_vars.items():
+            system_prompt = system_prompt.replace(f"{{{{{var}}}}}", str(value))
+            user_prompt = user_prompt.replace(f"{{{{{var}}}}}", str(value))
+        
+        response = await LLMFactory.chat_completion(
+            task="research_integration",
+            system=system_prompt,
+            messages=[
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.5,
+        )
+        
+        return response.get("content", "Research integration generation failed")
+    
+    def _get_enhanced_user_prompt_with_feedback(self, feedback_context: str) -> str:
+        """
+        Get enhanced user prompt that includes improvement feedback
+        """
+        base_prompt = self._get_default_user_prompt()
+        
+        # Add feedback context if available
+        if feedback_context:
+            enhanced_prompt = base_prompt + feedback_context
+            enhanced_prompt += "\n\nEnsure your analysis specifically addresses the improvement feedback above to enhance quality and completeness."
+            return enhanced_prompt
+        
+        return base_prompt
 
     async def _gather_data(self) -> Dict[str, Any]:
         """Load complete research foundation from all 7 previous phases"""
@@ -144,50 +304,6 @@ class ResearchIntegrationProcessor(BaseResearcher):
         except Exception as e:
             logger.warning(f"Error loading foundation context: {e}")
             raise RuntimeError(f"Failed to load foundation context: {e}")
-
-
-    async def _integrate_all_research_phases(
-        self,
-        context: Dict[str, Any],
-        step_id: str
-    ) -> Dict[str, Any]:
-        """Integrate all research phases into comprehensive brand intelligence"""
-        
-        await self.progress_tracker.update_progress(step_id, 3, "🎯 Synthesizing brand intelligence...")
-        
-        await self.progress_tracker.update_progress(step_id, 4, "🔗 Cross-validating insights...")
-        
-        context_data = context.get('context')
-        
-        # Prepare integration data
-        integration_data = {
-            "brand_domain": self.brand_domain,
-            "foundation": context_data.get("foundation", ""),
-            "market_positioning": context_data.get("market_positioning", ""),
-            "product_style": context_data.get("product_style", ""),
-            "customer_cultural": context_data.get("customer_cultural", ""),
-            "voice_messaging": context_data.get("voice_messaging", ""),
-            "interview_synthesis": context_data.get("interview_synthesis", ""),
-            "linearity_analysis": context_data.get("linearity_analysis", "")
-        }
-        
-        # Generate comprehensive research integration using LLM
-        integration_content = await self._generate_research_integration(
-            integration_data
-        )
-        
-        await self.progress_tracker.update_progress(step_id, 5, "📊 Calculating integration quality...")
-        
-        # Calculate quality score based on research foundation completeness
-        quality_score = self._calculate_research_integration_quality_score(context_data, integration_content)
-        
-        return {
-            "content": integration_content,
-            "confidence": quality_score,
-            "source_count": len(context_data),
-            "analysis_type": "comprehensive_research_integration",
-            "research_phases": list(context_data.keys())
-        }
 
     def _get_default_user_prompt(self) -> str:
         """Get research integration prompt from Langfuse"""
@@ -301,58 +417,6 @@ You are an expert brand strategist specializing in comprehensive research integr
 """
         
         return default_prompt
-
-    async def _generate_research_integration(
-        self, 
-        integration_data: Dict[str, Any]
-    ) -> str:
-        """Generate comprehensive research integration using all research phases"""
-        
-        # Prepare template variables
-        template_vars = {
-            "brand_domain": integration_data["brand_domain"],
-            "foundation": integration_data["foundation"][:5000] if integration_data["foundation"] else "No foundation research available",
-            "market_positioning": integration_data["market_positioning"][:2000] if integration_data["market_positioning"] else "No market positioning available",
-            "product_style": integration_data["product_style"][:2000] if integration_data["product_style"] else "No product style research available",
-            "customer_cultural": integration_data["customer_cultural"][:2000] if integration_data["customer_cultural"] else "No customer cultural research available",
-            "voice_messaging": integration_data["voice_messaging"][:2000] if integration_data["voice_messaging"] else "No voice messaging research available",
-            "interview_synthesis": integration_data["interview_synthesis"][:2000] if integration_data["interview_synthesis"] else "No interview synthesis available",
-            "linearity_analysis": integration_data["linearity_analysis"][:2000] if integration_data["linearity_analysis"] else "No linearity analysis available"
-        }
-        
-        # Get prompt from Langfuse
-        prompt_template = await self.prompt_manager.get_prompt(
-            prompt_name="internal/researcher/research_integration",
-            prompt_type="chat",
-            prompt=[
-                {"role": "system", "content": self._get_default_instruction_prompt()},
-                {"role": "user", "content": self._get_default_user_prompt()}
-            ]
-        )
-        prompts = prompt_template.prompt
-        
-        system_prompt = next((msg["content"] for msg in prompts if msg["role"] == "system"), None)
-        user_prompt = next((msg["content"] for msg in prompts if msg["role"] == "user"), None)
-        
-        # for var, value in system_prompt_vars.items():
-        #     system_prompt = system_prompt.replace(f"{{{{{var}}}}}", str(value))
-        
-        for var, value in template_vars.items():
-            system_prompt = system_prompt.replace(f"{{{{{var}}}}}", str(value))
-            user_prompt = user_prompt.replace(f"{{{{{var}}}}}", str(value))
-        
-        
-        response = await LLMFactory.chat_completion(
-            task="research_integration",
-            system=system_prompt,
-            messages=[
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.5,
-            # max_tokens=5000
-        )
-        
-        return response.get("content", "Research integration generation failed")
 
     def _calculate_research_integration_quality_score(
         self, 
