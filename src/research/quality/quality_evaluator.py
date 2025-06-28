@@ -105,9 +105,7 @@ class QualityEvaluator:
             content = research_result.get("content", "")
             confidence = research_result.get("confidence_score", 0.0)
             
-            evaluation_prompt = self._get_evaluation_prompt(
-                content
-            )
+            evaluation_prompt = self._get_evaluation_prompt()
             
             template_vars = {
                 "phase_name": phase_name,
@@ -222,11 +220,16 @@ Issues: {improvement_feedback}
 
 Based on the research gaps, recommend 3-5 specific web searches that would fill missing information.
 
+SEARCH QUERY GUIDELINES:
+- Use domain name + brand name for best targeting: {brand_domain} "{brand_name}" [search terms]
+- Be specific about information gaps to fill
+- Focus on factual, verifiable information
+
 Respond with JSON only:
 {{
   "searches": [
     {{
-      "query": "specific search query with brand name",
+      "query": "specific search query using domain + brand name format",
       "purpose": "what information gap this fills",
       "priority": "high|medium|low",
       "max_results": 5

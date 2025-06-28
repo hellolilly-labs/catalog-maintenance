@@ -9,6 +9,7 @@ Usage:
     python scripts/brand_researcher.py --brand specialized.com --auto-continue
     python scripts/brand_researcher.py --brand flexfits.com --auto-continue
     python scripts/brand_researcher.py --brand darakayejewelry.com --auto-continue
+    python scripts/brand_researcher.py --brand darakayejewelry.com --force-regenerate
     python scripts/brand_researcher.py --brand specialized.com --force-regenerate
 """
 
@@ -24,6 +25,7 @@ from src.research.base_researcher import BaseResearcher
 from src.research.foundation_research import get_foundation_researcher
 from src.research.market_positioning_research import get_market_positioning_researcher
 from src.research.product_style_research import get_product_style_researcher
+from src.research.brand_style_research import get_brand_style_researcher
 from src.research.customer_cultural_research import get_customer_cultural_researcher
 from src.research.voice_messaging_research import get_voice_messaging_researcher
 from src.research.interview_synthesis_research import get_interview_synthesis_researcher
@@ -50,6 +52,7 @@ class EnhancedBrandResearcher:
             "foundation": get_foundation_researcher(brand_domain=self.brand_domain),
             "market_positioning": get_market_positioning_researcher(brand_domain=self.brand_domain),
             "product_style": get_product_style_researcher(brand_domain=self.brand_domain),
+            "brand_style": get_brand_style_researcher(brand_domain=self.brand_domain),
             "customer_cultural": get_customer_cultural_researcher(brand_domain=self.brand_domain),
             "voice_messaging": get_voice_messaging_researcher(brand_domain=self.brand_domain),
             "interview_synthesis": get_interview_synthesis_researcher(brand_domain=self.brand_domain),

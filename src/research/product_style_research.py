@@ -65,23 +65,39 @@ class ProductStyleResearcher(BaseResearcher):
     #         "research_method": result.get("research_method", "enhanced_catalog_analysis")
     #     }
 
+    async def _get_brand_name(self) -> str:
+        """Get the brand name from account config or fallback to domain-derived name"""
+        try:
+            config = await self.storage_manager.get_account_config(self.brand_domain)
+            if config and config.get("brand_name"):
+                return config["brand_name"]
+            else:
+                # Fallback to domain-derived name
+                return self.brand_domain.replace('.com', '').replace('.', ' ').title()
+        except Exception as e:
+            logger.warning(f"⚠️ Error getting brand name from config: {e}")
+            return self.brand_domain.replace('.com', '').replace('.', ' ').title()
+
     async def _gather_data(self) -> Dict[str, Any]:
         """Gather comprehensive product style data using WebSearchDataSource"""
         
-        brand_name = self.brand_domain.replace('.com', '').replace('.', ' ').title()
+        # Get discovered brand name from account config
+        brand_name = await self._get_brand_name()
+        
+        # Product style research queries using domain + brand name for optimal targeting
         research_queries = [
-            f"{brand_name} product line design philosophy aesthetic",
-            f"{brand_name} design language visual identity style guide",
-            f"{brand_name} product photography styling presentation",
-            f"{brand_name} collections seasonal themes design approach",
-            f"{brand_name} color palette typography visual elements",
-            f"{brand_name} product design innovation aesthetic principles",
-            f"{brand_name} brand aesthetic visual style design DNA",
-            f"{brand_name} packaging design visual presentation",
-            f"{brand_name} product categories lineup design consistency",
-            f"{brand_name} design awards recognition aesthetic innovation",
-            f"{brand_name} visual brand elements logo iconography",
-            f"{brand_name} design trends influence aesthetic direction"
+            f'{self.brand_domain} "{brand_name}" product line design philosophy aesthetic',
+            f'{self.brand_domain} "{brand_name}" design language visual identity style guide',
+            f'{self.brand_domain} "{brand_name}" product photography styling presentation',
+            f'{self.brand_domain} "{brand_name}" collections seasonal themes design approach',
+            f'{self.brand_domain} "{brand_name}" color palette typography visual elements',
+            f'{self.brand_domain} "{brand_name}" product design innovation aesthetic principles',
+            f'{self.brand_domain} "{brand_name}" aesthetic visual style design DNA',
+            f'{self.brand_domain} "{brand_name}" packaging design visual presentation',
+            f'{self.brand_domain} "{brand_name}" product categories lineup design consistency',
+            f'{self.brand_domain} "{brand_name}" design awards recognition aesthetic innovation',
+            f'{self.brand_domain} "{brand_name}" visual brand elements logo iconography',
+            f'{self.brand_domain} "{brand_name}" design trends influence aesthetic direction'
         ]
         
         # Use WebSearchDataSource for data gathering

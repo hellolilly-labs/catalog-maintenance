@@ -166,8 +166,148 @@ class FoundationResearcher(BaseResearcher):
     #         logger.error(f"❌ Error in {self.researcher_name.capitalize()} research for {self.brand_domain}: {e}")
     #         raise
     
+    async def _discover_brand_name(self) -> str:
+        """Discover the actual brand name from the domain using web search"""
+        
+        try:
+            # Check if we already have the brand name stored in account config
+            existing_config = await self.storage_manager.get_account_config(self.brand_domain)
+            if existing_config and existing_config.get("brand_name"):
+                logger.info(f"🏷️ Using cached brand name: {existing_config['brand_name']}")
+                return existing_config["brand_name"]
+            
+            # Perform brand discovery search
+            web_search_source = WebSearchDataSource()
+            if not web_search_source.is_available():
+                # Fallback to domain-based name
+                fallback_name = self.brand_domain.replace('.com', '').replace('.', ' ').title()
+                logger.warning(f"⚠️ Web search unavailable, using fallback brand name: {fallback_name}")
+                return fallback_name
+            
+            # Search for the brand name
+            discovery_queries = [
+                f"site:{self.brand_domain} company name brand",
+                f"site:{self.brand_domain} about company brand name",
+                f"{self.brand_domain} company brand name official"
+            ]
+            
+            context = DataGatheringContext(
+                brand_domain=self.brand_domain,
+                researcher_name="brand_discovery",
+                phase_name="brand_discovery"
+            )
+            
+            logger.info(f"🔍 Discovering brand name for {self.brand_domain}...")
+            discovery_result = await web_search_source.gather(discovery_queries, context)
+            
+            if not discovery_result.results:
+                # Fallback to domain-based name
+                fallback_name = self.brand_domain.replace('.com', '').replace('.', ' ').title()
+                logger.warning(f"⚠️ No discovery results, using fallback brand name: {fallback_name}")
+                return fallback_name
+            
+            # Use LLM to extract the actual brand name from search results
+            brand_name = await self._extract_brand_name_from_results(discovery_result.results)
+            
+            # Store the discovered brand name in account config
+            await self._store_brand_name(brand_name)
+            
+            logger.info(f"✅ Discovered brand name: {brand_name}")
+            return brand_name
+            
+        except Exception as e:
+            # Fallback to domain-based name on any error
+            fallback_name = self.brand_domain.replace('.com', '').replace('.', ' ').title()
+            logger.warning(f"⚠️ Brand discovery failed ({e}), using fallback: {fallback_name}")
+            return fallback_name
+    
+    async def _extract_brand_name_from_results(self, search_results: List[Dict[str, Any]]) -> str:
+        """Extract brand name from search results using LLM"""
+        
+        # Compile search context
+        search_context = ""
+        for i, result in enumerate(search_results[:5], 1):  # Use top 5 results
+            search_context += f"**Result {i}:**\n"
+            search_context += f"**Title:** {result.get('title', '')}\n"
+            search_context += f"**URL:** {result.get('url', '')}\n"
+            search_context += f"**Content:** {result.get('snippet', '')}\n\n"
+        
+        brand_extraction_prompt = f"""Extract the official brand/company name from these search results for {self.brand_domain}.
+
+SEARCH RESULTS:
+{search_context}
+
+TASK: Identify the official brand name (not just a description). Look for:
+- The company's official name as it appears in titles, headers, or official statements
+- How the company refers to itself
+- The name used consistently across multiple results
+
+REQUIREMENTS:
+- Return ONLY the brand name, nothing else
+- Use the exact capitalization as it appears officially
+- If unclear, use the most commonly appearing variation
+- Do NOT include words like "company", "corp", "inc", etc. unless they're part of the official brand name
+
+EXAMPLES:
+- If results show "Specialized Bicycle Components" → return "Specialized"
+- If results show "Apple Inc." → return "Apple"  
+- If results show "BMW Group" → return "BMW"
+
+Brand name:"""
+
+        try:
+            response = await LLMFactory.chat_completion(
+                task="brand_name_extraction",
+                system="You are an expert at extracting official brand names from web search results. Return only the brand name, no additional text.",
+                messages=[{
+                    "role": "user",
+                    "content": brand_extraction_prompt
+                }],
+                temperature=0.1
+            )
+            
+            extracted_name = response.get("content", "").strip()
+            
+            # Validate the extracted name
+            if extracted_name and len(extracted_name) > 0 and len(extracted_name) < 50:
+                return extracted_name
+            else:
+                # Fallback
+                return self.brand_domain.replace('.com', '').replace('.', ' ').title()
+                
+        except Exception as e:
+            logger.warning(f"⚠️ LLM brand name extraction failed: {e}")
+            return self.brand_domain.replace('.com', '').replace('.', ' ').title()
+    
+    async def _store_brand_name(self, brand_name: str) -> None:
+        """Store the discovered brand name in account config"""
+        
+        try:
+            # Get existing config or create new one
+            config = await self.storage_manager.get_account_config(self.brand_domain) or {}
+            
+            # Update with brand name
+            config.update({
+                "domain": self.brand_domain,
+                "brand_name": brand_name,
+                "brand_discovery_timestamp": datetime.now().isoformat() + "Z"
+            })
+            
+            # Save config
+            success = await self.storage_manager.save_account_config(self.brand_domain, config)
+            if success:
+                logger.info(f"💾 Stored brand name '{brand_name}' in account config")
+            else:
+                logger.warning(f"⚠️ Failed to store brand name in account config")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Error storing brand name: {e}")
+
     async def _gather_data(self) -> Dict[str, Any]:
         """Gather comprehensive data from multiple sources using WebSearchDataSource"""
+        
+        # Step 1: Discover the actual brand name first
+        brand_name = await self._discover_brand_name()
         
         # Official company sources (preserved for backward compatibility)
         official_sources = [
@@ -183,21 +323,20 @@ class FoundationResearcher(BaseResearcher):
             f"https://{self.brand_domain}/careers"
         ]
         
-        # Company research queries
-        brand_name = self.brand_domain.replace('.com', '').replace('.', ' ').title()
+        # Company research queries using domain name + brand name for optimal targeting
         research_queries = [
-            f"{brand_name} company founding story history",
-            f"{brand_name} founder CEO leadership team",
-            f"{brand_name} mission vision values statement",
-            f"{brand_name} company headquarters location",
-            f"{brand_name} company timeline milestones",
-            f"{brand_name} organizational culture values",
-            f"{brand_name} patents innovations technology",
-            f"{brand_name} legal structure ownership private public",
-            f"{brand_name} company size employees revenue",
-            f"{brand_name} business model strategy approach",
-            f"{brand_name} awards recognition achievements",
-            f"{brand_name} sustainability initiatives corporate responsibility"
+            f'{self.brand_domain} "{brand_name}" company founding story history',
+            f'{self.brand_domain} "{brand_name}" founder CEO leadership team',
+            f'{self.brand_domain} "{brand_name}" mission vision values statement',
+            f'{self.brand_domain} "{brand_name}" company headquarters location',
+            f'{self.brand_domain} "{brand_name}" company timeline milestones history',
+            f'{self.brand_domain} "{brand_name}" organizational culture values',
+            f'{self.brand_domain} "{brand_name}" patents innovations technology',
+            f'{self.brand_domain} "{brand_name}" legal structure ownership private public',
+            f'{self.brand_domain} "{brand_name}" company size employees revenue',
+            f'{self.brand_domain} "{brand_name}" business model strategy approach',
+            f'{self.brand_domain} "{brand_name}" awards recognition achievements',
+            f'{self.brand_domain} "{brand_name}" sustainability initiatives corporate responsibility'
         ]
         
         # Use WebSearchDataSource for data gathering

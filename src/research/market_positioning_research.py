@@ -325,25 +325,40 @@ class MarketPositioningResearcher(BaseResearcher):
         
         return enhanced_prompt
     
+    async def _get_brand_name(self) -> str:
+        """Get the brand name from account config or fallback to domain-derived name"""
+        try:
+            config = await self.storage_manager.get_account_config(self.brand_domain)
+            if config and config.get("brand_name"):
+                return config["brand_name"]
+            else:
+                # Fallback to domain-derived name
+                return self.brand_domain.replace('.com', '').replace('.', ' ').title()
+        except Exception as e:
+            logger.warning(f"⚠️ Error getting brand name from config: {e}")
+            return self.brand_domain.replace('.com', '').replace('.', ' ').title()
+
     async def _gather_data(self) -> Dict[str, Any]:
         """Gather comprehensive market positioning data using WebSearchDataSource"""
         
-        # Competitive analysis queries (with enhanced parameters)
-        brand_name = self.brand_domain.replace('.com', '').replace('.', ' ').title()
+        # Get discovered brand name from account config
+        brand_name = await self._get_brand_name()
+        
+        # Competitive analysis queries using domain + brand name for optimal targeting
         research_queries = [
-            {"query": f"{brand_name} ({self.brand_domain}) competitive landscape", "max_results": 10, "include_domains": ["statista.com", "ibisworld.com", "crunchbase.com", "cbinsights.com", "pitchbook.com", "sec.gov", "reuters.com", "businesswire.com", "prnewswire.com", "g2.com", "capterra.com"]},
-            {"query": f"{brand_name} ({self.brand_domain}) competitors direct competition analysis"},
-            {"query": f"{brand_name} ({self.brand_domain}) vs competitors comparison market position"},
-            {"query": f"{brand_name} ({self.brand_domain}) market share industry position ranking"},
-            {"query": f"{brand_name} ({self.brand_domain}) pricing strategy value proposition"},
-            {"query": f"{brand_name} ({self.brand_domain}) competitive advantages differentiation"},
-            {"query": f"{brand_name} ({self.brand_domain}) partnerships alliances strategic relationships"},
-            {"query": f"{brand_name} ({self.brand_domain}) industry awards recognition achievements"},
-            {"query": f"{brand_name} ({self.brand_domain}) market leadership position analysis"},
-            {"query": f"{brand_name} ({self.brand_domain}) competitive landscape industry overview"},
-            {"query": f"{brand_name} ({self.brand_domain}) brand positioning strategy market approach"},
-            {"query": f"{brand_name} ({self.brand_domain}) target market segment positioning"},
-            {"query": f"{brand_name} ({self.brand_domain}) industry trends market dynamics"},
+            {"query": f'{self.brand_domain} "{brand_name}" competitive landscape competitors', "max_results": 10, "include_domains": ["statista.com", "ibisworld.com", "crunchbase.com", "cbinsights.com", "pitchbook.com", "sec.gov", "reuters.com", "businesswire.com", "prnewswire.com", "g2.com", "capterra.com"]},
+            {"query": f'{self.brand_domain} "{brand_name}" competitors direct competition analysis'},
+            {"query": f'{self.brand_domain} "{brand_name}" vs competitors comparison market position'},
+            {"query": f'{self.brand_domain} "{brand_name}" market share industry position ranking'},
+            {"query": f'{self.brand_domain} "{brand_name}" pricing strategy value proposition'},
+            {"query": f'{self.brand_domain} "{brand_name}" competitive advantages differentiation'},
+            {"query": f'{self.brand_domain} "{brand_name}" partnerships alliances strategic relationships'},
+            {"query": f'{self.brand_domain} "{brand_name}" industry awards recognition achievements'},
+            {"query": f'{self.brand_domain} "{brand_name}" market leadership position analysis'},
+            {"query": f'{self.brand_domain} "{brand_name}" competitive landscape industry overview'},
+            {"query": f'{self.brand_domain} "{brand_name}" positioning strategy market approach'},
+            {"query": f'{self.brand_domain} "{brand_name}" target market segment positioning'},
+            {"query": f'{self.brand_domain} "{brand_name}" industry trends market dynamics'},
         ]
         
         # Use WebSearchDataSource for data gathering
