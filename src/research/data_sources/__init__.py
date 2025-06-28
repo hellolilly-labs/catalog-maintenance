@@ -12,8 +12,8 @@ Usage:
     data = await web_source.gather(queries, context)
 """
 
-from .base import DataSource
+from .base import DataSource, DataGatheringContext, DataGatheringResult
 from .web_search import WebSearchDataSource
 from .product_catalog import ProductCatalogDataSource
 
-__all__ = ['DataSource', 'WebSearchDataSource', 'ProductCatalogDataSource']
+__all__ = ['DataSource', 'DataGatheringContext', 'DataGatheringResult', 'WebSearchDataSource', 'ProductCatalogDataSource']
