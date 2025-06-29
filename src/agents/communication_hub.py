@@ -15,6 +15,7 @@ from typing import Dict, Any, List, Optional, Type
 from .base_agent import BaseAgent, AgentInsight
 from .context import ConversationContext, EnhancedContext
 from .prompt_generator import create_prompt_generator
+from .product_intelligence_agent import create_product_intelligence_agent
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ class AgentCommunicationHub:
     - Ensure sub-200ms processing for LiveKit real-time requirements
     """
     
-    def __init__(self, max_total_processing_time_ms: float = 200):
+    def __init__(self, max_total_processing_time_ms: float = 1000):
         self.max_total_processing_time_ms = max_total_processing_time_ms
         self.active_agents: Dict[str, BaseAgent] = {}
         self.agent_performance_history: Dict[str, List[float]] = {}

@@ -91,6 +91,46 @@ class PromptManager:
         logger.error(f"No default prompt provided for {prompt_name}")
         return None
             
+    async def store_prompt(
+        self, 
+        prompt_key: str, 
+        content: str, 
+        variables: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """Store an enhanced prompt in Langfuse"""
+        
+        try:
+            if not self.langfuse:
+                logger.warning("Langfuse not available, cannot store prompt")
+                return False
+            
+            # Create prompt in Langfuse
+            # For text type, prompt should be a string
+            
+            # Add metadata as labels if provided
+            labels = ["enhanced_prompt", "multi_agent_generated"]
+            if metadata:
+                labels.extend([f"{k}:{v}" for k, v in metadata.items() if isinstance(v, str)])
+            
+            prompt = self.langfuse.create_prompt(
+                name=prompt_key,
+                prompt=content,  # Text prompts need string content
+                type="text",
+                labels=labels
+            )
+            
+            if prompt:
+                logger.info(f"✅ Successfully stored enhanced prompt: {prompt_key}")
+                return True
+            else:
+                logger.error(f"❌ Failed to store prompt: {prompt_key}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error storing prompt in Langfuse: {e}")
+            return False
+    
     def get_langfuse_status(self) -> Dict[str, Any]:
         """Get the current status of Langfuse integration"""
         return {

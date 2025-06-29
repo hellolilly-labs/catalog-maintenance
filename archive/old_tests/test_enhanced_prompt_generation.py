@@ -13,6 +13,8 @@ from datetime import datetime
 
 from src.agents.communication_hub import AgentCommunicationHub
 from src.agents.psychology_agent import create_psychology_agent
+from src.agents.product_intelligence_agent import create_product_intelligence_agent
+from src.agents.sales_strategy_agent import create_sales_strategy_agent
 from src.agents.prompt_generator import create_prompt_generator
 
 # Configure logging for testing
@@ -27,10 +29,15 @@ async def test_enhanced_prompt_generation():
     print("🎯 Testing Enhanced Prompt Generation for Conversation Engine")
     print("=" * 70)
     
-    # Initialize communication hub with psychology agent
+    # Initialize communication hub with multiple agents
     hub = AgentCommunicationHub()
     psychology_agent = create_psychology_agent()
+    product_agent = create_product_intelligence_agent()
+    sales_agent = create_sales_strategy_agent()
+    
     hub.register_agent(psychology_agent)
+    hub.register_agent(product_agent)
+    hub.register_agent(sales_agent)
     
     # Sample brand intelligence (would come from our research phases)
     brand_intelligence = {
@@ -116,6 +123,23 @@ async def test_enhanced_prompt_generation():
         print(f"   Decision Style: {psychology_vars.get('decision_making_style', 'unknown')}")
         print(f"   Price Sensitivity: {psychology_vars.get('price_sensitivity', 'unknown')}")
         print(f"   Urgency Level: {psychology_vars.get('urgency_level', 'unknown')}")
+        
+        # Show product intelligence insights
+        product_vars = prompt_result['prompt_variables'].get('product_intelligence', {})
+        print(f"\n🛍️ Product Intelligence:")
+        print(f"   Priority Products: {product_vars.get('priority_products', [])}")
+        print(f"   Upsell Opportunities: {product_vars.get('upsell_opportunities', [])}")
+        print(f"   Competitive Advantages: {product_vars.get('competitive_advantages', [])}")
+        print(f"   Confidence Level: {product_vars.get('confidence_level', 'unknown')}")
+        
+        # Show sales strategy insights
+        sales_vars = prompt_result['prompt_variables'].get('sales_strategy', {})
+        print(f"\n💼 Sales Strategy:")
+        print(f"   Sales Approach: {sales_vars.get('sales_approach', 'unknown')}")
+        print(f"   Buying Signals: {sales_vars.get('buying_signals', [])}")
+        print(f"   Objection Signals: {sales_vars.get('objection_signals', [])}")
+        print(f"   Closing Opportunities: {sales_vars.get('closing_opportunities', [])}")
+        print(f"   Confidence Level: {sales_vars.get('confidence_level', 'unknown')}")
         
         # Show real-time optimization
         optimization = prompt_result['prompt_variables'].get('real_time_optimization', {})

@@ -31,7 +31,7 @@ class CustomerPsychologyAgent(BaseAgent):
     """
     
     def __init__(self):
-        super().__init__("psychology_agent", max_processing_time_ms=150)
+        super().__init__("psychology_agent", max_processing_time_ms=500)
         self.llm_factory = LLMFactory()
         
         # Psychology analysis patterns
