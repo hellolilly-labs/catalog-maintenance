@@ -22,6 +22,7 @@ from pinecone import Pinecone
 from tqdm import tqdm
 
 from .universal_product_processor import UniversalProductProcessor
+from .sparse_embeddings import SparseEmbeddingGenerator
 from ..agents.catalog_filter_analyzer import CatalogFilterAnalyzer
 from ..catalog.enhanced_descriptor_generator import EnhancedDescriptorGenerator
 
@@ -54,6 +55,7 @@ class PineconeIngestion:
         # Initialize processors
         self.product_processor = UniversalProductProcessor(brand_domain)
         self.descriptor_generator = EnhancedDescriptorGenerator(brand_domain)
+        self.sparse_generator = SparseEmbeddingGenerator(brand_domain)
         
         # Paths for tracking
         self.brand_path = Path(f"accounts/{brand_domain}")
@@ -91,6 +93,11 @@ class PineconeIngestion:
         
         # Process products
         processed_products = self.product_processor.process_catalog(products)
+        
+        # Build or load sparse vocabulary
+        if not self.sparse_generator.load_vocabulary() or force_update:
+            logger.info("🔨 Building sparse embedding vocabulary...")
+            self.sparse_generator.build_vocabulary(processed_products)
         
         # Detect changes
         changes = self._detect_changes(processed_products, force_update)
@@ -151,8 +158,8 @@ class PineconeIngestion:
         # Combine descriptors for embedding
         embedding_text = f"{enhanced['enhanced_descriptor']} {processed_product['enhanced_descriptor']}"
         
-        # Extract sparse keywords with weights
-        sparse_data = self._generate_sparse_representation(
+        # Generate sparse embeddings using enhanced generator
+        sparse_data = self.sparse_generator.generate_sparse_embedding(
             processed_product,
             enhanced
         )
@@ -192,77 +199,6 @@ class PineconeIngestion:
             'text': embedding_text,  # For server-side embedding
             'sparse_values': sparse_data,
             'metadata': metadata
-        }
-    
-    def _generate_sparse_representation(
-        self,
-        processed_product: Dict[str, Any],
-        enhanced_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Generate sparse embeddings for keyword matching.
-        Using a simple but effective BM25-inspired approach.
-        """
-        
-        # Collect all important terms with weights
-        term_weights = defaultdict(float)
-        
-        # Brand and product name get highest weight
-        if processed_product['universal_fields'].get('brand'):
-            brand = processed_product['universal_fields']['brand'].lower()
-            term_weights[brand] = 10.0
-            # Also add individual words from brand
-            for word in brand.split():
-                if len(word) > 2:
-                    term_weights[word] = 8.0
-        
-        if processed_product['universal_fields'].get('name'):
-            name = processed_product['universal_fields']['name'].lower()
-            # Full name
-            term_weights[name] = 8.0
-            # Individual words
-            for word in name.split():
-                if len(word) > 2:
-                    term_weights[word] = 6.0
-        
-        # Category terms
-        for category in processed_product['universal_fields'].get('category', []):
-            term_weights[category.lower()] = 5.0
-        
-        # Search keywords
-        for keyword in processed_product['search_keywords']:
-            term_weights[keyword.lower()] = 4.0
-        
-        # Filter values
-        for filter_name, filter_value in processed_product['filter_metadata'].items():
-            if isinstance(filter_value, str):
-                term_weights[filter_value.lower()] = 3.0
-            elif isinstance(filter_value, list):
-                for val in filter_value:
-                    if isinstance(val, str):
-                        term_weights[val.lower()] = 3.0
-        
-        # Key features from enhanced descriptor
-        if 'key_features' in enhanced_data:
-            for feature in enhanced_data['key_features']:
-                for word in feature.lower().split():
-                    if len(word) > 3:
-                        term_weights[word] = 2.0
-        
-        # Convert to sparse vector format
-        # Use simple hashing for term->index mapping
-        sparse_indices = []
-        sparse_values = []
-        
-        for term, weight in term_weights.items():
-            # Simple hash to get index (in practice, use consistent vocabulary)
-            index = abs(hash(term)) % 100000
-            sparse_indices.append(index)
-            sparse_values.append(weight)
-        
-        return {
-            'indices': sparse_indices,
-            'values': sparse_values
         }
     
     def _detect_changes(

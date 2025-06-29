@@ -474,6 +474,7 @@ class BaseResearcher:
             phase_name = self.researcher_name
             
             if hasattr(self.storage_manager, 'base_dir'):
+                import os
                 # Local storage
                 research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research_phases")
                 os.makedirs(research_dir, exist_ok=True)

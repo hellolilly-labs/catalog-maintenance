@@ -68,19 +68,27 @@ The current `pinecone_setup.py` ingestion system works but lacks:
 - `test_universal_processor.py` - Test suite
 - Full documentation in `src/ingestion/README.md`
 
-### Phase 2: Hybrid Search Implementation ⏱️ Week 2
-- [ ] Implement sparse embedding generation
-  - [ ] BM25-based token scoring
-  - [ ] Important term extraction
-  - [ ] Brand/model name prioritization
-- [ ] Update Pinecone record structure
-  - [ ] Add sparse_values field
-  - [ ] Maintain dense embeddings
-  - [ ] Enrich metadata fields
-- [ ] Create hybrid search logic
-  - [ ] Weighted combination (80% dense, 20% sparse)
-  - [ ] Dynamic weight adjustment
+### Phase 2: Hybrid Search Implementation ⏱️ Week 2 🚧 IN PROGRESS
+- [x] Implement sparse embedding generation
+  - [x] BM25-based token scoring
+  - [x] Important term extraction
+  - [x] Brand/model name prioritization
+- [x] Update Pinecone record structure
+  - [x] Add sparse_values field
+  - [x] Maintain dense embeddings
+  - [x] Enrich metadata fields
+- [x] Create hybrid search logic
+  - [x] Weighted combination (dynamic, not fixed 80/20)
+  - [x] Dynamic weight adjustment
   - [ ] Performance testing
+
+**Phase 2 Progress:**
+- Created `SparseEmbeddingGenerator` with BM25-inspired scoring
+- Integrated sparse embeddings into Pinecone ingestion pipeline
+- Built `HybridSearchEngine` with dynamic weight determination
+- Added `HybridQueryOptimizer` for intent-based query optimization
+- Created comprehensive test suite for hybrid search scenarios
+- Full documentation in `docs/PHASE2_HYBRID_SEARCH.md`
 
 ### Phase 3: Automatic Synchronization ⏱️ Week 3
 - [ ] Implement change detection
