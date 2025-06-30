@@ -16,6 +16,12 @@ from spence.rag import PineconeRAG
 from spence.model import UserState
 from spence.account_manager import get_account_manager
 
+# Type imports for return types
+try:
+    from .search_performance_tracker import SearchMetrics
+except ImportError:
+    SearchMetrics = Dict[str, Any]
+
 # Import enhanced components from catalog-maintenance
 try:
     from src.agents.query_optimization_agent import QueryOptimizationAgent
@@ -198,6 +204,93 @@ class SearchService:
         return await SearchService.enhance_query(query, user_state, chat_ctx, system_prompt)
     
     @staticmethod
+    def extract_user_preferences(user_state: UserState) -> Dict[str, Any]:
+        """
+        Extract search-relevant preferences from UserState.
+        
+        Args:
+            user_state: Current user state
+            
+        Returns:
+            Dictionary of user preferences for search optimization
+        """
+        preferences = {
+            'price_range': None,
+            'recent_searches': [],
+            'category_interests': {},
+            'search_style': 'balanced',
+            'user_context': []
+        }
+        
+        if not user_state:
+            return preferences
+        
+        # Extract from conversation history if available
+        if hasattr(user_state, 'conversation_exit_state') and user_state.conversation_exit_state:
+            exit_state = user_state.conversation_exit_state
+            if exit_state.transcript_summary:
+                preferences['user_context'].append(f"Previous conversation: {exit_state.transcript_summary}")
+        
+        # Extract from sentiment analysis if available
+        if hasattr(user_state, 'sentiment_analysis') and user_state.sentiment_analysis:
+            sentiment = user_state.sentiment_analysis
+            if hasattr(sentiment, 'details') and sentiment.details:
+                preferences['user_context'].append(f"User sentiment details: {sentiment.details}")
+        
+        # Extract from communication directive if available
+        if hasattr(user_state, 'communication_directive') and user_state.communication_directive:
+            directive = user_state.communication_directive
+            if directive.formality and directive.formality.score > 0.7:
+                preferences['search_style'] = 'formal'
+                preferences['user_context'].append("User prefers formal communication")
+        
+        return preferences
+    
+    @staticmethod
+    def determine_search_weights(
+        query: str,
+        user_state: Optional[UserState] = None,
+        filters: Optional[Dict[str, Any]] = None
+    ) -> Tuple[Optional[float], Optional[float]]:
+        """
+        Determine dense vs sparse weights based on query characteristics.
+        
+        Args:
+            query: Search query
+            user_state: Optional user state for preference-based weighting
+            filters: Optional extracted filters
+            
+        Returns:
+            Tuple of (dense_weight, sparse_weight) or (None, None) for auto
+        """
+        # Extract user preferences if available
+        user_prefs = SearchService.extract_user_preferences(user_state) if user_state else {}
+        
+        # Check for exact match indicators
+        exact_match_indicators = [
+            'exact', 'specifically', 'model number', 'sku', '"'
+        ]
+        
+        query_lower = query.lower()
+        is_exact_search = any(indicator in query_lower for indicator in exact_match_indicators)
+        
+        # Check if searching for specific model/series
+        is_model_search = any(indicator in query_lower for indicator in [
+            'model', 'series', 'collection', 'line'
+        ])
+        
+        # Determine weights
+        if is_exact_search or is_model_search:
+            # Favor sparse embeddings for exact/model searches
+            return 0.3, 0.7
+        elif user_prefs.get('search_style') == 'formal':
+            # Slightly favor dense for formal users (more semantic)
+            return 0.7, 0.3
+        else:
+            # Let the system auto-determine
+            return None, None
+    
+    @staticmethod
     async def enhance_product_query_with_filters(
         query: str, 
         user_state: UserState, 
@@ -206,7 +299,7 @@ class SearchService:
         product_knowledge: str = ""
     ) -> Tuple[str, Dict[str, Any]]:
         """
-        Enhanced product query with intelligent filter extraction.
+        Enhance product query with intelligent filter extraction and user context.
         
         Args:
             query: Original search query
@@ -229,49 +322,27 @@ class SearchService:
                 )
                 return enhanced_query, {}
             
-            # Build context from chat history - use more context
+            # Extract user preferences for context enrichment
+            user_prefs = SearchService.extract_user_preferences(user_state)
+            
+            # Build comprehensive context from chat history
             context = {
                 "recent_messages": [],
                 "expressed_interests": [],
-                "user_preferences": {},
+                "user_preferences": user_prefs,
                 "conversation_stage": "unknown"
             }
             
-            # Extract user preferences from UserState
-            if user_state:
-                # Communication style preference
-                if hasattr(user_state, 'communication_directive') and user_state.communication_directive:
-                    if user_state.communication_directive.formality:
-                        context["user_preferences"]["formality_level"] = user_state.communication_directive.formality.score
-                        context["user_preferences"]["communication_style"] = "formal" if user_state.communication_directive.formality.score > 0.7 else "casual"
-                
-                # Sentiment and engagement
-                if hasattr(user_state, 'sentiment_analysis') and user_state.sentiment_analysis:
-                    if hasattr(user_state.sentiment_analysis, 'sentiments') and user_state.sentiment_analysis.sentiments:
-                        # Extract trust and engagement levels
-                        latest_sentiment = user_state.sentiment_analysis.sentiments[-1] if user_state.sentiment_analysis.sentiments else None
-                        if latest_sentiment and hasattr(latest_sentiment, 'sentiment'):
-                            context["user_preferences"]["trust_level"] = getattr(latest_sentiment.sentiment.trustLevel, 'value', 'medium')
-                            context["user_preferences"]["engagement_level"] = getattr(latest_sentiment.sentiment.engagementLevel, 'value', 'medium')
-                
-                # Previous conversation context
-                if hasattr(user_state, 'conversation_exit_state') and user_state.conversation_exit_state:
-                    if user_state.conversation_exit_state.transcript_summary:
-                        context["user_preferences"]["previous_context"] = user_state.conversation_exit_state.transcript_summary
-                    
-                    # Determine if this is a resumed conversation
-                    if user_state.conversation_exit_state.last_interaction_time:
-                        time_diff = time.time() - user_state.conversation_exit_state.last_interaction_time
-                        if time_diff < 3600:  # Less than 1 hour
-                            context["conversation_stage"] = "resumed_recent"
-                        elif time_diff < 86400:  # Less than 1 day
-                            context["conversation_stage"] = "resumed_same_day"
-                        else:
-                            context["conversation_stage"] = "new_conversation"
-                
-                # Account information
-                if hasattr(user_state, 'account') and user_state.account:
-                    context["user_preferences"]["account"] = user_state.account
+            # Add conversation stage detection
+            if user_state and hasattr(user_state, 'conversation_exit_state') and user_state.conversation_exit_state:
+                if user_state.conversation_exit_state.last_interaction_time:
+                    time_diff = time.time() - user_state.conversation_exit_state.last_interaction_time
+                    if time_diff < 3600:  # Less than 1 hour
+                        context["conversation_stage"] = "resumed_recent"
+                    elif time_diff < 86400:  # Less than 1 day
+                        context["conversation_stage"] = "resumed_same_day"
+                    else:
+                        context["conversation_stage"] = "new_conversation"
             
             # Extract conversation context - look further back for better understanding
             messages = chat_ctx.items[-30:] if len(chat_ctx.items) > 30 else chat_ctx.items
@@ -389,6 +460,106 @@ class SearchService:
         except Exception as e:
             logger.error(f"Error in search_products_rag: {e}")
             return []
+    
+    @staticmethod
+    async def search_products_with_context(
+        query: str,
+        user_state: Optional[UserState] = None,
+        chat_ctx: Optional[llm.ChatContext] = None,
+        account: str = None,
+        product_knowledge: str = "",
+        use_hybrid: bool = True,
+        **kwargs
+    ) -> Tuple[List[Dict], SearchMetrics]:
+        """
+        Unified product search with user context and performance tracking.
+        
+        Args:
+            query: Search query
+            user_state: Optional user state for context
+            chat_ctx: Optional conversation context
+            account: Account/brand identifier
+            product_knowledge: Optional product knowledge base
+            use_hybrid: Whether to use hybrid search (if available)
+            **kwargs: Additional search parameters
+            
+        Returns:
+            Tuple of (search results, performance metrics)
+        """
+        from .search_performance_tracker import track_search_performance
+        start_time = time.time()
+        
+        # Enhance query with user context if available
+        if chat_ctx and user_state:
+            enhanced_query, filters = await SearchService.enhance_product_query_with_filters(
+                query=query,
+                user_state=user_state,
+                chat_ctx=chat_ctx,
+                account=account,
+                product_knowledge=product_knowledge
+            )
+        else:
+            enhanced_query = query
+            filters = {}
+        
+        # Determine search weights if using hybrid
+        dense_weight, sparse_weight = None, None
+        if use_hybrid:
+            dense_weight, sparse_weight = SearchService.determine_search_weights(
+                query=enhanced_query,
+                user_state=user_state,
+                filters=filters
+            )
+        
+        # Perform search
+        if use_hybrid and dense_weight is not None:
+            # Try hybrid search first
+            from .catalog_maintenance_api import search_products_hybrid
+            try:
+                results = await search_products_hybrid(
+                    query=enhanced_query,
+                    account=account,
+                    filters=filters,
+                    dense_weight=dense_weight,
+                    sparse_weight=sparse_weight,
+                    user_context=SearchService.extract_user_preferences(user_state) if user_state else None,
+                    **kwargs
+                )
+                search_type = 'hybrid'
+            except Exception as e:
+                logger.warning(f"Hybrid search failed, falling back to RAG: {e}")
+                results = await SearchService.search_products_rag_with_filters(
+                    query=enhanced_query,
+                    filters=filters,
+                    account=account,
+                    **kwargs
+                )
+                search_type = 'rag'
+        else:
+            # Use standard RAG search
+            results = await SearchService.search_products_rag_with_filters(
+                query=enhanced_query,
+                filters=filters,
+                account=account,
+                **kwargs
+            )
+            search_type = 'rag'
+        
+        # Track performance
+        metrics = track_search_performance(
+            query=query,
+            enhanced_query=enhanced_query,
+            search_type=search_type,
+            results=results,
+            start_time=start_time,
+            user_id=getattr(user_state, 'user_id', None) if user_state else None,
+            account=account,
+            filters=filters,
+            dense_weight=dense_weight,
+            sparse_weight=sparse_weight
+        )
+        
+        return results, metrics
     
     @staticmethod
     async def search_products_rag_with_filters(
