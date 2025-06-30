@@ -1224,16 +1224,23 @@ Parameter Schema and Description:
                         filter_matches = sum(len(p._matched_filters) for p in products_results if hasattr(p, '_matched_filters'))
                         logger.info(f"Filter effectiveness: {filter_matches} total filter matches across results")
                     
-                    # Track search performance metrics
-                    search_metrics = {
-                        'query': query,
-                        'enhanced_query': enhanced_query,
-                        'filters_applied': len(extracted_filters),
-                        'results_returned': len(products_results),
-                        'user_id': self._user_id,
-                        'search_type': 'hybrid' if dense_weight and sparse_weight else 'auto'
-                    }
-                    logger.info("search_performance", extra=search_metrics)
+                    # Track search performance with enhanced metrics
+                    from .search_performance_tracker import track_search_performance
+                    
+                    search_start_time = time.time() - (self.perform_search_with_status.__defaults__[2] if hasattr(self.perform_search_with_status, '__defaults__') else 25.0)  # Approximate start time
+                    track_search_performance(
+                        query=query,
+                        enhanced_query=enhanced_query,
+                        search_type='hybrid' if dense_weight and sparse_weight else 'rag',
+                        results=products_results,
+                        start_time=search_start_time,
+                        user_id=self._user_id,
+                        session_id=self._session_id,
+                        account=self._account,
+                        filters=extracted_filters,
+                        dense_weight=dense_weight,
+                        sparse_weight=sparse_weight
+                    )
             
             # Format results as markdown
             markdown_results = "# Products (in descending order):\n\nRemember that you are an AI sales agent speaking to a human, so be sure to use natural language to respond and not just a list of products. For example, never say the product URL unless the user specifically asks for it.\n\n"
