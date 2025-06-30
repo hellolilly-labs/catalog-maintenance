@@ -42,6 +42,9 @@ class SparseEmbeddingGenerator:
         self.inverse_vocabulary = {}
         self.next_index = 0
         
+        # Try to load existing vocabulary
+        self._load_vocabulary()
+        
         # Document frequency for IDF calculation
         self.document_frequencies = defaultdict(int)
         self.total_documents = 0
@@ -379,9 +382,7 @@ class SparseEmbeddingGenerator:
         return importance
     
     def _save_vocabulary(self) -> None:
-        """
-        Save vocabulary to disk for persistence.
-        """
+        """Save vocabulary to disk for persistence."""
         vocab_path = Path(f"accounts/{self.brand_domain}/sparse_vocabulary.json")
         vocab_path.parent.mkdir(parents=True, exist_ok=True)
         
@@ -389,13 +390,30 @@ class SparseEmbeddingGenerator:
             'vocabulary': self.vocabulary,
             'document_frequencies': dict(self.document_frequencies),
             'total_documents': self.total_documents,
-            'term_importance': self.term_importance
+            'max_features': self.max_features
         }
         
         with open(vocab_path, 'w') as f:
             json.dump(vocab_data, f, indent=2)
         
         logger.info(f"💾 Saved vocabulary to {vocab_path}")
+    
+    def _load_vocabulary(self) -> None:
+        """Load vocabulary from disk if exists."""
+        vocab_path = Path(f"accounts/{self.brand_domain}/sparse_vocabulary.json")
+        
+        if vocab_path.exists():
+            with open(vocab_path, 'r') as f:
+                vocab_data = json.load(f)
+            
+            self.vocabulary = vocab_data['vocabulary']
+            self.inverse_vocabulary = {idx: term for term, idx in self.vocabulary.items()}
+            self.document_frequencies = defaultdict(int, vocab_data.get('document_frequencies', {}))
+            self.total_documents = vocab_data.get('total_documents', 0)
+            
+            logger.info(f"📖 Loaded vocabulary with {len(self.vocabulary)} terms")
+        else:
+            logger.info("No existing vocabulary found - will build from catalog")
     
     def load_vocabulary(self) -> bool:
         """

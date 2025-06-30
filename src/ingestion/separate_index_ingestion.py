@@ -145,6 +145,11 @@ class SeparateIndexIngestion:
             descriptor_style="voice_optimized"
         )
         
+        # Build vocabulary if not already loaded
+        if not self.sparse_generator.vocabulary:
+            logger.info("Building sparse embedding vocabulary...")
+            self.sparse_generator.build_vocabulary(enhanced_products)
+        
         # Save filter labels for the brand
         self._save_filter_labels(filter_labels)
         
