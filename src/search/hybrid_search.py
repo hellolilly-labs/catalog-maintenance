@@ -11,7 +11,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from collections import defaultdict
 
-from pinecone import Pinecone
+from pinecone import Pinecone, SearchQuery, SearchRerank, RerankModel
 import numpy as np
 
 from ..ingestion.sparse_embeddings import SparseEmbeddingGenerator
@@ -80,18 +80,25 @@ class HybridSearchEngine:
         rerank: bool = True
     ) -> List[SearchResult]:
         """
-        Perform hybrid search combining dense and sparse embeddings.
+        Perform hybrid search with neural reranking.
+        
+        This method combines dense and sparse embeddings for initial retrieval,
+        then uses Pinecone's integrated Cohere reranking model for neural reranking.
+        
+        Neural reranking uses a cross-encoder architecture that jointly encodes
+        the query and each candidate document, providing much better relevance
+        scoring than the initial vector similarity scores.
         
         Args:
             query: Search query
-            top_k: Number of results to return
+            top_k: Number of results to return after reranking
             filters: Metadata filters to apply
             dense_weight: Weight for dense embeddings (0-1)
             sparse_weight: Weight for sparse embeddings (0-1)
-            rerank: Whether to rerank results
+            rerank: Whether to use neural reranking (Cohere model)
             
         Returns:
-            List of search results
+            List of search results, reranked if requested
         """
         # Adjust weights based on query characteristics
         if dense_weight is None or sparse_weight is None:
@@ -108,57 +115,63 @@ class HybridSearchEngine:
         # Generate query representations
         query_data = self._prepare_query(query)
         
-        # Prepare search request
-        search_request = {
-            "namespace": self.namespace,
-            "top_k": top_k * 2 if rerank else top_k,  # Get more for reranking
-            "include_metadata": True
+        # Build search query
+        search_query_params = {
+            "inputs": {
+                "text": query_data["enhanced_query"]
+            },
+            "top_k": top_k * 2 if rerank else top_k  # Get more candidates for reranking
         }
         
-        # Add dense query
-        if dense_weight > 0:
-            search_request["queries"] = [{
-                "text": query_data["enhanced_query"],
-                "weight": dense_weight
-            }]
-        
-        # Add sparse query
+        # Add sparse values if available
         if sparse_weight > 0 and query_data.get("sparse_values"):
-            if "queries" not in search_request:
-                search_request["queries"] = []
-            
-            search_request["queries"].append({
-                "sparse_values": query_data["sparse_values"],
-                "weight": sparse_weight
-            })
+            search_query_params["sparse_values"] = query_data["sparse_values"]
+        
+        # Configure neural reranking if requested
+        rerank_config = None
+        if rerank:
+            rerank_config = SearchRerank(
+                model=RerankModel.Cohere_Rerank_3_5,  # Using Cohere's reranking model
+                rank_fields=["text"],  # Fields to use for reranking
+                top_n=top_k  # Final number of results after reranking
+            )
         
         # Add filters
+        filter_dict = None
         if filters:
-            search_request["filter"] = self._build_pinecone_filter(filters)
+            filter_dict = self._build_pinecone_filter(filters)
         
-        # Execute search
+        # Execute search with neural reranking
         try:
-            results = self.index.query(**search_request)
+            results = self.index.search_records(
+                namespace=self.namespace,
+                query=SearchQuery(**search_query_params),
+                rerank=rerank_config,
+                filter=filter_dict,
+                fields=["metadata"]
+            )
             
             # Process results
             search_results = []
-            for match in results.matches:
-                metadata = json.loads(match.metadata) if isinstance(match.metadata, str) else match.metadata
+            for hit in results.result.hits:
+                # Extract metadata from fields
+                metadata = hit.fields.get('metadata', {})
+                if isinstance(metadata, str):
+                    metadata = json.loads(metadata)
                 
                 result = SearchResult(
-                    id=match.id,
-                    score=match.score,
+                    id=hit._id,
+                    score=hit._score,
                     metadata=metadata,
                     debug_info={
-                        "dense_score": getattr(match, "dense_score", None),
-                        "sparse_score": getattr(match, "sparse_score", None)
+                        "reranked": rerank,
+                        "model": "Cohere_Rerank_3_5" if rerank else None
                     }
                 )
                 search_results.append(result)
             
-            # Rerank if requested
-            if rerank and len(search_results) > top_k:
-                search_results = self._rerank_results(query, search_results)[:top_k]
+            # Results are already reranked by Pinecone if rerank=True
+            # No need for additional reranking
             
             return search_results
             
