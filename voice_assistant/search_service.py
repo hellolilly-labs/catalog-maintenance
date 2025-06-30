@@ -232,8 +232,46 @@ class SearchService:
             # Build context from chat history - use more context
             context = {
                 "recent_messages": [],
-                "expressed_interests": []
+                "expressed_interests": [],
+                "user_preferences": {},
+                "conversation_stage": "unknown"
             }
+            
+            # Extract user preferences from UserState
+            if user_state:
+                # Communication style preference
+                if hasattr(user_state, 'communication_directive') and user_state.communication_directive:
+                    if user_state.communication_directive.formality:
+                        context["user_preferences"]["formality_level"] = user_state.communication_directive.formality.score
+                        context["user_preferences"]["communication_style"] = "formal" if user_state.communication_directive.formality.score > 0.7 else "casual"
+                
+                # Sentiment and engagement
+                if hasattr(user_state, 'sentiment_analysis') and user_state.sentiment_analysis:
+                    if hasattr(user_state.sentiment_analysis, 'sentiments') and user_state.sentiment_analysis.sentiments:
+                        # Extract trust and engagement levels
+                        latest_sentiment = user_state.sentiment_analysis.sentiments[-1] if user_state.sentiment_analysis.sentiments else None
+                        if latest_sentiment and hasattr(latest_sentiment, 'sentiment'):
+                            context["user_preferences"]["trust_level"] = getattr(latest_sentiment.sentiment.trustLevel, 'value', 'medium')
+                            context["user_preferences"]["engagement_level"] = getattr(latest_sentiment.sentiment.engagementLevel, 'value', 'medium')
+                
+                # Previous conversation context
+                if hasattr(user_state, 'conversation_exit_state') and user_state.conversation_exit_state:
+                    if user_state.conversation_exit_state.transcript_summary:
+                        context["user_preferences"]["previous_context"] = user_state.conversation_exit_state.transcript_summary
+                    
+                    # Determine if this is a resumed conversation
+                    if user_state.conversation_exit_state.last_interaction_time:
+                        time_diff = time.time() - user_state.conversation_exit_state.last_interaction_time
+                        if time_diff < 3600:  # Less than 1 hour
+                            context["conversation_stage"] = "resumed_recent"
+                        elif time_diff < 86400:  # Less than 1 day
+                            context["conversation_stage"] = "resumed_same_day"
+                        else:
+                            context["conversation_stage"] = "new_conversation"
+                
+                # Account information
+                if hasattr(user_state, 'account') and user_state.account:
+                    context["user_preferences"]["account"] = user_state.account
             
             # Extract conversation context - look further back for better understanding
             messages = chat_ctx.items[-30:] if len(chat_ctx.items) > 30 else chat_ctx.items

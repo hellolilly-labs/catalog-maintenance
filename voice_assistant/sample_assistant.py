@@ -1088,8 +1088,11 @@ Parameter Schema and Description:
                 # Small catalog or no RAG: Use LLM-based search with enhanced query
                 logger.info(f"Using LLM-based search for {self._account} (no RAG index)")
                 
-                # Enhance the query even for LLM search
-                enhanced_query, extracted_filters = await SearchService.enhance_product_query_with_filters(
+                # Import enhanced search service
+                from .enhanced_search_service import EnhancedSearchService
+                
+                # Use enhanced query with user context
+                enhanced_query, extracted_filters = await EnhancedSearchService.enhance_product_query_with_user_context(
                     query=query,
                     user_state=self.session.userdata,
                     chat_ctx=self.chat_ctx,
@@ -1114,11 +1117,14 @@ Parameter Schema and Description:
                     }
                 )
             else:
-                # Large catalog with RAG: Use enhanced RAG search with filters
-                logger.info(f"Using enhanced RAG search for {self._account}")
+                # Large catalog with RAG: Use enhanced RAG search with hybrid approach
+                logger.info(f"Using enhanced hybrid RAG search for {self._account}")
                 
-                # First, enhance the query and extract filters
-                enhanced_query, extracted_filters = await SearchService.enhance_product_query_with_filters(
+                # Import enhanced search service
+                from .enhanced_search_service import EnhancedSearchService
+                
+                # First, enhance the query with user context and extract filters
+                enhanced_query, extracted_filters = await EnhancedSearchService.enhance_product_query_with_user_context(
                     query=query,
                     user_state=self.session.userdata,
                     chat_ctx=self.chat_ctx,
@@ -1129,12 +1135,57 @@ Parameter Schema and Description:
                 logger.info(f"Query enhanced: '{query}' -> '{enhanced_query}'")
                 logger.info(f"Filters extracted: {extracted_filters}")
                 
-                # Use the new enhanced RAG search with filters
-                rag_results = await self.perform_search_with_status(
-                    search_fn=lambda q, **params: SearchService.search_products_rag_with_filters(
+                # Determine search weights based on user preferences and query type
+                dense_weight, sparse_weight = EnhancedSearchService.determine_search_weights(
+                    query=enhanced_query,
+                    user_state=self.session.userdata,
+                    filters=extracted_filters
+                )
+                
+                logger.info(f"Search weights: dense={dense_weight}, sparse={sparse_weight}")
+                
+                # Call the hybrid search endpoint from catalog-maintenance
+                from .catalog_maintenance_api import search_products_hybrid
+                
+                async def call_hybrid_search_api(q, **params):
+                    # Try to use the hybrid search API
+                    try:
+                        results = await search_products_hybrid(
+                            query=q,
+                            account=params.get("account"),
+                            filters=params.get("filters", {}),
+                            dense_weight=params.get("dense_weight"),
+                            sparse_weight=params.get("sparse_weight"),
+                            user_context=params.get("user_context"),
+                            top_k=params.get("top_k", 35),
+                            top_n=params.get("top_n", 10),
+                            min_score=params.get("min_score", 0.15)
+                        )
+                        if results:
+                            return results
+                    except Exception as e:
+                        logger.warning(f"Hybrid search API failed, falling back to RAG: {e}")
+                    
+                    # Fallback to existing RAG search if API is unavailable
+                    return await SearchService.search_products_rag_with_filters(
                         query=q,
                         filters=params.get("filters", {}),
                         account=params.get("account"),
+                        top_k=params.get("top_k", 35),
+                        top_n=params.get("top_n", 10),
+                        min_score=params.get("min_score", 0.15),
+                        min_n=params.get("min_n", 3)
+                    )
+                
+                # Use the enhanced RAG search with hybrid approach
+                rag_results = await self.perform_search_with_status(
+                    search_fn=lambda q, **params: call_hybrid_search_api(
+                        q=q,
+                        filters=params.get("filters", {}),
+                        account=params.get("account"),
+                        dense_weight=params.get("dense_weight"),
+                        sparse_weight=params.get("sparse_weight"),
+                        user_context=params.get("user_context"),
                         top_k=params.get("top_k", 35),
                         top_n=params.get("top_n", 10),
                         min_score=params.get("min_score", 0.15),
@@ -1144,6 +1195,9 @@ Parameter Schema and Description:
                     search_params={
                         "filters": extracted_filters,
                         "account": self._account,
+                        "dense_weight": dense_weight,
+                        "sparse_weight": sparse_weight,
+                        "user_context": EnhancedSearchService.extract_user_preferences(self.session.userdata),
                         "top_k": 35,
                         "top_n": 10,
                         "min_score": 0.15,
@@ -1162,12 +1216,24 @@ Parameter Schema and Description:
                             product._matched_filters = result.get('matched_filters', [])
                             products_results.append(product)
                             
-                logger.info(f"Found {len(products_results)} products via enhanced RAG search")
+                logger.info(f"Found {len(products_results)} products via enhanced hybrid RAG search")
                 
-                # Log filter effectiveness
-                if products_results and extracted_filters:
-                    filter_matches = sum(len(p._matched_filters) for p in products_results if hasattr(p, '_matched_filters'))
-                    logger.info(f"Filter effectiveness: {filter_matches} total filter matches across results")
+                # Log filter effectiveness and search performance
+                if products_results:
+                    if extracted_filters:
+                        filter_matches = sum(len(p._matched_filters) for p in products_results if hasattr(p, '_matched_filters'))
+                        logger.info(f"Filter effectiveness: {filter_matches} total filter matches across results")
+                    
+                    # Track search performance metrics
+                    search_metrics = {
+                        'query': query,
+                        'enhanced_query': enhanced_query,
+                        'filters_applied': len(extracted_filters),
+                        'results_returned': len(products_results),
+                        'user_id': self._user_id,
+                        'search_type': 'hybrid' if dense_weight and sparse_weight else 'auto'
+                    }
+                    logger.info("search_performance", extra=search_metrics)
             
             # Format results as markdown
             markdown_results = "# Products (in descending order):\n\nRemember that you are an AI sales agent speaking to a human, so be sure to use natural language to respond and not just a list of products. For example, never say the product URL unless the user specifically asks for it.\n\n"
