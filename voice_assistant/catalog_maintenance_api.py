@@ -99,10 +99,13 @@ class CatalogMaintenanceAPI:
         """
         Perform hybrid search using dense and sparse embeddings.
         
+        Each brand has its own dedicated index, so no brand filtering is needed.
+        The account parameter is used only to select the correct index.
+        
         Args:
             query: Search query
-            account: Brand domain (e.g., "specialized.com")
-            filters: Product filters to apply
+            account: Brand domain (e.g., "specialized.com") - determines index
+            filters: Product filters to apply (category, price, etc.)
             dense_weight: Weight for dense embeddings (0.0-1.0)
             sparse_weight: Weight for sparse embeddings (0.0-1.0)
             user_context: User preferences and context

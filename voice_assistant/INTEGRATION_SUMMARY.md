@@ -35,8 +35,13 @@
 - communication_directive.formality → Search style preference
 - sentiment_analysis → Trust/engagement levels
 - conversation_exit_state → Previous context & resumption
-- Account information → Brand-specific optimizations
 ```
+
+### Brand/Account Handling
+- Each brand has its own dedicated Pinecone index
+- Account is determined by the website (not user preference)
+- No brand filtering needed in search queries
+- Account parameter only used to select the correct index
 
 ### Hybrid Search Flow
 ```

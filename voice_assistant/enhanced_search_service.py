@@ -31,7 +31,6 @@ class EnhancedSearchService(SearchService):
         structure and provides defaults when fields don't exist.
         """
         preferences = {
-            'preferred_brands': [],
             'price_range': None,
             'recent_searches': [],
             'category_interests': {},
@@ -95,7 +94,6 @@ class EnhancedSearchService(SearchService):
 Current Query: {query}
 
 User Preferences:
-- Preferred Brands: {', '.join(user_prefs['preferred_brands']) if user_prefs['preferred_brands'] else 'None specified'}
 - Price Range: {f"${user_prefs['price_range'][0]}-${user_prefs['price_range'][1]}" if user_prefs['price_range'] else 'No preference'}
 - Search Style: {user_prefs['search_style']}
 - Recent Context: {'; '.join(user_prefs['user_context'][:2]) if user_prefs['user_context'] else 'None'}
@@ -117,9 +115,6 @@ Product Knowledge:
         )
         
         # Add user preference filters if not already present
-        if user_prefs['preferred_brands'] and 'brand' not in filters:
-            filters['brand'] = {'$in': user_prefs['preferred_brands']}
-        
         if user_prefs['price_range'] and 'price' not in filters:
             filters['price'] = {
                 '$gte': user_prefs['price_range'][0],
@@ -155,15 +150,14 @@ Product Knowledge:
         query_lower = query.lower()
         is_exact_search = any(indicator in query_lower for indicator in exact_match_indicators)
         
-        # Check if searching for specific brand
-        is_brand_search = 'brand' in filters or any(
-            brand.lower() in query_lower 
-            for brand in user_prefs.get('preferred_brands', [])
-        )
+        # Check if searching for specific brand/model (within the current brand's catalog)
+        is_brand_model_search = any(indicator in query_lower for indicator in [
+            'model', 'series', 'collection', 'line'
+        ])
         
         # Determine weights
-        if is_exact_search or is_brand_search:
-            # Favor sparse embeddings for exact/brand searches
+        if is_exact_search or is_brand_model_search:
+            # Favor sparse embeddings for exact/model searches
             return 0.3, 0.7
         elif user_prefs['search_style'] == 'formal':
             # Slightly favor dense for formal users (more semantic)

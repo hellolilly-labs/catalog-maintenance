@@ -165,6 +165,7 @@ ENABLE_HYBRID_SEARCH = "true"
 HYBRID_SEARCH_DEFAULT_WEIGHTS = "0.7,0.3"  # dense,sparse
 
 # Account-specific RAG configuration
+# Each brand has its own dedicated index - no cross-brand filtering needed
 ACCOUNT_RAG_INDEXES = {
     "specialized.com": "specialized-hybrid-v2",
     "balenciaga.com": "balenciaga-hybrid-v2",
