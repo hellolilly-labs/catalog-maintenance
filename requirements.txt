@@ -10,7 +10,7 @@ aiohttp>=3.8.0
 
 # Storage and Database
 google-cloud-storage>=2.10.0
-pinecone-client>=2.2.0
+pinecone[grpc]>=7.3.0
 
 # Utility Dependencies
 python-dotenv>=1.0.0
@@ -50,7 +50,6 @@ beautifulsoup4>=4.12.0
 google-cloud-storage>=2.10.0
 
 # Vector database and embeddings
-pinecone-client>=3.0.0
 
 # LLM and AI services
 openai>=1.12.0
