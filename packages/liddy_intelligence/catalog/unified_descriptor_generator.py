@@ -748,7 +748,7 @@ JUSTIFICATION: [brief explanation]"""
                 logger.info(f"✅ Loaded product catalog intelligence (quality: {cached_result.get('quality_score', 'unknown')})")
                 return cached_result["content"]
             else:
-                logger.warning(f"⚠️  No product catalog intelligence found - run: python brand_researcher.py --brand {self.brand_domain} --phase product_catalog")
+                logger.warning(f"⚠️  No product catalog intelligence found - run: python brand_intelligence_pipeline.py --brand {self.brand_domain} --phase product_catalog")
                 return ""
                 
         except Exception as e:

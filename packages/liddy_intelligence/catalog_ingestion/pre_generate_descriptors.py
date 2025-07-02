@@ -427,7 +427,7 @@ async def main():
         for summary in research_summary:
             logger.warning(f"     • {summary}")
         logger.warning("   Descriptors will be generated without brand intelligence")
-        logger.warning("   Run brand_researcher.py first for better results")
+        logger.warning("   Run brand_intelligence_pipeline.py first for better results")
     
     # Generate descriptors
     try:

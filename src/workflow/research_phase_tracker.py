@@ -143,14 +143,14 @@ class ResearchPhaseTracker:
         
         # Map phases to their CLI commands
         phase_commands = {
-            "foundation": f"python src/research/brand_researcher.py --brand {brand_domain} --foundation",
-            "market_positioning": f"python src/research/brand_researcher.py --brand {brand_domain} --market-positioning",
-            "product_style": f"python src/research/brand_researcher.py --brand {brand_domain} --product-style",
-            "customer_cultural": f"python src/research/brand_researcher.py --brand {brand_domain} --customer-cultural",
-            "voice_messaging": f"python src/research/brand_researcher.py --brand {brand_domain} --voice-messaging",
-            "interview_synthesis": f"python src/research/brand_researcher.py --brand {brand_domain} --interview-synthesis",
-            "linearity_analysis": f"python src/research/brand_researcher.py --brand {brand_domain} --linearity-analysis",
-            "research_integration": f"python src/research/brand_researcher.py --brand {brand_domain} --research-integration"
+            "foundation": f"python liddy_intelligence/research/brand_intelligence_pipeline.py --brand {brand_domain} --phase foundation_research",
+            "market_positioning": f"python liddy_intelligence/research/brand_intelligence_pipeline.py --brand {brand_domain} --phase market_positioning",
+            "product_style": f"python liddy_intelligence/research/brand_intelligence_pipeline.py --brand {brand_domain} --phase product_style",
+            "customer_cultural": f"python liddy_intelligence/research/brand_intelligence_pipeline.py --brand {brand_domain} --phase customer_cultural",
+            "voice_messaging": f"python liddy_intelligence/research/brand_intelligence_pipeline.py --brand {brand_domain} --phase voice_messaging",
+            "interview_synthesis": f"python liddy_intelligence/research/brand_intelligence_pipeline.py --brand {brand_domain} --phase interview_synthesis",
+            "linearity_analysis": f"python liddy_intelligence/research/brand_intelligence_pipeline.py --brand {brand_domain} --phase linearity_analysis",
+            "research_integration": f"python liddy_intelligence/research/brand_intelligence_pipeline.py --brand {brand_domain} --phase research_integration"
         }
         
         phase_info = self.get_required_research_phases()[next_phase]

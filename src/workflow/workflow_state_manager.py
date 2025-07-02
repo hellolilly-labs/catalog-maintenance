@@ -566,7 +566,7 @@ class WorkflowStateManager:
             WorkflowState.PERSONA_COMPLETE: "✅ Pipeline complete! Brand ready for AI sales agent",
             WorkflowState.PIPELINE_COMPLETE: "✅ Pipeline complete! Run maintenance check if needed",
             WorkflowState.FAILED: "Review errors and retry failed phase",
-            WorkflowState.MAINTENANCE_REQUIRED: f"Run maintenance: python src/research/brand_researcher.py --brand {brand_domain} --auto-refresh"
+            WorkflowState.MAINTENANCE_REQUIRED: f"Run maintenance: python liddy_intelligence/research/brand_intelligence_pipeline.py --brand {brand_domain} --auto-refresh"
         }
         
         return next_steps.get(current_state, "Unknown state - check workflow manually")

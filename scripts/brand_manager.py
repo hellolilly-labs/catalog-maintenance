@@ -83,7 +83,7 @@ def cmd_list_brands(args):
     
     if not brands:
         print("📭 No brands found in the system.")
-        print("\n💡 Start by running: python src/research/brand_researcher.py --brand [domain] --foundation")
+        print("\n💡 Start by running: python liddy_intelligence/research/brand_intelligence_pipeline.py --brand [domain] --phase foundation_research")
         return
     
     print(f"\n📊 Brand Workflow Status ({len(brands)} brands)")

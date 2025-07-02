@@ -4,14 +4,14 @@ Enhanced Brand Research CLI
 Orchestrates the complete 8-phase brand intelligence pipeline per ROADMAP Section 4.2
 
 Usage:
-    python scripts/brand_researcher.py --brand specialized.com --phase foundation_research
-    python scripts/brand_researcher.py --brand specialized.com --phase all  
-    python scripts/brand_researcher.py --brand specialized.com --auto-continue
-    python scripts/brand_researcher.py --brand flexfits.com --auto-continue
-    python scripts/brand_researcher.py --brand flexfits.com --force-regenerate --phase all
-    python scripts/brand_researcher.py --brand darakayejewelry.com --auto-continue
-    python scripts/brand_researcher.py --brand darakayejewelry.com --force-regenerate
-    python scripts/brand_researcher.py --brand specialized.com --force-regenerate
+    python scripts/brand_intelligence_pipeline.py --brand specialized.com --phase foundation_research
+    python scripts/brand_intelligence_pipeline.py --brand specialized.com --phase all  
+    python scripts/brand_intelligence_pipeline.py --brand specialized.com --auto-continue
+    python scripts/brand_intelligence_pipeline.py --brand flexfits.com --auto-continue
+    python scripts/brand_intelligence_pipeline.py --brand flexfits.com --force-regenerate --phase all
+    python scripts/brand_intelligence_pipeline.py --brand darakayejewelry.com --auto-continue
+    python scripts/brand_intelligence_pipeline.py --brand darakayejewelry.com --force-regenerate
+    python scripts/brand_intelligence_pipeline.py --brand specialized.com --force-regenerate
 """
 
 import asyncio
