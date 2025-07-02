@@ -9,16 +9,20 @@ Migrating from separate `catalog-maintenance` and `voice-service` repositories t
 - [x] Create package directory structure
 - [x] Create package __init__ files
 - [x] Create root pyproject.toml
-- [ ] Update .gitignore for monorepo
-- [ ] Create development setup script
+- [x] Update .gitignore for monorepo
+- [x] Create development setup script
 
-### Phase 2: Core Package Extraction (Next)
-- [ ] Move shared models to packages/liddy/models/
-- [ ] Move storage to packages/liddy/storage/
-- [ ] Move search to packages/liddy/search/
-- [ ] Move account_manager to packages/liddy/account_manager/
-- [ ] Move product_manager to packages/liddy/product_manager/
-- [ ] Update imports in moved files
+### Phase 2: Core Package Extraction ✅ (In Progress)
+- [x] Move shared models to packages/liddy/models/
+- [x] Move storage to packages/liddy/storage/
+- [x] Move search to packages/liddy/search/
+- [x] Move account_manager to packages/liddy/account_manager/
+- [x] Move product_manager to packages/liddy/models/ (kept with product.py)
+- [x] Move prompt_manager to packages/liddy/prompt_manager/
+- [x] Update imports in moved files
+- [x] Clean up old documentation and test files
+- [x] Create organized test structure
+- [x] Move main intelligence entry points
 
 ### Phase 3: Intelligence Package Setup
 - [ ] Move research modules to packages/liddy_intelligence/research/
