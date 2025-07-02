@@ -22,20 +22,20 @@ import time
 from typing import Dict, Any, Optional
 
 # Import all research phase implementations
-from src.research.base_researcher import BaseResearcher
-from src.research.foundation_research import get_foundation_researcher
-from src.research.market_positioning_research import get_market_positioning_researcher
-from src.research.product_style_research import get_product_style_researcher
-from src.research.brand_style_research import get_brand_style_researcher
-from src.research.customer_cultural_research import get_customer_cultural_researcher
-from src.research.voice_messaging_research import get_voice_messaging_researcher
-from src.research.interview_synthesis_research import get_interview_synthesis_researcher
-from src.research.linearity_analysis_research import get_linearity_analysis_researcher
-from src.research.product_catalog_research import get_product_catalog_researcher
-from src.research.research_integration import get_research_integration_processor
+from liddy_intelligence.research.base_researcher import BaseResearcher
+from liddy_intelligence.research.foundation_research import get_foundation_researcher
+from liddy_intelligence.research.market_positioning_research import get_market_positioning_researcher
+from liddy_intelligence.research.product_style_research import get_product_style_researcher
+from liddy_intelligence.research.brand_style_research import get_brand_style_researcher
+from liddy_intelligence.research.customer_cultural_research import get_customer_cultural_researcher
+from liddy_intelligence.research.voice_messaging_research import get_voice_messaging_researcher
+from liddy_intelligence.research.interview_synthesis_research import get_interview_synthesis_researcher
+from liddy_intelligence.research.linearity_analysis_research import get_linearity_analysis_researcher
+from liddy_intelligence.research.product_catalog_research import get_product_catalog_researcher
+from liddy_intelligence.research.research_integration import get_research_integration_processor
 
 # Workflow management - import WorkflowState directly
-from src.workflow.workflow_state_manager import get_workflow_manager
+from liddy_intelligence.workflow.workflow_state_manager import get_workflow_manager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

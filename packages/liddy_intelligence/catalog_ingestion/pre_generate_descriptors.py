@@ -32,17 +32,17 @@ from typing import Dict, List, Any
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.catalog.unified_descriptor_generator import generate_descriptors, UnifiedDescriptorGenerator, DescriptorConfig
-from src.models.product_manager import get_product_manager
-from src.models.product import Product
-from src.llm.simple_factory import LLMFactory
+from liddy_intelligence.catalog.unified_descriptor_generator import generate_descriptors, UnifiedDescriptorGenerator, DescriptorConfig
+from liddy.models.product_manager import get_product_manager
+from liddy.models.product import Product
+from liddy_intelligence.llm.simple_factory import LLMFactory
 
 # Import researcher classes
-from src.research.foundation_research import get_foundation_researcher
-from src.research.voice_messaging_research import get_voice_messaging_researcher
-from src.research.product_style_research import get_product_style_researcher
-from src.research.market_positioning_research import get_market_positioning_researcher
-from src.research.customer_cultural_research import get_customer_cultural_researcher
+from liddy_intelligence.research.foundation_research import get_foundation_researcher
+from liddy_intelligence.research.voice_messaging_research import get_voice_messaging_researcher
+from liddy_intelligence.research.product_style_research import get_product_style_researcher
+from liddy_intelligence.research.market_positioning_research import get_market_positioning_researcher
+from liddy_intelligence.research.customer_cultural_research import get_customer_cultural_researcher
 
 # Configure logging
 logging.basicConfig(

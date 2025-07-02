@@ -24,12 +24,16 @@ Migrating from separate `catalog-maintenance` and `voice-service` repositories t
 - [x] Create organized test structure
 - [x] Move main intelligence entry points
 
-### Phase 3: Intelligence Package Setup
-- [ ] Move research modules to packages/liddy_intelligence/research/
-- [ ] Move ingestion modules to packages/liddy_intelligence/ingestion/
-- [ ] Move agents to packages/liddy_intelligence/agents/
-- [ ] Move workflow to packages/liddy_intelligence/workflow/
-- [ ] Update imports
+### Phase 3: Intelligence Package Setup ✅
+- [x] Move research modules to packages/liddy_intelligence/research/
+- [x] Move ingestion modules to packages/liddy_intelligence/ingestion/
+- [x] Move agents to packages/liddy_intelligence/agents/
+- [x] Move workflow to packages/liddy_intelligence/workflow/
+- [x] Move llm modules to packages/liddy_intelligence/llm/
+- [x] Move catalog modules to packages/liddy_intelligence/catalog/
+- [x] Move progress_tracker to packages/liddy_intelligence/
+- [x] Update imports with custom scripts
+- [x] Fix incorrect import paths
 
 ### Phase 4: Voice Package Integration
 - [ ] Copy voice-service/spence to packages/liddy_voice/

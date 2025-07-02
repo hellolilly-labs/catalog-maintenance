@@ -20,12 +20,12 @@ from pinecone import Pinecone
 import numpy as np
 
 # Import our components
-from src.models.product import Product
-from src.models.product_manager import ProductManager
-from src.storage import get_account_storage_provider
-from src.llm.simple_factory import LLMFactory
-from src.llm.prompt_manager import PromptManager
-from src.search.search_service import SearchService, SearchMetrics
+from liddy.models.product import Product
+from liddy.models.product_manager import ProductManager
+from liddy.storage import get_account_storage_provider
+from liddy_intelligence.llm.simple_factory import LLMFactory
+from liddy.prompt_manager import PromptManager
+from liddy.search.service import SearchService, SearchMetrics
 from test_search_comparison import (
     BaselineSearchIndex, 
     SearchResult, 
@@ -341,7 +341,7 @@ class VoiceSearchComparator:
         await self.assistant_simulator.load_system_prompt()
         
         # Initialize search systems
-        from src.search.search_pinecone import PineconeRAG
+        from liddy.search.pinecone import PineconeRAG
         self.enhanced_search = PineconeRAG(
             brand_domain=self.account,
             dense_index_name=f"{self.account.replace('.', '-')}-dense",
