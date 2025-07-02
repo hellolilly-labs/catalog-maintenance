@@ -261,7 +261,7 @@ class EnhancedBrandResearcher:
 
 async def main():
     parser = argparse.ArgumentParser(description="Enhanced Brand Research CLI")
-    parser.add_argument("--brand", required=True, help="Brand domain (e.g., specialized.com)")
+    parser.add_argument("brand", help="Brand domain (e.g., specialized.com)")
     parser.add_argument("--phase", help="Specific research phase to run (use 'all' for complete pipeline)")
     parser.add_argument("--auto-continue", action="store_true", help="Continue from current research state")
     parser.add_argument("--force-regenerate", action="store_true", help="Force regenerate even if cached")

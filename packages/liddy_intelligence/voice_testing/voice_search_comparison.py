@@ -1083,7 +1083,7 @@ async def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Voice-realistic search comparison")
-    parser.add_argument("--account", default="flexfits.com", help="Brand account")
+    parser.add_argument("account", nargs='?', default="flexfits.com", help="Brand account (default: flexfits.com)")
     parser.add_argument("--setup-baseline", action="store_true", help="Setup baseline index")
     
     args = parser.parse_args()

@@ -9,6 +9,7 @@ This directory contains simple runner scripts for manually executing and debuggi
 python run/brand_research.py specialized.com
 python run/brand_research.py specialized.com --phase foundation
 python run/brand_research.py specialized.com --auto-continue
+python run/brand_research.py specialized.com --status
 ```
 
 ### 2. Product Descriptor Generation
