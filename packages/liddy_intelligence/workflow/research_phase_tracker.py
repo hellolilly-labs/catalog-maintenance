@@ -79,7 +79,7 @@ class ResearchPhaseTracker:
         if not self.workflow_manager:
             return "foundation"  # Default start
             
-        workflow_info = self.workflow_manager.get_brand_info(brand_domain)
+        workflow_info = self.workflow_manager.get_brand_info_sync(brand_domain)
         
         # Check each required phase in order
         phase_order = [
@@ -108,7 +108,7 @@ class ResearchPhaseTracker:
         if not self.workflow_manager:
             return {"error": "No workflow manager available"}
             
-        workflow_info = self.workflow_manager.get_brand_info(brand_domain)
+        workflow_info = self.workflow_manager.get_brand_info_sync(brand_domain)
         required_phases = self.get_required_research_phases()
         completed_phases = [
             phase for phase in required_phases.keys() 
