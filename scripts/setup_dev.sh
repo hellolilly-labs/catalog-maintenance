@@ -26,7 +26,18 @@ pip install --upgrade pip
 # Install the packages in editable mode
 echo "📚 Installing packages in editable mode..."
 
-# Install core package
+# Install individual packages
+echo "📦 Installing liddy core package..."
+pip install -e packages/liddy/
+
+echo "📦 Installing liddy_intelligence package..."
+pip install -e packages/liddy_intelligence/
+
+echo "📦 Installing liddy_voice package (placeholder)..."
+pip install -e packages/liddy_voice/
+
+# Install main dependencies from root pyproject.toml
+echo "📦 Installing main dependencies..."
 pip install -e ".[dev]"
 
 # Check which optional dependencies to install
