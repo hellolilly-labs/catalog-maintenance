@@ -476,11 +476,11 @@ class BaseResearcher:
             if hasattr(self.storage_manager, 'base_dir'):
                 import os
                 # Local storage
-                research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research_phases")
+                research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research", phase_name)
                 os.makedirs(research_dir, exist_ok=True)
                 
                 # Save content
-                content_path = os.path.join(research_dir, f"{phase_name}_research.md")
+                content_path = os.path.join(research_dir, "research.md")
                 with open(content_path, "w") as f:
                     f.write(research_results.get("content", ""))
                 saved_files.append(content_path)
@@ -495,7 +495,7 @@ class BaseResearcher:
                     "quality_warning": research_results.get("quality_warning", False)
                 }
                 
-                metadata_path = os.path.join(research_dir, f"{phase_name}_research_metadata.json")
+                metadata_path = os.path.join(research_dir, "research_metadata.json")
                 with open(metadata_path, "w") as f:
                     json.dump(metadata, f, indent=2)
                 saved_files.append(metadata_path)
@@ -508,17 +508,17 @@ class BaseResearcher:
                     "collection_timestamp": datetime.now().isoformat() + "Z"
                 }
                 
-                sources_path = os.path.join(research_dir, f"{phase_name}_research_sources.json")
+                sources_path = os.path.join(research_dir, "research_sources.json")
                 with open(sources_path, "w") as f:
                     json.dump(sources_data, f, indent=2)
                 saved_files.append(sources_path)
                 
             else:
                 # GCP storage
-                research_dir = f"accounts/{brand_domain}/research_phases"
+                research_dir = f"accounts/{brand_domain}/research/{phase_name}"
                 
                 # Save content
-                content_blob = f"{research_dir}/{phase_name}_research.md"
+                content_blob = f"{research_dir}/research.md"
                 blob = self.storage_manager.bucket.blob(content_blob)
                 blob.upload_from_string(research_results.get("content", ""))
                 saved_files.append(content_blob)
@@ -533,7 +533,7 @@ class BaseResearcher:
                     "quality_warning": research_results.get("quality_warning", False)
                 }
                 
-                metadata_blob = f"{research_dir}/{phase_name}_research_metadata.json"
+                metadata_blob = f"{research_dir}/research_metadata.json"
                 blob = self.storage_manager.bucket.blob(metadata_blob)
                 blob.upload_from_string(json.dumps(metadata, indent=2))
                 saved_files.append(metadata_blob)
@@ -546,7 +546,7 @@ class BaseResearcher:
                     "collection_timestamp": datetime.now().isoformat() + "Z"
                 }
                 
-                sources_blob = f"{research_dir}/{phase_name}_research_sources.json"
+                sources_blob = f"{research_dir}/research_sources.json"
                 blob = self.storage_manager.bucket.blob(sources_blob)
                 blob.upload_from_string(json.dumps(sources_data, indent=2))
                 saved_files.append(sources_blob)
