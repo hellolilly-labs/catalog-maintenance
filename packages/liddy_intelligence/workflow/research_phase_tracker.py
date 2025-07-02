@@ -74,12 +74,12 @@ class ResearchPhaseTracker:
             }
         }
     
-    def get_next_research_phase(self, brand_domain: str) -> Optional[str]:
+    async def get_next_research_phase(self, brand_domain: str) -> Optional[str]:
         """Get the next research phase that needs to be completed"""
         if not self.workflow_manager:
             return "foundation"  # Default start
             
-        workflow_info = self.workflow_manager.get_brand_info_sync(brand_domain)
+        workflow_info = await self.workflow_manager.get_brand_info(brand_domain)
         
         # Check each required phase in order
         phase_order = [
@@ -99,9 +99,9 @@ class ResearchPhaseTracker:
         
         return None  # All phases complete
     
-    def are_all_research_phases_complete(self, brand_domain: str) -> bool:
+    async def are_all_research_phases_complete(self, brand_domain: str) -> bool:
         """Check if all required research phases are complete"""
-        return self.get_next_research_phase(brand_domain) is None
+        return await self.get_next_research_phase(brand_domain) is None
     
     def get_research_progress_summary(self, brand_domain: str) -> Dict[str, Any]:
         """Get detailed research progress summary"""
@@ -133,9 +133,9 @@ class ResearchPhaseTracker:
             ]
         }
     
-    def get_next_step_command(self, brand_domain: str) -> str:
+    async def get_next_step_command(self, brand_domain: str) -> str:
         """Get the specific command for the next research phase"""
-        next_phase = self.get_next_research_phase(brand_domain)
+        next_phase = await self.get_next_research_phase(brand_domain)
         
         if not next_phase:
             # All research complete - ready for catalog

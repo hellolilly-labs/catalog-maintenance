@@ -554,7 +554,7 @@ class WorkflowStateManager:
             from liddy_intelligence.workflow.research_phase_tracker import get_research_phase_tracker
             
             research_tracker = get_research_phase_tracker(self)
-            return research_tracker.get_next_step_command(brand_domain)
+            return await research_tracker.get_next_step_command(brand_domain)
         
         next_steps = {
             WorkflowState.RESEARCH_COMPLETE: f"Start product catalog ingestion: python src/product_ingestor.py --full-sync --brand {brand_domain}",
