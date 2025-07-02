@@ -131,8 +131,10 @@ class EnhancedBrandResearcher:
             try:
                 # Check if phase is already complete (unless force refresh)
                 if not force_refresh and continue_from_current:
-                    phase_status = await self.workflow_manager.get_research_phase_status(brand_domain, phase_key)
-                    if phase_status == "complete":
+                    # Get completed phases from progress summary
+                    progress = await self.workflow_manager.get_research_progress_summary(brand_domain)
+                    completed_phases = progress.get("completed_phases", [])
+                    if phase_key in completed_phases:
                         logger.info(f"⏭️ Skipping {phase_key} - already complete")
                         results[phase_key] = {"phase": phase_key, "success": True, "skipped": True}
                         continue
@@ -245,10 +247,14 @@ class EnhancedBrandResearcher:
         progress_summary = await self.workflow_manager.get_research_progress_summary(brand_domain)
         current_state = await self.workflow_manager.get_brand_state(brand_domain)
         
-        # Get phase-by-phase status
+        # Get phase-by-phase status based on completed phases
         phase_statuses = {}
+        completed_phases = progress_summary.get("completed_phases", [])
         for phase_key in self.workflow_manager.get_required_research_phases().keys():
-            phase_statuses[phase_key] = await self.workflow_manager.get_research_phase_status(brand_domain, phase_key)
+            if phase_key in completed_phases:
+                phase_statuses[phase_key] = "complete"
+            else:
+                phase_statuses[phase_key] = "not_started"
         
         return {
             "brand": brand_domain,
