@@ -73,4 +73,4 @@ logs/
 
 # Cache
 .cache/
-.pytest_cache/
+.pytest_cache/voice_search_results/
