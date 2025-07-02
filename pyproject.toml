@@ -1,0 +1,99 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "liddy"
+version = "0.1.0"
+description = "Liddy AI Platform - Brand Intelligence and Voice Assistant Services"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "Proprietary"}
+authors = [
+    {name = "Liddy AI", email = "engineering@liddy.ai"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+# Core dependencies used by all packages
+dependencies = [
+    "pydantic>=2.0",
+    "aiohttp>=3.8",
+    "python-dotenv>=1.0",
+    "tenacity>=8.0",
+]
+
+[project.optional-dependencies]
+# Development tools
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "ruff>=0.1",
+    "mypy>=1.0",
+    "pre-commit>=3.0",
+]
+
+# Liddy Intelligence Engine dependencies
+intelligence = [
+    "anthropic>=0.5.0",
+    "openai>=1.0",
+    "google-generativeai>=0.3.0",
+    "google-cloud-storage>=2.10",
+    "langfuse>=2.0",
+    "pinecone-client>=3.0",
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "beautifulsoup4>=4.12",
+    "tavily-python>=0.2.0",
+]
+
+# Liddy Voice Assistant dependencies
+voice = [
+    "livekit>=0.1.0",
+    "livekit-agents>=0.1.0",
+    "redis>=5.0",
+    "httpx>=0.25",
+]
+
+# Install everything
+all = ["liddy[intelligence]", "liddy[voice]", "liddy[dev]"]
+
+[project.urls]
+"Homepage" = "https://liddy.ai"
+"Repository" = "https://github.com/hellolilly-labs/python-liddy"
+"Documentation" = "https://docs.liddy.ai"
+
+[tool.setuptools.packages.find]
+where = ["packages"]
+include = ["liddy*"]
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+
+[tool.ruff]
+line-length = 88
+select = ["E", "F", "I", "N", "UP", "YTT", "B", "A", "C4", "T10", "ISC", "ICN", "PIE", "PT", "RET", "SIM", "ERA"]
+ignore = ["E501", "B008", "B905"]
+target-version = "py39"
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+asyncio_mode = "auto"

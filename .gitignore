@@ -73,4 +73,21 @@ logs/
 
 # Cache
 .cache/
-.pytest_cache/voice_search_results/
+.pytest_cache/
+
+# Test outputs
+voice_search_results/
+test_results/
+coverage/
+.coverage
+htmlcov/
+
+# Local data
+local/
+data/
+conversation_storage/
+
+# Monorepo specific
+packages/*/dist/
+packages/*/.pytest_cache/
+packages/*/coverage/
