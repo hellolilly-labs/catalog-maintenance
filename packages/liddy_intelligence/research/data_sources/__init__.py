@@ -12,7 +12,7 @@ Usage:
     data = await web_source.gather(queries, context)
 """
 
-from liddy_intelligence.llm.base import DataSource, DataGatheringContext, DataGatheringResult
+from liddy_intelligence.research.data_sources.base import DataSource, DataGatheringContext, DataGatheringResult
 from liddy_intelligence.research.data_sources.web_search import WebSearchDataSource
 from liddy_intelligence.research.data_sources.product_catalog import ProductCatalogDataSource
 

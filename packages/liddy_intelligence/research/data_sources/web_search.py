@@ -7,7 +7,7 @@ Extracts and centralizes the common web search patterns from researcher implemen
 
 import logging
 from typing import List, Dict, Any
-from liddy_intelligence.llm.base import DataSource, DataGatheringContext, DataGatheringResult
+from liddy_intelligence.research.data_sources.base import DataSource, DataGatheringContext, DataGatheringResult
 
 logger = logging.getLogger(__name__)
 
