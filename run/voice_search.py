@@ -12,9 +12,11 @@ import sys
 import os
 
 # Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+sys.path.insert(0, os.path.join(project_root, 'packages'))
 
-from packages.liddy_intelligence.voice_testing.voice_search_comparison import main
+from liddy_intelligence.voice_testing.voice_search_comparison import main
 
 if __name__ == "__main__":
     # Pass through all arguments except the script name
