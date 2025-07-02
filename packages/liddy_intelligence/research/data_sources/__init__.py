@@ -13,7 +13,7 @@ Usage:
 """
 
 from liddy_intelligence.llm.base import DataSource, DataGatheringContext, DataGatheringResult
-from liddy_intelligence.ingestion.web_search import WebSearchDataSource
-from liddy_intelligence.ingestion.product_catalog import ProductCatalogDataSource
+from liddy_intelligence.research.data_sources.web_search import WebSearchDataSource
+from liddy_intelligence.research.data_sources.product_catalog import ProductCatalogDataSource
 
 __all__ = ['DataSource', 'DataGatheringContext', 'DataGatheringResult', 'WebSearchDataSource', 'ProductCatalogDataSource']
