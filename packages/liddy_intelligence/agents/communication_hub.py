@@ -14,8 +14,8 @@ from typing import Dict, Any, List, Optional, Type
 
 from liddy_intelligence.agents.base_agent import BaseAgent, AgentInsight
 from liddy_intelligence.agents.context import ConversationContext, EnhancedContext
-from liddy_intelligence.ingestion.prompt_generator import create_prompt_generator
-from liddy_intelligence.ingestion.product_intelligence_agent import create_product_intelligence_agent
+from liddy_intelligence.agents.prompt_generator import create_prompt_generator
+from liddy_intelligence.agents.product_intelligence_agent import create_product_intelligence_agent
 
 logger = logging.getLogger(__name__)
 

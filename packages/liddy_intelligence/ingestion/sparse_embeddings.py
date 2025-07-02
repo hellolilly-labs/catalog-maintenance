@@ -14,8 +14,8 @@ from collections import Counter
 import numpy as np
 from rank_bm25 import BM25Okapi
 
-from liddy_intelligence.ingestion..models.product import Product
-from liddy_intelligence.ingestion..storage import get_account_storage_provider
+from liddy.models.product import Product
+from liddy.storage import get_account_storage_provider
 
 logger = logging.getLogger(__name__)
 

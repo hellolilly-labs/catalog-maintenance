@@ -27,6 +27,9 @@ python-liddy/
 python3 -m venv venv
 source venv/bin/activate
 
+# Install the packages
+./scripts/install_packages.sh
+
 # Install in development mode
 ./scripts/setup_dev.sh
 ```

@@ -21,8 +21,8 @@ from liddy_intelligence.ingestion.universal_product_processor import UniversalPr
 # Removed custom sparse embeddings - using Pinecone's sparse model instead
 from liddy_intelligence.ingestion.stt_vocabulary_extractor import STTVocabularyExtractor
 from liddy_intelligence.catalog.unified_descriptor_generator import UnifiedDescriptorGenerator
-from liddy_intelligence.ingestion..storage import get_account_storage_provider
-from liddy_intelligence.ingestion..models.product import Product
+from liddy.storage import get_account_storage_provider
+from liddy.models.product import Product
 
 logger = logging.getLogger(__name__)
 
