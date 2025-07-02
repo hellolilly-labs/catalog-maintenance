@@ -217,10 +217,19 @@ class ScoreReasoning:
     
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "ScoreReasoning":
-        return ScoreReasoning(
-            score=float(data["score"]),
-            reasoning=data["reasoning"]
-        )
+        # Get the valid field names from the ScoreReasoning dataclass
+        import inspect
+        sig = inspect.signature(ScoreReasoning.__init__)
+        valid_fields = list(sig.parameters.keys())
+        
+        # Filter the input dict to only include valid fields
+        filtered_dict = {}
+        for key, value in data.items():
+            if key in valid_fields:
+                filtered_dict[key] = value
+        
+        # Create the ScoreReasoning instance with only valid fields
+        return ScoreReasoning(**filtered_dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -236,11 +245,19 @@ class AnalysisWeight:
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "AnalysisWeight":
-        return AnalysisWeight(
-            value=data["value"],
-            weight=float(data["weight"]),
-            reason=data["reason"]
-        )
+        # Get the valid field names from the AnalysisWeight dataclass
+        import inspect
+        sig = inspect.signature(AnalysisWeight.__init__)
+        valid_fields = list(sig.parameters.keys())
+        
+        # Filter the input dict to only include valid fields
+        filtered_dict = {}
+        for key, value in data.items():
+            if key in valid_fields:
+                filtered_dict[key] = value
+        
+        # Create the AnalysisWeight instance with only valid fields
+        return AnalysisWeight(**filtered_dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -257,10 +274,22 @@ class CommunicationDirective:
     
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "CommunicationDirective":
-        return CommunicationDirective(
-            directive=data["directive"],
-            formality=ScoreReasoning.from_dict(data["formality"])
-        )
+        # Get the valid field names from the CommunicationDirective dataclass
+        import inspect
+        sig = inspect.signature(CommunicationDirective.__init__)
+        valid_fields = list(sig.parameters.keys())
+        
+        # Filter the input dict to only include valid fields
+        filtered_dict = {}
+        for key, value in data.items():
+            if key in valid_fields:
+                if key == 'formality' and value is not None:
+                    filtered_dict['formality'] = ScoreReasoning.from_dict(value)
+                else:
+                    filtered_dict[key] = value
+        
+        # Create the CommunicationDirective instance with only valid fields
+        return CommunicationDirective(**filtered_dict)
     
     def to_dict(self) -> Dict[str, Any]:
         return {

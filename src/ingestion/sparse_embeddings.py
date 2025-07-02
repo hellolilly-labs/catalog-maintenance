@@ -1,26 +1,28 @@
 """
-Sparse Embedding Generation for Hybrid Search
+Sparse Embedding Generation using rank-bm25
 
-Implements BM25-inspired sparse embeddings for keyword precision in product search.
+Implements BM25-based sparse embeddings using the proven rank-bm25 library
+while maintaining custom brand-specific term weighting and Pinecone compatibility.
 """
 
 import re
-import math
 import json
 import logging
-from typing import Dict, List, Tuple, Set, Any
-from collections import Counter, defaultdict
-from pathlib import Path
+from typing import Dict, List, Tuple
+from collections import Counter
 
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
+from rank_bm25 import BM25Okapi
+
+from ..models.product import Product
+from ..storage import get_account_storage_provider
 
 logger = logging.getLogger(__name__)
 
 
 class SparseEmbeddingGenerator:
     """
-    Generates sparse embeddings for products using BM25-inspired scoring.
+    Generates sparse embeddings for products using rank-bm25 library.
     
     This approach creates keyword-based representations that complement
     dense embeddings for improved search accuracy, especially for:
@@ -34,99 +36,164 @@ class SparseEmbeddingGenerator:
         self.brand_domain = brand_domain
         self.max_features = max_features
         
+        # Initialize storage provider
+        self.storage = get_account_storage_provider()
+        
         # Brand-specific term weights
         self.term_importance = self._load_term_importance()
         
-        # Initialize vocabulary (can be persisted)
+        # BM25 instance (initialized when vocabulary is built)
+        self.bm25 = None
+        self.corpus_tokens = []
+        
+        # Vocabulary mappings
         self.vocabulary = {}
         self.inverse_vocabulary = {}
-        self.next_index = 0
         
-        # Try to load existing vocabulary
-        self._load_vocabulary()
+        # Vocabulary will be loaded when needed
+        self._vocabulary_loaded = False
         
-        # Document frequency for IDF calculation
-        self.document_frequencies = defaultdict(int)
-        self.total_documents = 0
-        
-        # BM25 parameters
-        self.k1 = 1.2  # Term frequency saturation
-        self.b = 0.75   # Length normalization
-        
-        logger.info(f"📊 Initialized Sparse Embedding Generator for {brand_domain}")
+        logger.info(f"📊 Initialized BM25-based Sparse Embedding Generator for {brand_domain}")
     
-    def build_vocabulary(self, products: List[Dict[str, Any]]) -> None:
+    async def build_vocabulary(self, products: List[Product]) -> None:
         """
-        Build vocabulary from product catalog for consistent indexing.
+        Build vocabulary and BM25 model from product catalog.
+        
+        Args:
+            products: List of Product objects
         """
         logger.info(f"🔨 Building vocabulary from {len(products)} products")
         
-        # Extract all terms from products
-        all_terms = []
+        # Try to load existing vocabulary first
+        if not self._vocabulary_loaded:
+            await self._load_vocabulary()
+            self._vocabulary_loaded = True
+        
+        # Convert products to tokenized documents
+        self.corpus_tokens = []
+        all_tokens = set()
+        
         for product in products:
-            terms = self._extract_product_terms(product)
-            all_terms.extend(terms)
+            tokens = self._extract_and_weight_tokens(product)
+            # For BM25, we need just the tokens (not weights yet)
+            doc_tokens = []
+            for token, weight in tokens:
+                # Repeat tokens based on weight (simple but effective)
+                repeat_count = max(1, int(weight))
+                doc_tokens.extend([token] * repeat_count)
+            
+            self.corpus_tokens.append(doc_tokens)
+            all_tokens.update(doc_tokens)
         
-        # Count term frequencies
-        term_counts = Counter(all_terms)
+        # Build vocabulary from unique tokens
+        # Sort for consistent ordering
+        sorted_tokens = sorted(all_tokens)
         
-        # Select top features
-        top_terms = [term for term, _ in term_counts.most_common(self.max_features)]
+        # Limit to max_features if necessary
+        if len(sorted_tokens) > self.max_features:
+            # Count token frequencies across all documents
+            token_counts = Counter()
+            for doc_tokens in self.corpus_tokens:
+                token_counts.update(doc_tokens)
+            
+            # Keep most common tokens
+            most_common = token_counts.most_common(self.max_features)
+            sorted_tokens = sorted([token for token, _ in most_common])
         
-        # Build vocabulary mapping
-        self.vocabulary = {term: idx for idx, term in enumerate(top_terms)}
-        self.inverse_vocabulary = {idx: term for term, idx in self.vocabulary.items()}
+        # Create vocabulary mappings
+        self.vocabulary = {token: idx for idx, token in enumerate(sorted_tokens)}
+        self.inverse_vocabulary = {idx: token for token, idx in self.vocabulary.items()}
         
-        # Calculate document frequencies
-        for product in products:
-            unique_terms = set(self._extract_product_terms(product))
-            for term in unique_terms:
-                if term in self.vocabulary:
-                    self.document_frequencies[term] += 1
+        # Filter corpus tokens to only include vocabulary terms
+        filtered_corpus = []
+        for doc_tokens in self.corpus_tokens:
+            filtered_tokens = [t for t in doc_tokens if t in self.vocabulary]
+            filtered_corpus.append(filtered_tokens)
         
-        self.total_documents = len(products)
+        self.corpus_tokens = filtered_corpus
+        
+        # Initialize BM25 model
+        self.bm25 = BM25Okapi(
+            self.corpus_tokens,
+            k1=1.2,  # term frequency saturation
+            b=0.75,  # length normalization
+            epsilon=0.25  # floor value for IDF
+        )
         
         logger.info(f"✅ Built vocabulary with {len(self.vocabulary)} terms")
+        logger.info(f"   Average document length: {np.mean([len(doc) for doc in self.corpus_tokens]):.1f} tokens")
         
-        # Save vocabulary for persistence
-        self._save_vocabulary()
+        # Save vocabulary and model data
+        await self._save_vocabulary()
     
     def generate_sparse_embedding(
         self,
-        product: Dict[str, Any],
-        enhanced_data: Dict[str, Any]
+        product: Product
     ) -> Dict[str, List[float]]:
         """
         Generate sparse embedding for a single product.
         
+        Args:
+            product: Product object
+            
         Returns:
             Dictionary with 'indices' and 'values' for sparse representation
         """
-        # Extract and weight terms
-        term_weights = self._calculate_term_weights(product, enhanced_data)
+        if not self.bm25:
+            logger.warning("BM25 model not initialized. Building vocabulary first...")
+            return {'indices': [], 'values': []}
+        
+        # Extract tokens with weights for the query product
+        query_tokens_weighted = self._extract_and_weight_tokens(product)
+        
+        # Create query document with repeated tokens based on weights
+        query_doc = []
+        for token, weight in query_tokens_weighted:
+            if token in self.vocabulary:
+                repeat_count = max(1, int(weight))
+                query_doc.extend([token] * repeat_count)
+        
+        # For sparse embeddings, we want the token-level scores
+        # not document-level scores, so we calculate them directly
+        token_scores = {}
+        
+        # Calculate importance scores for each unique token in the query
+        for token in set(query_doc):
+            if token in self.vocabulary:
+                # Get IDF score from BM25 model
+                if hasattr(self.bm25, 'idf') and token in self.bm25.idf:
+                    idf_score = self.bm25.idf[token]
+                else:
+                    # Fallback: calculate IDF manually
+                    doc_freq = sum(1 for doc in self.corpus_tokens if token in doc)
+                    idf_score = np.log((len(self.corpus_tokens) - doc_freq + 0.5) / (doc_freq + 0.5))
+                
+                # Apply term frequency from the query
+                tf = query_doc.count(token)
+                # BM25 term frequency saturation
+                tf_component = (tf * (self.bm25.k1 + 1)) / (tf + self.bm25.k1)
+                
+                # Combine IDF, TF, and brand-specific importance
+                brand_boost = self.term_importance.get(token, 1.0)
+                token_scores[token] = idf_score * tf_component * brand_boost
         
         # Convert to sparse vector format
         indices = []
         values = []
         
-        for term, weight in term_weights.items():
-            if term in self.vocabulary:
-                idx = self.vocabulary[term]
-                indices.append(idx)
-                values.append(weight)
+        for token, score in token_scores.items():
+            idx = self.vocabulary[token]
+            indices.append(idx)
+            values.append(score)
         
         # Sort by index for consistency
-        sorted_pairs = sorted(zip(indices, values))
-        if sorted_pairs:
+        if indices:
+            sorted_pairs = sorted(zip(indices, values))
             indices, values = zip(*sorted_pairs)
             indices = list(indices)
             values = list(values)
-        else:
-            indices = []
-            values = []
-        
-        # Normalize values
-        if values:
+            
+            # Normalize values to [0, 1] range
             max_val = max(values)
             if max_val > 0:
                 values = [v / max_val for v in values]
@@ -136,148 +203,145 @@ class SparseEmbeddingGenerator:
             'values': values
         }
     
-    def _extract_product_terms(self, product: Dict[str, Any]) -> List[str]:
-        """
-        Extract all relevant terms from a product.
-        """
-        terms = []
-        
-        # Extract from universal fields
-        universal = product.get('universal_fields', {})
-        
-        # Brand (highest importance)
-        if universal.get('brand'):
-            brand = universal['brand'].lower()
-            terms.extend(self._tokenize(brand))
-            terms.append(brand)  # Also keep full brand
-        
-        # Product name
-        if universal.get('name'):
-            name = universal['name'].lower()
-            terms.extend(self._tokenize(name))
-            # Also extract model numbers/codes
-            model_numbers = self._extract_model_numbers(name)
-            terms.extend(model_numbers)
-        
-        # Categories
-        for category in universal.get('category', []):
-            terms.extend(self._tokenize(category.lower()))
-        
-        # Description
-        if universal.get('description'):
-            desc_terms = self._tokenize(universal['description'].lower())
-            terms.extend(desc_terms[:50])  # Limit description terms
-        
-        # Search keywords
-        for keyword in product.get('search_keywords', []):
-            terms.append(keyword.lower())
-        
-        # Filter metadata
-        for key, value in product.get('filter_metadata', {}).items():
-            if isinstance(value, str):
-                terms.extend(self._tokenize(value.lower()))
-            elif isinstance(value, list):
-                for v in value:
-                    if isinstance(v, str):
-                        terms.extend(self._tokenize(v.lower()))
-        
-        # Key selling points
-        for point in product.get('key_selling_points', []):
-            point_terms = self._tokenize(point.lower())
-            terms.extend(point_terms[:10])  # Limit per point
-        
-        return terms
-    
-    def _calculate_term_weights(
+    def _extract_and_weight_tokens(
         self,
-        product: Dict[str, Any],
-        enhanced_data: Dict[str, Any]
-    ) -> Dict[str, float]:
+        product: Product
+    ) -> List[Tuple[str, float]]:
         """
-        Calculate BM25-inspired weights for terms.
+        Extract tokens with their importance weights from a product.
+        
+        Returns:
+            List of (token, weight) tuples
         """
-        term_frequencies = defaultdict(float)
-        universal = product.get('universal_fields', {})
+        weighted_tokens = []
         
-        # Brand terms (weight: 10.0)
-        if universal.get('brand'):
-            brand = universal['brand'].lower()
-            term_frequencies[brand] += 10.0
-            for token in self._tokenize(brand):
-                term_frequencies[token] += 8.0
+        # Brand (highest importance: 10.0)
+        if product.brand:
+            brand_lower = product.brand.lower()
+            weighted_tokens.append((brand_lower, 10.0))
+            for token in self._tokenize(brand_lower):
+                weighted_tokens.append((token, 8.0))
         
-        # Product name terms (weight: 8.0)
-        if universal.get('name'):
-            name = universal['name'].lower()
+        # Product name (weight: 8.0)
+        if product.name:
+            name_lower = product.name.lower()
             # Full name gets high weight
-            term_frequencies[name] += 8.0
+            weighted_tokens.append((name_lower, 8.0))
             
             # Individual tokens
-            for token in self._tokenize(name):
-                term_frequencies[token] += 6.0
+            for token in self._tokenize(name_lower):
+                weighted_tokens.append((token, 6.0))
             
             # Model numbers get very high weight
-            for model in self._extract_model_numbers(name):
-                term_frequencies[model] += 9.0
+            for model in self._extract_model_numbers(product.name):
+                weighted_tokens.append((model, 9.0))
         
-        # Category terms (weight: 5.0)
-        for category in universal.get('category', []):
-            cat_lower = category.lower()
-            term_frequencies[cat_lower] += 5.0
-            for token in self._tokenize(cat_lower):
-                term_frequencies[token] += 4.0
+        # Categories (weight: 5.0)
+        for category in product.categories:
+            if category:
+                cat_lower = category.lower()
+                weighted_tokens.append((cat_lower, 5.0))
+                for token in self._tokenize(cat_lower):
+                    weighted_tokens.append((token, 4.0))
         
-        # Price range indicators
-        price = universal.get('price', 0)
-        if price > 0:
-            price_range = self._get_price_range(price)
-            term_frequencies[price_range] += 3.0
+        # Price range (weight: 3.0)
+        # Handle price as string (may have $ and commas)
+        price_str = product.salePrice or product.originalPrice
+        if price_str:
+            try:
+                # Remove $ and commas, convert to float
+                price = float(price_str.replace('$', '').replace(',', ''))
+                if price > 0:
+                    price_range = self._get_price_range(price)
+                    weighted_tokens.append((price_range, 3.0))
+            except (ValueError, AttributeError):
+                pass
         
         # Search keywords (weight: 4.0)
-        for keyword in product.get('search_keywords', []):
-            term_frequencies[keyword.lower()] += 4.0
+        if product.search_keywords:
+            for keyword in product.search_keywords:
+                keyword_lower = keyword.lower()
+                # Add the full phrase (important for multi-word searches)
+                weighted_tokens.append((keyword_lower, 4.0))
+                # Also tokenize for partial matches
+                for token in self._tokenize(keyword_lower):
+                    if len(token) > 2:  # Skip very short tokens
+                        weighted_tokens.append((token, 3.0))
         
-        # Filter values (weight: 3.0)
-        for key, value in product.get('filter_metadata', {}).items():
-            if isinstance(value, str):
-                term_frequencies[value.lower()] += 3.0
-            elif isinstance(value, list):
-                for v in value:
-                    if isinstance(v, str):
-                        term_frequencies[v.lower()] += 3.0
+        # Product labels (weight: 3.0)
+        if product.product_labels:
+            for _, values in product.product_labels.items():
+                if isinstance(values, str):
+                    value_lower = values.lower()
+                    # Add the full label phrase
+                    weighted_tokens.append((value_lower, 3.0))
+                    # Also tokenize for partial matches
+                    for token in self._tokenize(value_lower):
+                        if len(token) > 2:
+                            weighted_tokens.append((token, 2.0))
+                elif isinstance(values, list):
+                    for v in values:
+                        if isinstance(v, str):
+                            v_lower = v.lower()
+                            # Add the full label phrase
+                            weighted_tokens.append((v_lower, 3.0))
+                            # Also tokenize for partial matches
+                            for token in self._tokenize(v_lower):
+                                if len(token) > 2:
+                                    weighted_tokens.append((token, 2.0))
         
-        # Enhanced descriptor key terms (weight: 2.0)
-        if enhanced_data.get('key_features'):
-            for feature in enhanced_data['key_features']:
-                for token in self._tokenize(feature.lower()):
+        # Key selling points (weight: 2.0)
+        if product.key_selling_points:
+            for point in product.key_selling_points:
+                for token in self._tokenize(point.lower()):
                     if len(token) > 3:  # Skip short words
-                        term_frequencies[token] += 2.0
+                        weighted_tokens.append((token, 2.0))
         
-        # Apply BM25 scoring
-        weighted_terms = {}
-        doc_length = sum(term_frequencies.values())
-        avg_doc_length = 100  # Estimated average
+        # Highlights (weight: 2.5) - these are often important features
+        if product.highlights:
+            for highlight in product.highlights:
+                for token in self._tokenize(highlight.lower()):
+                    if len(token) > 3:
+                        weighted_tokens.append((token, 2.5))
         
-        for term, freq in term_frequencies.items():
-            # IDF component
-            df = self.document_frequencies.get(term, 1)
-            idf = math.log((self.total_documents - df + 0.5) / (df + 0.5))
-            
-            # BM25 term frequency component
-            tf_component = (freq * (self.k1 + 1)) / (
-                freq + self.k1 * (1 - self.b + self.b * doc_length / avg_doc_length)
-            )
-            
-            # Final weight
-            weight = idf * tf_component
-            
-            # Apply brand-specific importance boost
-            if term in self.term_importance:
-                weight *= self.term_importance[term]
-            
-            weighted_terms[term] = weight
+        # Specifications (weight: 2.0)
+        if product.specifications:
+            for spec_key, spec_value in product.specifications.items():
+                # Add the spec key
+                for token in self._tokenize(spec_key.lower()):
+                    weighted_tokens.append((token, 2.0))
+                # Add the spec value if it's a string
+                if isinstance(spec_value, str):
+                    for token in self._tokenize(spec_value.lower()):
+                        if len(token) > 2:  # Even shorter threshold for spec values
+                            weighted_tokens.append((token, 2.0))
         
-        return weighted_terms
+        # Colors (weight: 2.0)
+        if product.colors:
+            for color in product.colors:
+                if isinstance(color, str):
+                    weighted_tokens.append((color.lower(), 2.0))
+                elif isinstance(color, dict) and 'name' in color:
+                    weighted_tokens.append((color['name'].lower(), 2.0))
+        
+        # Sizes (weight: 1.5)
+        if product.sizes:
+            for size in product.sizes:
+                weighted_tokens.append((size.lower(), 1.5))
+        
+        # Description (weight: 1.0)
+        if product.description:
+            desc_tokens = self._tokenize(product.description.lower())
+            for token in desc_tokens[:50]:  # Limit description tokens
+                weighted_tokens.append((token, 1.0))
+        
+        # Voice summary (weight: 1.5) - concise, high-value content
+        if product.voice_summary:
+            for token in self._tokenize(product.voice_summary.lower()):
+                if len(token) > 3:
+                    weighted_tokens.append((token, 1.5))
+        
+        return weighted_tokens
     
     def _tokenize(self, text: str) -> List[str]:
         """
@@ -337,109 +401,84 @@ class SparseEmbeddingGenerator:
     
     def _load_term_importance(self) -> Dict[str, float]:
         """
-        Load brand-specific term importance weights.
+        Load brand-specific term importance weights dynamically.
         """
-        # Default importance for different term types
         importance = {}
         
-        # Brand-specific terms get boosted
-        if "specialized" in self.brand_domain.lower():
-            importance.update({
-                "specialized": 2.0,
-                "sworks": 2.0,
-                "turbo": 1.5,
-                "tarmac": 1.5,
-                "roubaix": 1.5,
-                "diverge": 1.5,
-                "stumpjumper": 1.5,
-                "carbon": 1.3,
-                "di2": 1.3,
-                "etap": 1.3,
-            })
-        elif "balenciaga" in self.brand_domain.lower():
-            importance.update({
-                "balenciaga": 2.0,
-                "cagole": 1.5,
-                "hourglass": 1.5,
-                "track": 1.5,
-                "triple s": 1.5,
-                "leather": 1.3,
-                "designer": 1.3,
-            })
-        elif "sundayriley" in self.brand_domain.lower():
-            importance.update({
-                "sunday riley": 2.0,
-                "good genes": 1.5,
-                "luna": 1.5,
-                "ceo": 1.5,
-                "ice": 1.5,
-                "serum": 1.3,
-                "retinoid": 1.3,
-                "vitamin c": 1.3,
-                "lactic acid": 1.3,
-            })
+        # Instead of hardcoding, we could load from a config file
+        # For now, we'll do basic pattern matching
+        brand_lower = self.brand_domain.lower()
+        
+        # Extract brand name from domain
+        brand_name = brand_lower.split('.')[0]
+        
+        # Always boost the brand name itself
+        importance[brand_name] = 2.0
+        
+        # Common patterns that indicate importance
+        # These could be loaded from brand research in the future
         
         return importance
     
-    def _save_vocabulary(self) -> None:
-        """Save vocabulary to disk for persistence."""
-        vocab_path = Path(f"accounts/{self.brand_domain}/sparse_vocabulary.json")
-        vocab_path.parent.mkdir(parents=True, exist_ok=True)
+    async def _save_vocabulary(self) -> None:
+        """Save vocabulary and BM25 data using storage manager."""
+        # Calculate document frequencies for storage
+        doc_frequencies = {}
+        for token in self.vocabulary:
+            doc_freq = sum(1 for doc in self.corpus_tokens if token in doc)
+            doc_frequencies[token] = doc_freq
         
         vocab_data = {
             'vocabulary': self.vocabulary,
-            'document_frequencies': dict(self.document_frequencies),
-            'total_documents': self.total_documents,
-            'max_features': self.max_features
+            'document_frequencies': doc_frequencies,
+            'total_documents': len(self.corpus_tokens),
+            'max_features': self.max_features,
+            'average_doc_length': float(np.mean([len(doc) for doc in self.corpus_tokens])),
+            'term_importance': self.term_importance,
+            'bm25_params': {
+                'k1': self.bm25.k1,
+                'b': self.bm25.b,
+                'epsilon': self.bm25.epsilon
+            }
         }
         
-        with open(vocab_path, 'w') as f:
-            json.dump(vocab_data, f, indent=2)
+        # Save using storage manager
+        success = await self.storage.write_file(
+            account=self.brand_domain,
+            file_path="ingestion/sparse_vocabulary_bm25.json",
+            content=json.dumps(vocab_data, indent=2),
+            content_type="application/json"
+        )
         
-        logger.info(f"💾 Saved vocabulary to {vocab_path}")
-    
-    def _load_vocabulary(self) -> None:
-        """Load vocabulary from disk if exists."""
-        vocab_path = Path(f"accounts/{self.brand_domain}/sparse_vocabulary.json")
-        
-        if vocab_path.exists():
-            with open(vocab_path, 'r') as f:
-                vocab_data = json.load(f)
-            
-            self.vocabulary = vocab_data['vocabulary']
-            self.inverse_vocabulary = {idx: term for term, idx in self.vocabulary.items()}
-            self.document_frequencies = defaultdict(int, vocab_data.get('document_frequencies', {}))
-            self.total_documents = vocab_data.get('total_documents', 0)
-            
-            logger.info(f"📖 Loaded vocabulary with {len(self.vocabulary)} terms")
+        if success:
+            logger.info(f"💾 Saved BM25 vocabulary for {self.brand_domain}")
         else:
-            logger.info("No existing vocabulary found - will build from catalog")
+            logger.error(f"Failed to save BM25 vocabulary for {self.brand_domain}")
     
-    def load_vocabulary(self) -> bool:
-        """
-        Load vocabulary from disk if available.
-        
-        Returns:
-            True if vocabulary was loaded, False otherwise
-        """
-        vocab_path = Path(f"accounts/{self.brand_domain}/sparse_vocabulary.json")
-        
-        if not vocab_path.exists():
-            return False
-        
+    async def _load_vocabulary(self) -> None:
+        """Load vocabulary and reinitialize BM25 if exists."""
         try:
-            with open(vocab_path) as f:
-                vocab_data = json.load(f)
+            # Load using storage manager
+            content = await self.storage.load_content(
+                brand_domain=self.brand_domain,
+                content_type="ingestion/sparse_vocabulary_bm25"
+            )
             
-            self.vocabulary = vocab_data['vocabulary']
-            self.inverse_vocabulary = {idx: term for term, idx in self.vocabulary.items()}
-            self.document_frequencies = defaultdict(int, vocab_data['document_frequencies'])
-            self.total_documents = vocab_data['total_documents']
-            self.term_importance.update(vocab_data.get('term_importance', {}))
-            
-            logger.info(f"📂 Loaded vocabulary with {len(self.vocabulary)} terms")
-            return True
-            
+            if content:
+                vocab_data = json.loads(content)
+                
+                self.vocabulary = vocab_data['vocabulary']
+                self.inverse_vocabulary = {int(idx): term for term, idx in self.vocabulary.items()}
+                self.term_importance.update(vocab_data.get('term_importance', {}))
+                
+                # Note: We can't fully restore BM25 without the corpus
+                # This would require also saving corpus tokens or recalculating from products
+                
+                logger.info(f"📖 Loaded vocabulary with {len(self.vocabulary)} terms")
+                logger.info("   Note: BM25 model will be rebuilt when build_vocabulary is called")
+            else:
+                logger.info("No existing vocabulary found - will build from catalog")
+                
         except Exception as e:
             logger.warning(f"Failed to load vocabulary: {e}")
-            return False
+            logger.info("Will build new vocabulary from catalog")

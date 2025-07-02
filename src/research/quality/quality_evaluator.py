@@ -141,7 +141,7 @@ class QualityEvaluator:
                 "passes_threshold": quality_score >= quality_threshold,
                 "improvement_feedback": parsed_evaluation.get("improvement_feedback", []),
                 "criteria_met": parsed_evaluation.get("criteria_met", {}),
-                "evaluator_model": "claude-3-5-sonnet",
+                "evaluator_model": "openai/o3",
                 "evaluation_timestamp": datetime.now().isoformat(),
                 "confidence_level": parsed_evaluation.get("confidence_level", "medium"),
                 "evaluation_method": "standard_llm_evaluation",

@@ -111,7 +111,10 @@ class LLMFactory:
             'brand_research': 'BRAND_MODEL', 
             'quality_evaluation': 'QUALITY_MODEL',
             'descriptor_generation': 'DESCRIPTOR_MODEL',
-            'conversation': 'CONVERSATION_MODEL'
+            'conversation': 'CONVERSATION_MODEL',
+            'quality_evaluation_advanced': 'QUALITY_MODEL',
+            'voice_query_generation': 'CONVERSATION_MODEL',
+            'descriptor_quality_assessment': 'QUALITY_MODEL'
         }
         
         if task in env_var_map:

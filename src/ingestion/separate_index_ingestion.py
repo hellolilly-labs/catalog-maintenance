@@ -18,8 +18,11 @@ from pinecone import Pinecone, ServerlessSpec
 import numpy as np
 
 from .universal_product_processor import UniversalProductProcessor
-from .sparse_embeddings import SparseEmbeddingGenerator
-from ..catalog.enhanced_descriptor_generator import EnhancedDescriptorGenerator
+# Removed custom sparse embeddings - using Pinecone's sparse model instead
+from .stt_vocabulary_extractor import STTVocabularyExtractor
+from ..catalog.unified_descriptor_generator import UnifiedDescriptorGenerator
+from ..storage import get_account_storage_provider
+from ..models.product import Product
 
 logger = logging.getLogger(__name__)
 
@@ -60,16 +63,23 @@ class SeparateIndexIngestion:
         
         # Initialize processors
         self.product_processor = UniversalProductProcessor(brand_domain)
-        self.sparse_generator = SparseEmbeddingGenerator(brand_domain)
-        self.descriptor_generator = EnhancedDescriptorGenerator(brand_domain)
         
-        # State management
-        self.state_file = Path(f"data/sync_state/{brand_domain}_separate_indexes.json")
-        self.sync_state = self._load_sync_state()
+        # Use unified descriptor generator (has research integration built-in)
+        self.descriptor_generator = UnifiedDescriptorGenerator(brand_domain)
+        
+        # Initialize STT vocabulary extractor
+        self.stt_extractor = STTVocabularyExtractor(brand_domain)
+        
+        # Storage provider for consistent data management
+        self.storage = get_account_storage_provider()
+        
+        # State management using storage provider
+        self.sync_state_path = "sync_state/separate_indexes.json"
+        self.sync_state = None  # Will be loaded on first use
         
         logger.info(f"📦 Initialized Separate Index Ingestion for {brand_domain}")
     
-    async def create_indexes(self, dimension: int = 2048, metric: str = "cosine"):
+    async def create_indexes(self, dimension: int = 1024, metric: str = "cosine"):
         """
         Create separate dense and sparse indexes if they don't exist.
         
@@ -82,36 +92,35 @@ class SeparateIndexIngestion:
         # Create dense index
         if self.dense_index_name not in existing_indexes:
             logger.info(f"Creating dense index: {self.dense_index_name}")
-            self.pc.create_index(
+            self.pc.create_index_for_model(
                 name=self.dense_index_name,
-                dimension=dimension,
-                metric=metric,
-                spec=ServerlessSpec(
-                    cloud="aws",
-                    region="us-east-1"
-                )
+                cloud="gcp",
+                region="us-central1",
+                # Configure server-side embeddings
+                embed={
+                    "model": "llama-text-embed-v2",
+                    "field_map": {"text": "text"},
+                    "dimension": dimension
+                }
             )
             logger.info(f"✅ Created dense index: {self.dense_index_name}")
         
         # Create sparse index
         if self.sparse_index_name not in existing_indexes:
             logger.info(f"Creating sparse index: {self.sparse_index_name}")
-            self.pc.create_index(
+            self.pc.create_index_for_model(
                 name=self.sparse_index_name,
-                dimension=50000,  # Large dimension for sparse vectors
-                metric="dotproduct",  # Best for sparse vectors
-                spec=ServerlessSpec(
-                    cloud="aws",
-                    region="us-east-1"
-                ),
-                # Enable sparse values
-                sparse_values=True
+                cloud="gcp",
+                region="us-central1",
+                embed={
+                    "model": "pinecone-sparse-english-v0",
+                    "field_map": {"text": "text"}
+                }
             )
             logger.info(f"✅ Created sparse index: {self.sparse_index_name}")
     
     async def ingest_catalog(
         self,
-        catalog_path: str,
         namespace: str = "products",
         batch_size: int = 100,
         force_update: bool = False
@@ -120,7 +129,6 @@ class SeparateIndexIngestion:
         Ingest product catalog into separate indexes.
         
         Args:
-            catalog_path: Path to product catalog
             namespace: Namespace for products
             batch_size: Batch size for upserts
             force_update: Force update all products
@@ -128,36 +136,39 @@ class SeparateIndexIngestion:
         Returns:
             Ingestion statistics
         """
-        # Load and process catalog
-        logger.info(f"Loading catalog from {catalog_path}")
-        with open(catalog_path, 'r') as f:
-            catalog_data = json.load(f)
+        logger.info(f"Processing catalog with UnifiedDescriptorGenerator")
         
-        if isinstance(catalog_data, dict):
-            catalog_data = catalog_data.get('products', [catalog_data])
-        
-        # Process products
-        processed_products = self.product_processor.process_catalog(catalog_data)
-        
-        # Generate enhanced descriptors and extract filters
-        enhanced_products, filter_labels = self.descriptor_generator.process_catalog(
-            processed_products,
-            descriptor_style="voice_optimized"
+        # Generate enhanced descriptors and extract filters using UnifiedDescriptorGenerator
+        enhanced_products, filter_labels = await self.descriptor_generator.process_catalog(
+            force_regenerate=False
         )
         
-        # Build vocabulary if not already loaded
-        if not self.sparse_generator.vocabulary:
-            logger.info("Building sparse embedding vocabulary...")
-            self.sparse_generator.build_vocabulary(enhanced_products)
+        logger.info(f"📝 Generated descriptors for {len(enhanced_products)} products")
+        
+        # No need to build vocabulary - Pinecone's sparse model handles it
+        
+        # Extract and save STT vocabulary
+        logger.info("🎤 Extracting STT vocabulary for speech recognition optimization...")
+        self.stt_extractor.extract_from_catalog(enhanced_products)
+        await self.stt_extractor.save_vocabulary()
+        
+        # Log STT vocabulary stats
+        stats = self.stt_extractor.get_stats()
+        logger.info(f"   STT Vocabulary: {stats['term_count']} terms, "
+                   f"{stats['character_count']} chars ({stats['coverage_percentage']:.1f}% of limit)")
+        logger.info(f"   Top terms: {', '.join(stats['top_terms'][:10])}")
         
         # Save filter labels for the brand
-        self._save_filter_labels(filter_labels)
+        await self._save_filter_labels(filter_labels)
         
         # Detect changes
-        changes = self._detect_changes(enhanced_products, force_update)
+        changes = await self._detect_changes(enhanced_products, force_update)
         
         logger.info(f"📊 Changes detected: {len(changes['add'])} new, "
                    f"{len(changes['update'])} updated, {len(changes['delete'])} deleted")
+        
+        # Ensure indexes exist
+        await self.create_indexes()
         
         # Get indexes
         dense_index = self.pc.Index(self.dense_index_name)
@@ -166,7 +177,7 @@ class SeparateIndexIngestion:
         # Process additions and updates
         products_to_upsert = []
         for product_id in changes['add'] + changes['update']:
-            product = next(p for p in enhanced_products if p['id'] == product_id)
+            product = next(p for p in enhanced_products if getattr(p, 'id', '') == product_id)
             products_to_upsert.append(product)
         
         # Prepare batches
@@ -179,43 +190,38 @@ class SeparateIndexIngestion:
             # Prepare dense vectors
             for product in batch:
                 dense_data = self._prepare_dense_vector(product)
-                dense_vectors.append({
-                    'id': dense_data['id'],
-                    'text': dense_data['text'],
-                    'metadata': dense_data['metadata']
-                })
+                dense_vectors.append(dense_data)
             
             # Prepare sparse vectors
             for product in batch:
                 sparse_data = self._prepare_sparse_vector(product)
-                if sparse_data['sparse_values'].get('indices'):
-                    sparse_vectors.append({
-                        'id': sparse_data['id'],
-                        'sparse_values': sparse_data['sparse_values'],
-                        'metadata': sparse_data['metadata']
-                    })
+                sparse_vectors.append(sparse_data)
         
         # Upsert to dense index
         if dense_vectors:
             logger.info(f"Upserting {len(dense_vectors)} vectors to dense index")
             for i in range(0, len(dense_vectors), batch_size):
                 batch = dense_vectors[i:i + batch_size]
-                dense_index.upsert(
-                    vectors=batch,
-                    namespace=namespace
+                dense_index.upsert_records(
+                    namespace=namespace,
+                    records=batch
                 )
                 logger.info(f"  Upserted batch {i//batch_size + 1}/{(len(dense_vectors)-1)//batch_size + 1}")
         
         # Upsert to sparse index
         if sparse_vectors:
             logger.info(f"Upserting {len(sparse_vectors)} vectors to sparse index")
-            for i in range(0, len(sparse_vectors), batch_size):
-                batch = sparse_vectors[i:i + batch_size]
-                sparse_index.upsert(
-                    vectors=batch,
-                    namespace=namespace
-                )
-                logger.info(f"  Upserted batch {i//batch_size + 1}/{(len(sparse_vectors)-1)//batch_size + 1}")
+            try:
+                for i in range(0, len(sparse_vectors), batch_size):
+                    batch = sparse_vectors[i:i + batch_size]
+                    sparse_index.upsert_records(
+                        namespace=namespace,
+                        records=batch,
+                    )
+                    logger.info(f"  Upserted batch {i//batch_size + 1}/{(len(sparse_vectors)-1)//batch_size + 1}")
+            except Exception as e:
+                logger.error(f"Error upserting sparse vectors: {e}")
+                logger.error(f"Batch: {batch}")
         
         # Handle deletions
         if changes['delete']:
@@ -230,14 +236,14 @@ class SeparateIndexIngestion:
             )
         
         # Update sync state
-        self._update_sync_state(enhanced_products)
+        await self._update_sync_state(enhanced_products)
         
         # Get index statistics
         dense_stats = dense_index.describe_index_stats()
         sparse_stats = sparse_index.describe_index_stats()
         
         return {
-            'products_processed': len(processed_products),
+            'products_processed': len(products_to_upsert),
             'added': len(changes['add']),
             'updated': len(changes['update']),
             'deleted': len(changes['delete']),
@@ -246,134 +252,141 @@ class SeparateIndexIngestion:
             'filter_labels': len(filter_labels) - 1  # Exclude metadata
         }
     
-    def _prepare_dense_vector(self, product: Dict[str, Any]) -> Dict[str, Any]:
-        """Prepare product for dense index."""
+    def _prepare_dense_vector(self, product: Product) -> Dict[str, Any]:
+        """Prepare product for dense index with server-side embeddings."""
         
-        # Combine descriptors for embedding
+        # Get embedding text
         embedding_text = self._build_embedding_text(product)
         
         # Build metadata - same structure in both indexes
         metadata = self._build_metadata(product)
         
-        return {
-            'id': product['id'],
-            'text': embedding_text,  # For server-side embedding
-            'metadata': metadata
+        # For upsert_records with server-side embeddings,
+        # metadata must be stored as a JSON string in the metadata field
+        record = {
+            '_id': f"{product.id}",
+            'text': embedding_text,  # This will be embedded server-side
+            'name': product.name,
+            # 'descriptor': embedding_text,  # This will be embedded server-side
+            'metadata': json.dumps(metadata)  # Store metadata as JSON string
         }
-    
-    def _prepare_sparse_vector(self, product: Dict[str, Any]) -> Dict[str, Any]:
-        """Prepare product for sparse index."""
         
-        # Generate sparse embeddings
-        sparse_data = self.sparse_generator.generate_sparse_embedding(
-            product,
-            {'key_features': product.get('search_keywords', [])}
-        )
+        return record
+    
+    def _prepare_sparse_vector(self, product: Product) -> Dict[str, Any]:
+        """Prepare product for sparse index with server-side sparse embeddings."""
+        
+        # Get embedding text for the sparse index's server-side model
+        embedding_text = self._build_embedding_text(product)
         
         # Use same metadata structure
         metadata = self._build_metadata(product)
         
-        return {
-            'id': product['id'],
-            'sparse_values': sparse_data,
-            'metadata': metadata
+        # For server-side sparse embeddings, we only need text
+        # Pinecone will generate sparse embeddings automatically
+        record = {
+            '_id': f"{product.id}",
+            'text': embedding_text,  # Pinecone-sparse-english-v0 will process this
+            'name': product.name,
+            # 'descriptor': embedding_text,  # This will be embedded server-side
+            'metadata': json.dumps(metadata)  # Store metadata as JSON string
         }
+        
+        return record
     
-    def _build_embedding_text(self, product: Dict[str, Any]) -> str:
-        """Build text for dense embedding."""
-        parts = []
+    def _build_embedding_text(self, product: Product) -> str:
+        """
+        Build text for dense embedding.
         
-        # Enhanced descriptor (primary)
-        if product.get('enhanced_description'):
-            parts.append(product['enhanced_description'])
+        The descriptor field is specifically generated for dense embeddings
+        and already includes all relevant semantic information.
+        """
+        # Use the enhanced descriptor - it's specifically optimized for dense embeddings
+        if product.descriptor:
+            return product.descriptor
         
-        # Voice summary
-        if product.get('voice_summary'):
-            parts.append(product['voice_summary'])
+        # Fallback to voice summary if no descriptor
+        if product.voice_summary:
+            return product.voice_summary
         
-        # Original descriptor
-        if product.get('enhanced_descriptor'):
-            parts.append(product['enhanced_descriptor'])
+        # Final fallback to original description
+        if product.description:
+            return product.description
         
-        # Key selling points
-        if product.get('key_selling_points'):
-            parts.append(' '.join(product['key_selling_points']))
+        # Last resort - use product name
+        if product.name:
+            return product.name
         
-        return ' '.join(parts)
+        return ""
     
-    def _build_metadata(self, product: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_metadata(self, product: Product) -> Dict[str, Any]:
         """
-        Build metadata dynamically based on product data.
+        Build minimal metadata for RAG lookup + filtering.
         
-        This ensures consistent metadata between dense and sparse indexes.
+        Since we lookup full product from database using the ID,
+        we only need essential fields for search, filtering, and reranking.
         """
-        # Start with universal fields
+        
+        # Extract price for filtering
+        price_str = product.salePrice or product.originalPrice or getattr(product, 'price', None)
+        extracted_price = 0.0
+        if price_str:
+            try:
+                # Remove $ and commas, convert to float
+                extracted_price = float(str(price_str).replace('$', '').replace(',', ''))
+            except (ValueError, TypeError):
+                extracted_price = 0.0
+        
+        # Get primary category for basic filtering
+        primary_category = product.categories[0] if product.categories else 'general'
+        
+        # Build minimal metadata
         metadata = {
-            'id': product['id'],
-            'name': product['universal_fields'].get('name', ''),
-            'price': product['universal_fields'].get('price', 0),
-            'category': product['universal_fields'].get('category', ['general'])[0],
-            'brand': product['universal_fields'].get('brand', self.brand_domain.split('.')[0])
+            # Essential fields
+            'product_id': f"{product.id}",  # For database lookup (renamed to avoid conflict with _id)
+            'name': product.name,  # Helpful for debugging/monitoring
+            
+            # Basic filtering fields
+            'price': extracted_price,
+            'category': primary_category,
+            
+            # System fields
+            'content_type': 'product',
+            'last_updated': datetime.now().isoformat()
         }
         
-        # Add filter metadata dynamically
-        if product.get('filter_metadata'):
-            for key, value in product['filter_metadata'].items():
-                # Skip if already in metadata
-                if key not in metadata:
-                    metadata[key] = value
-        
-        # Add content fields
-        content_fields = [
-            'description',
-            'enhanced_descriptor', 
-            'voice_summary',
-            'key_selling_points',
-            'search_keywords'
-        ]
-        
-        for field in content_fields:
-            if field in product['universal_fields']:
-                value = product['universal_fields'][field]
-            elif field in product:
-                value = product[field]
-            else:
-                continue
-            
-            # Convert lists to JSON strings for storage
-            if isinstance(value, list):
-                metadata[field] = json.dumps(value)
-            else:
-                metadata[field] = value
-        
-        # Add image URL if available
-        if 'images' in product['universal_fields']:
-            images = product['universal_fields']['images']
-            if isinstance(images, list) and images:
-                metadata['image_url'] = images[0]
-        
-        # Add metadata fields
-        metadata['content_type'] = 'product'
-        metadata['last_updated'] = datetime.now().isoformat()
-        metadata['text'] = self._build_embedding_text(product)  # For reranking
+        # Optional: Add flattened product labels for Pinecone-side filtering
+        # Only include if you need to filter by these in Pinecone
+        if product.product_labels:
+            # Flatten labels for Pinecone's filtering syntax
+            for label_type, values in product.product_labels.items():
+                if isinstance(values, list) and values:
+                    # Use first value as primary
+                    metadata[label_type] = values[0].lower()
+                elif isinstance(values, str):
+                    metadata[label_type] = values.lower()
         
         return metadata
     
-    def _detect_changes(
+    async def _detect_changes(
         self,
-        products: List[Dict[str, Any]],
+        products: List,
         force_update: bool
     ) -> Dict[str, List[str]]:
         """Detect which products need to be added, updated, or deleted."""
         
         if force_update:
             return {
-                'add': [p['id'] for p in products],
+                'add': [getattr(p, 'id', '') for p in products],
                 'update': [],
                 'delete': []
             }
         
-        current_products = {p['id']: self._get_product_hash(p) for p in products}
+        # Load sync state if not already loaded
+        if self.sync_state is None:
+            self.sync_state = await self._load_sync_state()
+        
+        current_products = {getattr(p, 'id', ''): self._get_product_hash(p) for p in products}
         previous_products = self.sync_state.get('product_hashes', {})
         
         current_ids = set(current_products.keys())
@@ -394,48 +407,93 @@ class SeparateIndexIngestion:
             'delete': list(delete_ids)
         }
     
-    def _get_product_hash(self, product: Dict[str, Any]) -> str:
-        """Generate hash for change detection."""
-        
-        # Create consistent representation
-        content = json.dumps({
-            'universal_fields': product.get('universal_fields', {}),
-            'filter_metadata': product.get('filter_metadata', {}),
-            'enhanced_descriptor': product.get('enhanced_descriptor', ''),
-            'key_selling_points': product.get('key_selling_points', [])
-        }, sort_keys=True)
-        
-        return hashlib.md5(content.encode()).hexdigest()
+    def _get_product_hash(self, product) -> str:
+        """Generate hash for change detection based on fields we actually store."""
+
+        try:
+            # Only hash fields that affect what we store in Pinecone
+            price = product.salePrice or product.originalPrice or 0.0
+            if not price:
+                price = 0.0
+            
+            content = json.dumps({
+                'id': product.id,
+                'name': product.name if product.name else '',
+                'price': price,
+                'inventory': 0,
+                'categories': product.categories if product.categories else [],
+                'descriptor': product.descriptor if product.descriptor else '',  # Affects embedding text
+                'product_labels': product.product_labels if product.product_labels else {}
+            }, sort_keys=True)
+            
+            return hashlib.md5(content.encode()).hexdigest()
+        except Exception as e:
+            logger.error(f"Error generating product hash: {e}")
+            raise e
     
-    def _save_filter_labels(self, filter_labels: Dict[str, Any]):
-        """Save filter labels for the brand."""
+    async def _save_filter_labels(self, filter_labels: Dict[str, Any]):
+        """Save filter labels using storage provider."""
         
-        filter_file = Path(f"accounts/{self.brand_domain}/filter_dictionary.json")
-        filter_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(filter_file, 'w') as f:
-            json.dump(filter_labels, f, indent=2)
-        
-        logger.info(f"💾 Saved filter labels to {filter_file}")
+        try:
+            # Convert filter labels to JSON string
+            filter_json = json.dumps(filter_labels, indent=2)
+            
+            # Save using storage provider
+            success = await self.storage.write_file(
+                account=self.brand_domain,
+                file_path="filter_dictionary.json",
+                content=filter_json,
+                content_type="application/json"
+            )
+            
+            if success:
+                logger.info(f"💾 Saved filter labels via storage provider")
+            else:
+                logger.error(f"❌ Failed to save filter labels")
+                
+        except Exception as e:
+            logger.error(f"❌ Error saving filter labels: {e}")
     
-    def _load_sync_state(self) -> Dict[str, Any]:
-        """Load sync state from file."""
+    async def _load_sync_state(self) -> Dict[str, Any]:
+        """Load sync state using storage provider."""
         
-        if self.state_file.exists():
-            with open(self.state_file, 'r') as f:
-                return json.load(f)
-        return {}
+        try:
+            content = await self.storage.read_file(
+                account=self.brand_domain,
+                file_path=self.sync_state_path
+            )
+            
+            if content:
+                return json.loads(content)
+            else:
+                logger.info("No existing sync state found - starting fresh")
+                return {}
+                
+        except Exception as e:
+            logger.warning(f"Could not load sync state: {e}")
+            return {}
     
-    def _update_sync_state(self, products: List[Dict[str, Any]]):
-        """Update sync state with current product hashes."""
+    async def _update_sync_state(self, products: List):
+        """Update sync state with current product hashes using storage provider."""
         
-        self.sync_state['product_hashes'] = {
-            p['id']: self._get_product_hash(p) for p in products
-        }
-        self.sync_state['last_sync'] = datetime.now().isoformat()
+        try:
+            self.sync_state['product_hashes'] = {
+                p.id: self._get_product_hash(p) for p in products
+            }
+            self.sync_state['last_sync'] = datetime.now().isoformat()
         
-        self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.state_file, 'w') as f:
-            json.dump(self.sync_state, f, indent=2)
-        
-        logger.info(f"💾 Updated sync state for {len(products)} products")
+            # Save using storage provider
+            success = await self.storage.write_file(
+                account=self.brand_domain,
+                file_path=self.sync_state_path,
+                content=json.dumps(self.sync_state, indent=2),
+                content_type="application/json"
+            )
+            
+            if success:
+                logger.info(f"💾 Updated sync state for {len(products)} products via storage provider")
+            else:
+                logger.error("❌ Failed to save sync state")
+                
+        except Exception as e:
+            logger.error(f"❌ Error saving sync state: {e}")

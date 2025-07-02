@@ -73,11 +73,23 @@ class LLMModelService(ABC):
             Number of tokens
         """
         try:
-            # Use model-specific encoding or fall back to cl100k_base (GPT-4.1)
-            if model.startswith("gpt-4") or model.startswith("o"):
-                encoding = tiktoken.encoding_for_model(model)
-            else:
-                # Fallback encoding for other models
+            # Map newer models to their tokenizer equivalents
+            model_mapping = {
+                "gpt-4.1": "gpt-4",
+                "gpt-4.1-mini": "gpt-4",
+                "o3": "gpt-4",
+                "o3-mini": "gpt-4",
+                "o4-mini": "gpt-4"
+            }
+            
+            # Get the mapped model or use original
+            tokenizer_model = model_mapping.get(model, model)
+            
+            # Try to get model-specific encoding
+            try:
+                encoding = tiktoken.encoding_for_model(tokenizer_model)
+            except KeyError:
+                # Fallback to cl100k_base encoding (used by GPT-4 family)
                 encoding = tiktoken.get_encoding("cl100k_base")
                 
             return len(encoding.encode(text))
@@ -227,10 +239,13 @@ class LLMModelService(ABC):
             if 'role' not in message:
                 raise ValueError(f"Message {i} missing required 'role' field")
                 
-            if message['role'] not in ['user', 'assistant', 'system']:
+            if message['role'] not in ['user', 'assistant', 'system', 'tool']:
                 raise ValueError(f"Message {i} has invalid role: {message['role']}")
                 
-            if 'content' not in message:
+            # Tool messages require tool_call_id instead of content being mandatory
+            if message['role'] == 'tool' and 'tool_call_id' not in message:
+                raise ValueError(f"Tool message {i} missing required 'tool_call_id' field")
+            elif message['role'] != 'tool' and 'content' not in message:
                 raise ValueError(f"Message {i} missing required 'content' field")
     
     def format_response(self, raw_response: Any, model: str = None) -> Dict[str, Any]:

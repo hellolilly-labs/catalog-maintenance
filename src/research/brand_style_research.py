@@ -55,7 +55,7 @@ class BrandStyleResearcher(BaseResearcher):
         super().__init__(
             brand_domain=brand_domain,
             researcher_name="brand_style",
-            step_type=StepType.PRODUCT_STYLE,  # Using existing PRODUCT_STYLE for now
+            step_type=StepType.BRAND_STYLE,
             quality_threshold=8.0,
             cache_duration_days=180,  # 6 months - styles change infrequently
             storage_manager=storage_manager

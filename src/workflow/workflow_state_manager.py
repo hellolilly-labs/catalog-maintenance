@@ -29,6 +29,8 @@ class WorkflowState(Enum):
     MARKET_POSITIONING_COMPLETE = "market_positioning_complete"
     PRODUCT_STYLE_IN_PROGRESS = "product_style_in_progress"
     PRODUCT_STYLE_COMPLETE = "product_style_complete"
+    BRAND_STYLE_IN_PROGRESS = "brand_style_in_progress"
+    BRAND_STYLE_COMPLETE = "brand_style_complete"
     CUSTOMER_CULTURAL_IN_PROGRESS = "customer_cultural_in_progress"
     CUSTOMER_CULTURAL_COMPLETE = "customer_cultural_complete"
     VOICE_MESSAGING_IN_PROGRESS = "voice_messaging_in_progress"
@@ -37,6 +39,8 @@ class WorkflowState(Enum):
     INTERVIEW_SYNTHESIS_COMPLETE = "interview_synthesis_complete"
     LINEARITY_ANALYSIS_IN_PROGRESS = "linearity_analysis_in_progress"
     LINEARITY_ANALYSIS_COMPLETE = "linearity_analysis_complete"
+    PRODUCT_CATALOG_IN_PROGRESS = "product_catalog_in_progress"
+    PRODUCT_CATALOG_COMPLETE = "product_catalog_complete"
     RESEARCH_INTEGRATION_IN_PROGRESS = "research_integration_in_progress"
     RESEARCH_INTEGRATION_COMPLETE = "research_integration_complete"
     
@@ -113,10 +117,12 @@ class WorkflowStateManager:
             "foundation": "foundation",
             "market_positioning": "market_positioning",
             "product_style": "product_style",
+            "brand_style": "brand_style",
             "customer_cultural": "customer_cultural", 
             "voice_messaging": "voice_messaging",
             "interview_synthesis": "interview_synthesis",
             "linearity_analysis": "linearity_analysis",
+            "product_catalog": "product_catalog",
             "research_integration": "research_integration"
         }
     
@@ -405,6 +411,18 @@ class WorkflowStateManager:
                 },
                 "optional": False
             },
+            # "brand_style": {
+            #     "name": "Brand Style Research",
+            #     "cache_duration_days": 90,   # 3 months
+            #     "research_time_minutes": "2-3", 
+            #     "quality_threshold": 7.5,
+            #     "description": "Brand visual identity and style consistency",
+            #     "states": {
+            #         "in_progress": WorkflowState.BRAND_STYLE_IN_PROGRESS,
+            #         "complete": WorkflowState.BRAND_STYLE_COMPLETE
+            #     },
+            #     "optional": False
+            # },
             "customer_cultural": {
                 "name": "Customer & Cultural Intelligence",
                 "cache_duration_days": 105,   # 3.5 months
@@ -450,6 +468,18 @@ class WorkflowStateManager:
                 "states": {
                     "in_progress": WorkflowState.LINEARITY_ANALYSIS_IN_PROGRESS,
                     "complete": WorkflowState.LINEARITY_ANALYSIS_COMPLETE
+                },
+                "optional": False
+            },
+            "product_catalog": {
+                "name": "Product Catalog Research",
+                "cache_duration_days": 30,   # 1 month
+                "research_time_minutes": "1-2",
+                "quality_threshold": 8.5,
+                "description": "Synthesize research for product descriptor generation and search intelligence",
+                "states": {
+                    "in_progress": WorkflowState.PRODUCT_CATALOG_IN_PROGRESS,
+                    "complete": WorkflowState.PRODUCT_CATALOG_COMPLETE
                 },
                 "optional": False
             },

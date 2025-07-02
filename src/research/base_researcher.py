@@ -567,6 +567,7 @@ class BaseResearcher:
             
             if hasattr(self.storage_manager, 'base_dir'):
                 # Local storage
+                import os
                 research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research_phases")
                 
                 content_path = os.path.join(research_dir, f"{phase_name}_research.md")
@@ -613,7 +614,7 @@ class BaseResearcher:
                     research_metadata = metadata.get("research_metadata", {})
                     cache_expires = research_metadata.get("cache_expires")
                     
-                    if cache_expires and datetime.now() < datetime.fromisoformat(cache_expires.replace("Z", "")):
+                    if not cache_expires or datetime.now() < datetime.fromisoformat(cache_expires.replace("Z", "")):
                         # Load cached data
                         content = content_blob_obj.download_as_text()
                         

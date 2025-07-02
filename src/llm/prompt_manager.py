@@ -63,8 +63,8 @@ class PromptManager:
             # Try to get existing prompt
             prompt = self.langfuse.get_prompt(prompt_name)
             
-            if prompt:
-                logger.info(f"Retrieved existing prompt from Langfuse: {prompt_name}")
+            # if prompt:
+            #     logger.info(f"Retrieved existing prompt from Langfuse: {prompt_name}")
             return prompt
         except Exception as e:
             logger.warning(f"Error retrieving prompt from Langfuse: {e}")

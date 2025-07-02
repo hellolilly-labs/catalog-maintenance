@@ -76,3 +76,6 @@ langfuse>=3.0.0
 
 # Redis
 redis>=5.0.0
+
+# BM25 for sparse embeddings
+rank-bm25>=0.2.2

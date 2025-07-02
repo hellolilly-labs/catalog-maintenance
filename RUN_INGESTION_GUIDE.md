@@ -4,10 +4,15 @@
 
 ### ✅ Completed Components
 1. **Universal Product Processor** - Handles any brand/product format
-2. **Enhanced Descriptor Generator** - Creates voice-optimized descriptions
+2. **Unified Descriptor Generator** - Creates RAG-optimized descriptions with 4 components
 3. **Sparse Embeddings Generator** - BM25-style keyword matching
 4. **Separate Index Architecture** - Dense and sparse indexes
 5. **Dynamic Metadata Schema** - Brand-agnostic filter extraction
+
+### 🔧 **Consolidated Scripts**
+- **Main Ingestor**: `ingest_products_separate_indexes.py` (modern separate indexes approach)
+- **Deprecated**: `ingest_products_enhanced.py` (removed - legacy single index)
+- **Deprecated**: `ingest_product_catalog.py` (consolidated into main script)
 
 ### ⚠️ Important Notes Before Running
 
@@ -25,22 +30,41 @@
 
 ## Step-by-Step Ingestion Process
 
-### 1. Preview Your Catalog (Recommended First Step)
+### 0. Populate descriptors
 
 ```bash
-python ingest_products_separate_indexes.py specialized.com local/account_storage/accounts/specialized.com/products.json --preview
+python pre_generate_descriptors.py specialized.com
+```
+
+### 1. Analyze Filters Only (Optional - Fast Analysis)
+
+```bash
+python ingest_products_separate_indexes.py specialized.com catalog.json --filters-only
 ```
 
 This will:
-- Show how products will be processed
-- Display extracted metadata fields
-- Show filter labels that will be created
-- No data is sent to Pinecone
+- Analyze catalog structure and extract available filters
+- Generate filter dictionary and human-readable summary
+- NO vector processing or Pinecone interaction
+- Fast way to understand your catalog structure
 
-### 2. Verify Descriptor Quality
+### 2. Preview Your Catalog (Recommended Before Full Ingestion)
 
 ```bash
-python verify_descriptor_quality.py specialized.com local/account_storage/accounts/specialized.com/products.json
+python ingest_products_separate_indexes.py specialized.com catalog.json --preview
+```
+
+This will:
+- Show how products will be processed with UnifiedDescriptorGenerator
+- Display all 4 components: descriptor, search terms, key points, voice summary
+- Show extracted metadata fields and filter labels
+- Generate and save filter summary
+- NO data sent to Pinecone
+
+### 3. Verify Descriptor Quality
+
+```bash
+python verify_descriptor_quality.py flexfits.com
 ```
 
 This will analyze:
@@ -49,20 +73,20 @@ This will analyze:
 - Voice optimization
 - Search keyword coverage
 
-### 3. Create Indexes and Ingest
+### 4. Create Indexes and Ingest
 
 ```bash
 # Create indexes if they don't exist and ingest
-python ingest_products_separate_indexes.py specialized.com local/account_storage/accounts/specialized.com/products.json --create-indexes
+python ingest_product_catalog.py flexfits.com --create-indexes
 
 # Or if indexes already exist
-python ingest_products_separate_indexes.py specialized.com local/account_storage/accounts/specialized.com/products.json
+python ingest_product_catalog.py flexfits.com
 ```
 
-### 4. Force Full Re-ingestion (if needed)
+### 5. Force Full Re-ingestion (if needed)
 
 ```bash
-python ingest_products_separate_indexes.py specialized.com local/account_storage/accounts/specialized.com/products.json --force
+python ingest_product_catalog.py flexfits.com --force
 ```
 
 ## Expected Catalog Format
@@ -125,7 +149,8 @@ After ingestion, you'll have:
 
 ```
 accounts/{brand_domain}/
-├── filter_dictionary.json      # Extracted filter labels
+├── filter_dictionary.json      # Extracted filter labels (JSON)
+├── filter_summary.md           # Human-readable filter summary (NEW)
 ├── sparse_vocabulary.json      # Sparse embedding vocabulary
 └── catalog_insights.json       # Catalog analysis results
 
@@ -178,8 +203,13 @@ The implementation is complete enough for testing! Start with:
 
 ```bash
 # Preview first
-python ingest_products_separate_indexes.py your-brand.com your-catalog.json --preview
+python ingest_products_separate_indexes.py specialized.com catalog.json --preview
 
 # Then ingest
-python ingest_products_separate_indexes.py your-brand.com your-catalog.json --create-indexes
+python ingest_products_separate_indexes.py specialized.com catalog.json --create-indexes
 ```
+
+## Testing the search functionality
+
+```bash
+python test_search_comparison.py --account flexfits.com --ingest-baseline

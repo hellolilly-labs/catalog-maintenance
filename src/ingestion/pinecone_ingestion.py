@@ -24,7 +24,7 @@ from tqdm import tqdm
 from .universal_product_processor import UniversalProductProcessor
 from .sparse_embeddings import SparseEmbeddingGenerator
 from ..agents.catalog_filter_analyzer import CatalogFilterAnalyzer
-from ..catalog.enhanced_descriptor_generator import EnhancedDescriptorGenerator
+from ..catalog.unified_descriptor_generator import UnifiedDescriptorGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ class PineconeIngestion:
         
         # Initialize processors
         self.product_processor = UniversalProductProcessor(brand_domain)
-        self.descriptor_generator = EnhancedDescriptorGenerator(brand_domain)
+        self.descriptor_generator = UnifiedDescriptorGenerator(brand_domain)
         self.sparse_generator = SparseEmbeddingGenerator(brand_domain)
         
         # Paths for tracking
@@ -151,7 +151,7 @@ class PineconeIngestion:
         """
         
         # Generate enhanced descriptor
-        enhanced = self.descriptor_generator.generate_enhanced_descriptor(
+        enhanced = self.descriptor_generator.generate_unified_descriptor(
             processed_product['original_data']
         )
         

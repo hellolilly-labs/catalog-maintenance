@@ -8,6 +8,7 @@ Usage:
     python scripts/brand_researcher.py --brand specialized.com --phase all  
     python scripts/brand_researcher.py --brand specialized.com --auto-continue
     python scripts/brand_researcher.py --brand flexfits.com --auto-continue
+    python scripts/brand_researcher.py --brand flexfits.com --force-regenerate --phase all
     python scripts/brand_researcher.py --brand darakayejewelry.com --auto-continue
     python scripts/brand_researcher.py --brand darakayejewelry.com --force-regenerate
     python scripts/brand_researcher.py --brand specialized.com --force-regenerate
@@ -30,6 +31,7 @@ from src.research.customer_cultural_research import get_customer_cultural_resear
 from src.research.voice_messaging_research import get_voice_messaging_researcher
 from src.research.interview_synthesis_research import get_interview_synthesis_researcher
 from src.research.linearity_analysis_research import get_linearity_analysis_researcher
+from src.research.product_catalog_research import get_product_catalog_researcher
 from src.research.research_integration import get_research_integration_processor
 
 # Workflow management - import WorkflowState directly
@@ -57,6 +59,7 @@ class EnhancedBrandResearcher:
             "voice_messaging": get_voice_messaging_researcher(brand_domain=self.brand_domain),
             "interview_synthesis": get_interview_synthesis_researcher(brand_domain=self.brand_domain),
             "linearity_analysis": get_linearity_analysis_researcher(brand_domain=self.brand_domain),
+            "product_catalog": get_product_catalog_researcher(brand_domain=self.brand_domain),
             "research_integration": get_research_integration_processor(brand_domain=self.brand_domain)
         }
         
@@ -315,7 +318,8 @@ async def main():
                     print(f"🎉 All research phases complete for {args.brand}! Ready for catalog ingestion.")
             else:
                 print(f"\n❌ Research pipeline failed!")
-            sys.exit(1)
+                sys.exit(1)
+            sys.exit(0)
             
         elif args.phase:
             # Run specific phase

@@ -64,6 +64,11 @@ class AnthropicService(LLMModelService):
             "max_tokens": 200000,
             "max_output_tokens": 8192,
             "description": "Most capable model for complex reasoning"
+        },
+        "claude-sonnet-4-20250514": {
+            "max_tokens": 200000,
+            "max_output_tokens": 64000,
+            "description": "Most capable model for complex reasoning"
         }
     }
     

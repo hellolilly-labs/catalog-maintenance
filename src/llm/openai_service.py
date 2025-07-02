@@ -45,7 +45,15 @@ class OpenAIService(LLMModelService):
             'max_tokens': 32768,
             'context_window': 1047576,
             'description': 'Latest optimized model',
-            'uses_max_completion_tokens': False
+            'uses_max_completion_tokens': False,
+            'speed': 'medium'
+        },
+        'gpt-4.1-mini': {
+            'max_tokens': 32768,
+            'context_window': 1047576,
+            'description': 'Smaller optimized model',
+            'uses_max_completion_tokens': False,
+            'speed': 'fast'
         },
         'o3': {
             'max_tokens': 100000,
@@ -53,7 +61,26 @@ class OpenAIService(LLMModelService):
             'description': 'Advanced reasoning model optimized for research and analysis',
             'uses_max_completion_tokens': True,
             'temperature_fixed': 1.0,
-            'supported_params': ['model', 'messages', 'max_completion_tokens']
+            'supported_params': ['model', 'messages', 'max_completion_tokens'],
+            'speed': 'slow'
+        },
+        'o3-mini': {
+            'max_tokens': 100000,
+            'context_window': 200000,
+            'description': 'Advanced reasoning model optimized for research and analysis',
+            'uses_max_completion_tokens': True,
+            'temperature_fixed': 1.0,
+            'supported_params': ['model', 'messages', 'max_completion_tokens'],
+            'speed': 'medium'
+        },
+        'o4-mini': {
+            'max_tokens': 100000,
+            'context_window': 200000,
+            'description': 'Faster reasoning model optimized for research and analysis',
+            'uses_max_completion_tokens': True,
+            'temperature_fixed': 1.0,
+            'supported_params': ['model', 'messages', 'max_completion_tokens'],
+            'speed': 'medium'
         }
     }
     
@@ -165,6 +192,13 @@ class OpenAIService(LLMModelService):
                 'frequency_penalty': kwargs.get('frequency_penalty', 0.0),
                 'presence_penalty': kwargs.get('presence_penalty', 0.0),
             })
+        
+        # Add tool support for standard models (not O3/reasoning models)
+        if not model_config.get('uses_max_completion_tokens', False):
+            if 'tools' in kwargs and kwargs['tools']:
+                request_params['tools'] = kwargs['tools']
+                if 'tool_choice' in kwargs:
+                    request_params['tool_choice'] = kwargs['tool_choice']
         
         # Execute with retry logic
         async def make_request():
@@ -312,7 +346,8 @@ class OpenAIService(LLMModelService):
             choice = response.choices[0]
             message = choice.message
             
-            return {
+            # Base response structure
+            formatted_response = {
                 'content': message.content,
                 'usage': {
                     'prompt_tokens': response.usage.prompt_tokens,
@@ -323,6 +358,42 @@ class OpenAIService(LLMModelService):
                 'finish_reason': choice.finish_reason,
                 'provider': 'openai'
             }
+            
+            # Add tool calls if present
+            if hasattr(message, 'tool_calls') and message.tool_calls:
+                formatted_response['tool_calls'] = []
+                for tool_call in message.tool_calls:
+                    formatted_response['tool_calls'].append({
+                        'id': tool_call.id,
+                        'type': tool_call.type,
+                        'function': {
+                            'name': tool_call.function.name,
+                            'arguments': tool_call.function.arguments
+                        }
+                    })
+            
+            # Also include the raw choices structure for backward compatibility
+            formatted_response['choices'] = [{
+                'message': {
+                    'content': message.content,
+                    'role': message.role
+                }
+            }]
+            
+            # Add tool calls to choices format as well for compatibility
+            if hasattr(message, 'tool_calls') and message.tool_calls:
+                formatted_response['choices'][0]['message']['tool_calls'] = []
+                for tool_call in message.tool_calls:
+                    formatted_response['choices'][0]['message']['tool_calls'].append({
+                        'id': tool_call.id,
+                        'type': tool_call.type,
+                        'function': {
+                            'name': tool_call.function.name,
+                            'arguments': tool_call.function.arguments
+                        }
+                    })
+            
+            return formatted_response
             
         except (AttributeError, IndexError, KeyError) as e:
             logger.error(f"Failed to format OpenAI response: {e}")

@@ -69,9 +69,15 @@ class Assistant(Agent):
         self._product_load_task = None
         self._product_load_timing = None  # Will store detailed timing after loading
         
+        # Phase 2a: Catalog labels preloading for semantic search
+        self._catalog_labels_loaded = False
+        self._catalog_labels_task = None
+        
         if account:
             # Start product loading in background - doesn't block Assistant startup
             self._product_load_task = asyncio.create_task(self._load_products_for_account(account))
+            # Start catalog labels preloading for search intelligence
+            self._catalog_labels_task = asyncio.create_task(self._preload_catalog_labels(account))
         
         product_setup_time = time.time() - product_setup_start
         
@@ -391,6 +397,97 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
                 },
                 "timestamp": time.time()
             }
+
+    async def _preload_catalog_labels(self, account: str) -> None:
+        """
+        Preload catalog labels for intelligent search and system prompt enhancement.
+        
+        This runs in parallel with product loading to ensure labels are ready
+        for both search intelligence and AI agent category awareness.
+        
+        Args:
+            account: Account domain for label preloading
+        """
+        try:
+            start_time = time.time()
+            
+            # Import SearchService for label caching
+            from .search_service import SearchService
+            
+            # Preload catalog labels (this caches them for the session)
+            success = await SearchService.preload_catalog_labels(account)
+            
+            if success:
+                self._catalog_labels_loaded = True
+                load_time = time.time() - start_time
+                
+                # Get summary stats for logging
+                stats = SearchService.get_category_summary_stats(account)
+                
+                logger.info(f"🏷️  Catalog labels preloaded for {account} in {load_time:.3f}s "
+                           f"({stats.get('categories', 0)} categories, "
+                           f"{stats.get('total_labels', 0)} labels)")
+                
+                # Update system prompt with category intelligence if prompt manager supports it
+                try:
+                    category_context = SearchService.format_catalog_labels_for_system_prompt(account)
+                    if hasattr(self._prompt_manager, 'add_dynamic_context'):
+                        self._prompt_manager.add_dynamic_context('product_categories', category_context)
+                        logger.debug("Added catalog labels to system prompt context")
+                except Exception as e:
+                    logger.warning(f"Could not add catalog labels to system prompt: {e}")
+                    
+            else:
+                logger.warning(f"⚠️  Failed to preload catalog labels for {account}")
+                self._catalog_labels_loaded = False
+                
+        except Exception as e:
+            logger.error(f"❌ Error preloading catalog labels for {account}: {e}")
+            self._catalog_labels_loaded = False
+
+    async def ensure_catalog_labels_loaded(self) -> bool:
+        """
+        Ensure catalog labels are loaded before using search functions.
+        
+        Returns:
+            True if labels are loaded or loading completed successfully
+        """
+        if self._catalog_labels_loaded:
+            return True
+            
+        if self._catalog_labels_task and not self._catalog_labels_task.done():
+            try:
+                # Wait for label loading to complete
+                await asyncio.wait_for(self._catalog_labels_task, timeout=10.0)
+                return self._catalog_labels_loaded
+            except asyncio.TimeoutError:
+                logger.warning(f"Catalog labels loading timeout for account {self._account}")
+                return False
+            except Exception as e:
+                logger.error(f"Error waiting for catalog labels loading: {e}")
+                return False
+        
+        return self._catalog_labels_loaded
+
+    def get_catalog_intelligence_context(self) -> str:
+        """
+        Get formatted catalog intelligence for AI agent context.
+        
+        Returns formatted string with available categories and usage guidelines,
+        or empty string if labels aren't loaded yet.
+        
+        Returns:
+            Formatted context string for AI agent use
+        """
+        if not self._catalog_labels_loaded:
+            return ""
+            
+        try:
+            from .search_service import SearchService
+            return SearchService.format_catalog_labels_for_system_prompt(self._account)
+        except Exception as e:
+            logger.warning(f"Could not get catalog intelligence context: {e}")
+            return ""
 
     async def ensure_products_loaded(self) -> bool:
         """
@@ -1074,6 +1171,11 @@ Parameter Schema and Description:
             products_ready = await self.ensure_products_loaded()
             if not products_ready:
                 logger.warning(f"Products not loaded for account {self._account}, falling back to legacy loading")
+            
+            # Ensure catalog labels are loaded for intelligent semantic filtering
+            labels_ready = await self.ensure_catalog_labels_loaded()
+            if not labels_ready:
+                logger.warning(f"Catalog labels not loaded for account {self._account}, search may be less intelligent")
         
             # Get products using ProductManager
             from .product_manager import get_products_for_account

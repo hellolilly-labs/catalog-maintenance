@@ -6,9 +6,12 @@ for query optimization. This ensures brand-specific terminology and categories
 are discovered automatically rather than hardcoded.
 """
 
+from src.models.product import Product
+from src.storage import get_account_storage_provider, AccountStorageProvider
 import json
 import logging
 import re
+import asyncio
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, Any, List, Set, Optional, Tuple
@@ -29,9 +32,9 @@ class CatalogFilterAnalyzer:
     - Size and specification options
     """
     
-    def __init__(self, brand_domain: str):
+    def __init__(self, brand_domain: str, storage_provider: Optional[AccountStorageProvider] = None):
         self.brand_domain = brand_domain
-        self.brand_path = Path(f"accounts/{brand_domain}")
+        self.storage = storage_provider or get_account_storage_provider()
         
         # Thresholds for filter inclusion
         self.min_category_count = 2  # At least 2 products to be a category
@@ -39,19 +42,19 @@ class CatalogFilterAnalyzer:
         
         logger.info(f"🔍 Initialized Catalog Filter Analyzer for {brand_domain}")
     
-    def analyze_product_catalog(self, catalog_data: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    async def analyze_product_catalog(self, catalog_data: Optional[List[Product]] = None) -> Dict[str, Any]:
         """
         Analyze product catalog to extract available filters.
         
         Args:
-            catalog_data: Optional product data. If None, will try to load from filesystem.
+            catalog_data: Optional product data. If None, will try to load from storage.
             
         Returns:
             Dictionary of available filters with their types and values
         """
         
         if catalog_data is None:
-            catalog_data = self._load_catalog_data()
+            catalog_data = await self._load_catalog_data()
         
         if not catalog_data:
             logger.warning(f"⚠️ No catalog data found for {self.brand_domain}")
@@ -85,104 +88,340 @@ class CatalogFilterAnalyzer:
         
         return all_filters
     
-    def _load_catalog_data(self) -> List[Dict[str, Any]]:
-        """Load product catalog data from filesystem"""
+    async def _load_catalog_data(self) -> List[Dict[str, Any]]:
+        """Load product catalog data using storage provider"""
         
-        # Try multiple potential catalog file locations
-        potential_paths = [
-            self.brand_path / "catalog.json",
-            self.brand_path / "products.json", 
-            self.brand_path / "product_catalog.json",
-            self.brand_path / "data" / "products.json"
-        ]
-        
-        for path in potential_paths:
-            if path.exists():
-                logger.info(f"📂 Loading catalog from {path}")
-                try:
-                    with open(path) as f:
-                        data = json.load(f)
-                        
-                    # Handle different data structures
-                    if isinstance(data, list):
-                        return data
-                    elif isinstance(data, dict):
-                        # Try common keys
-                        for key in ["products", "items", "catalog", "data"]:
-                            if key in data and isinstance(data[key], list):
-                                return data[key]
-                        
-                except Exception as e:
-                    logger.warning(f"⚠️ Failed to load {path}: {e}")
-        
-        logger.warning(f"⚠️ No product catalog found for {self.brand_domain}")
-        return []
+        try:
+            # Use storage provider to get product catalog
+            products = await self.storage.get_product_catalog(self.brand_domain)
+            
+            if products:
+                logger.info(f"📂 Loaded catalog from storage provider: {len(products)} products")
+                return products
+            else:
+                logger.warning(f"⚠️ No product catalog found for {self.brand_domain}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"⚠️ Failed to load catalog for {self.brand_domain}: {e}")
+            return []
     
-    def _extract_categorical_filters(self, catalog_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Extract categorical filters (single-value categories)"""
+    def _extract_categorical_filters(self, catalog_data: List[Product]) -> Dict[str, Any]:
+        """Extract categorical filters using explicit Product model structure"""
         
         categorical_filters = {}
         
-        # Analyze common categorical fields
-        categorical_fields = [
-            "category", "type", "product_type", "classification",
-            "gender", "target_gender", "style",
-            "brand", "manufacturer", "collection", "series",
-            "material", "frame_material", "construction",
-            "color", "primary_color", "finish"
-        ]
+        # Use explicit Product model fields instead of guessing
+        explicit_categorical_fields = {
+            "categories": "Product Category",
+            "brand": "Brand", 
+            "colors": "Color Options",
+            "sizes": "Size Options"
+        }
         
-        for field in categorical_fields:
-            values = self._extract_field_values(catalog_data, field)
+        # Extract from generated/enhanced fields
+        generated_fields = {
+            "search_keywords": "Search Keywords",
+            "key_selling_points": "Key Features"
+        }
+        
+        # Process explicit Product fields
+        for field, label in explicit_categorical_fields.items():
+            values = self._extract_product_field_values(catalog_data, field)
             if len(values) >= 2:  # At least 2 distinct values
-                # Create aliases by analyzing value patterns
                 aliases = self._generate_aliases_for_values(list(values))
                 
                 categorical_filters[field] = {
                     "type": "categorical",
+                    "label": label,
                     "values": sorted(list(values)),
                     "aliases": aliases,
-                    "frequency": {val: self._count_field_value(catalog_data, field, val) for val in values}
+                    "frequency": {val: self._count_product_field_value(catalog_data, field, val) for val in values}
                 }
+        
+        # Process Product.specifications dynamically
+        spec_filters = self._extract_specification_filters(catalog_data)
+        categorical_filters.update(spec_filters)
+        
+        # Process generated search keywords and selling points for additional categorical data
+        keyword_categories = self._extract_keyword_categories(catalog_data)
+        categorical_filters.update(keyword_categories)
+        
+        # Process generated product labels for precise filtering
+        label_filters = self._extract_product_label_filters(catalog_data)
+        categorical_filters.update(label_filters)
         
         return categorical_filters
     
-    def _extract_numeric_filters(self, catalog_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Extract numeric range filters (price, weight, dimensions)"""
+    def _extract_product_field_values(self, catalog_data: List[Product], field: str) -> set:
+        """Extract values from explicit Product model fields"""
+        values = set()
+        
+        for product in catalog_data:
+            field_value = getattr(product, field, None)
+            
+            if field_value:
+                if isinstance(field_value, list):
+                    # Handle list fields (categories, colors, sizes, etc.)
+                    for item in field_value:
+                        if isinstance(item, str) and item.strip():
+                            values.add(item.strip().lower())
+                        elif isinstance(item, dict) and 'name' in item:
+                            # Handle complex color objects
+                            values.add(item['name'].strip().lower())
+                elif isinstance(field_value, str) and field_value.strip():
+                    values.add(field_value.strip().lower())
+        
+        return values
+    
+    def _count_product_field_value(self, catalog_data: List[Product], field: str, value: str) -> int:
+        """Count occurrences of a value in a Product model field"""
+        count = 0
+        
+        for product in catalog_data:
+            field_value = getattr(product, field, None)
+            
+            if field_value:
+                if isinstance(field_value, list):
+                    for item in field_value:
+                        item_str = item.get('name', item) if isinstance(item, dict) else str(item)
+                        if item_str.strip().lower() == value:
+                            count += 1
+                elif isinstance(field_value, str) and field_value.strip().lower() == value:
+                    count += 1
+        
+        return count
+    
+    def _extract_specification_filters(self, catalog_data: List[Product]) -> Dict[str, Any]:
+        """Extract filters from Product.specifications dynamically"""
+        spec_filters = {}
+        
+        # Collect all specification keys across products
+        all_spec_keys = set()
+        for product in catalog_data:
+            if hasattr(product, 'specifications') and product.specifications:
+                all_spec_keys.update(product.specifications.keys())
+        
+        # Analyze each specification key
+        for spec_key in all_spec_keys:
+            if not spec_key or len(spec_key) < 2:  # Skip empty or very short keys
+                continue
+                
+            values = set()
+            numeric_values = []
+            
+            for product in catalog_data:
+                if hasattr(product, 'specifications') and product.specifications:
+                    spec_value = product.specifications.get(spec_key)
+                    
+                    if spec_value:
+                        # Try to parse as numeric for range filters
+                        try:
+                            if isinstance(spec_value, (int, float)):
+                                numeric_values.append(float(spec_value))
+                            elif isinstance(spec_value, str):
+                                # Extract numeric part
+                                numeric_match = re.search(r'[\d,]+\.?\d*', spec_value.replace(',', ''))
+                                if numeric_match:
+                                    numeric_values.append(float(numeric_match.group()))
+                                else:
+                                    # Treat as categorical
+                                    values.add(str(spec_value).strip().lower())
+                        except (ValueError, AttributeError):
+                            values.add(str(spec_value).strip().lower())
+            
+            # Create filter based on data type
+            if len(numeric_values) >= 3:
+                # Numeric range filter
+                spec_filters[f"spec_{spec_key}"] = {
+                    "type": "numeric_range",
+                    "label": f"{spec_key} (Specification)",
+                    "min": min(numeric_values),
+                    "max": max(numeric_values),
+                    "unit": self._detect_unit_from_key(spec_key),
+                    "source": "specifications"
+                }
+            elif len(values) >= 2:
+                # Categorical filter
+                spec_filters[f"spec_{spec_key}"] = {
+                    "type": "categorical",
+                    "label": f"{spec_key} (Specification)",
+                    "values": sorted(list(values)),
+                    "aliases": self._generate_aliases_for_values(list(values)),
+                    "frequency": {val: sum(1 for p in catalog_data 
+                                         if hasattr(p, 'specifications') and p.specifications 
+                                         and str(p.specifications.get(spec_key, '')).strip().lower() == val) 
+                                 for val in values},
+                    "source": "specifications"
+                }
+        
+        return spec_filters
+    
+    def _extract_keyword_categories(self, catalog_data: List[Product]) -> Dict[str, Any]:
+        """Extract categorical filters from generated search_keywords and key_selling_points"""
+        keyword_filters = {}
+        
+        # Analyze search keywords for patterns
+        all_keywords = []
+        for product in catalog_data:
+            if hasattr(product, 'search_keywords') and product.search_keywords:
+                all_keywords.extend([kw.strip().lower() for kw in product.search_keywords])
+        
+        # Find common keyword patterns (themes)
+        keyword_counter = Counter(all_keywords)
+        frequent_keywords = {kw: count for kw, count in keyword_counter.items() 
+                           if count >= max(2, len(catalog_data) * 0.1)}  # At least 10% of products
+        
+        if frequent_keywords:
+            keyword_filters["search_themes"] = {
+                "type": "multi_select",
+                "label": "Search Themes",
+                "values": sorted(list(frequent_keywords.keys())),
+                "aliases": {},
+                "frequency": frequent_keywords,
+                "source": "generated_keywords"
+            }
+        
+        # Analyze key selling points for common features
+        all_selling_points = []
+        for product in catalog_data:
+            if hasattr(product, 'key_selling_points') and product.key_selling_points:
+                all_selling_points.extend([sp.strip().lower() for sp in product.key_selling_points])
+        
+        selling_point_counter = Counter(all_selling_points)
+        frequent_points = {sp: count for sp, count in selling_point_counter.items() 
+                         if count >= max(2, len(catalog_data) * 0.1)}
+        
+        if frequent_points:
+            keyword_filters["key_features"] = {
+                "type": "multi_select", 
+                "label": "Key Features",
+                "values": sorted(list(frequent_points.keys())),
+                "aliases": {},
+                "frequency": frequent_points,
+                "source": "generated_selling_points"
+            }
+        
+        return keyword_filters
+    
+    def _extract_product_label_filters(self, catalog_data: List[Product]) -> Dict[str, Any]:
+        """Extract precise filters from generated product_labels"""
+        label_filters = {}
+        
+        # Collect all label categories across products
+        all_categories = set()
+        for product in catalog_data:
+            if hasattr(product, 'product_labels') and product.product_labels:
+                all_categories.update(product.product_labels.keys())
+        
+        # Process each label category
+        for category in all_categories:
+            all_labels = []
+            
+            # Collect all labels in this category
+            for product in catalog_data:
+                if hasattr(product, 'product_labels') and product.product_labels:
+                    labels = product.product_labels.get(category, [])
+                    if labels:
+                        all_labels.extend(labels)
+            
+            if all_labels:
+                # Count frequency of each label
+                label_counter = Counter(all_labels)
+                frequent_labels = {label: count for label, count in label_counter.items() 
+                                 if count >= max(2, len(catalog_data) * 0.1)}  # At least 10% frequency
+                
+                if frequent_labels:
+                    label_filters[f"{category}"] = {
+                        "type": "multi_select",
+                        "label": f"{category.replace('_', ' ').title()}",
+                        "values": sorted(list(frequent_labels.keys())),
+                        "aliases": {},
+                        "frequency": frequent_labels,
+                        "source": "generated_labels"
+                    }
+        
+        return label_filters
+    
+    def _detect_unit_from_key(self, spec_key: str) -> Optional[str]:
+        """Detect unit from specification key name"""
+        key_lower = spec_key.lower()
+        
+        unit_patterns = {
+            "weight": "kg",
+            "mass": "kg", 
+            "length": "cm",
+            "width": "cm",
+            "height": "cm",
+            "diameter": "mm",
+            "size": "cm",
+            "price": "$",
+            "cost": "$"
+        }
+        
+        for pattern, unit in unit_patterns.items():
+            if pattern in key_lower:
+                return unit
+                
+        return None
+    
+    def _extract_numeric_filters(self, catalog_data: List[Product]) -> Dict[str, Any]:
+        """Extract numeric range filters using explicit Product model fields"""
         
         numeric_filters = {}
         
-        # Analyze numeric fields
-        numeric_fields = [
-            "price", "cost", "msrp", "retail_price",
-            "weight", "mass", "total_weight",
-            "size", "frame_size", "wheel_size",
-            "length", "width", "height", "diameter"
-        ]
+        # Explicit numeric fields from Product model
+        numeric_fields = {
+            "salePrice": "Sale Price",
+            "originalPrice": "Original Price"
+        }
         
-        for field in numeric_fields:
-            numeric_values = self._extract_numeric_values(catalog_data, field)
+        for field, label in numeric_fields.items():
+            numeric_values = self._extract_product_numeric_values(catalog_data, field)
             if len(numeric_values) >= 3:  # At least 3 products with this field
                 min_val = min(numeric_values)
                 max_val = max(numeric_values)
                 
-                # Generate common ranges for price
+                # Generate price ranges for price fields
                 common_ranges = []
-                if field in ["price", "cost", "msrp", "retail_price"]:
+                if "price" in field.lower():
                     common_ranges = self._generate_price_ranges(numeric_values)
                 
                 numeric_filters[field] = {
                     "type": "numeric_range",
+                    "label": label,
                     "min": min_val,
                     "max": max_val,
                     "common_ranges": common_ranges,
-                    "unit": self._detect_unit(field),
-                    "distribution": self._analyze_distribution(numeric_values)
+                    "unit": "$" if "price" in field.lower() else None,
+                    "distribution": self._analyze_distribution(numeric_values),
+                    "source": "product_model"
                 }
         
         return numeric_filters
     
-    def _extract_multi_select_filters(self, catalog_data: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _extract_product_numeric_values(self, catalog_data: List[Product], field: str) -> List[float]:
+        """Extract numeric values from explicit Product model fields"""
+        values = []
+        
+        for product in catalog_data:
+            field_value = getattr(product, field, None)
+            
+            if field_value is not None:
+                try:
+                    if isinstance(field_value, (int, float)):
+                        values.append(float(field_value))
+                    elif isinstance(field_value, str):
+                        # Handle price strings like "$1,999.99"
+                        cleaned = field_value.replace('$', '').replace(',', '').strip()
+                        if cleaned:
+                            values.append(float(cleaned))
+                except (ValueError, AttributeError):
+                    continue
+        
+        return values
+    
+    def _extract_multi_select_filters(self, catalog_data: List[Product]) -> Dict[str, Any]:
         """Extract multi-select filters (features, tags, attributes)"""
         
         multi_select_filters = {}
@@ -226,13 +465,13 @@ class CatalogFilterAnalyzer:
         
         return multi_select_filters
     
-    def _extract_text_based_filters(self, catalog_data: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _extract_text_based_filters(self, catalog_data: List[Product]) -> Dict[str, Any]:
         """Extract filters from text analysis (descriptions, names)"""
         
         text_filters = {}
         
         # Analyze product names for common patterns
-        names = [product.get("name", "") for product in catalog_data if product.get("name")]
+        names = [getattr(product, "name", "") for product in catalog_data if getattr(product, "name", "")]
         name_patterns = self._extract_name_patterns(names)
         
         if name_patterns:
@@ -245,7 +484,7 @@ class CatalogFilterAnalyzer:
             }
         
         # Analyze descriptions for use cases
-        descriptions = [product.get("description", "") for product in catalog_data if product.get("description")]
+        descriptions = [getattr(product, "description", "") for product in catalog_data if getattr(product, "description", "")]
         use_cases = self._extract_use_cases(descriptions)
         
         if use_cases:
@@ -259,13 +498,13 @@ class CatalogFilterAnalyzer:
         
         return text_filters
     
-    def _extract_field_values(self, catalog_data: List[Dict[str, Any]], field: str) -> Set[str]:
+    def _extract_field_values(self, catalog_data: List[Product], field: str) -> Set[str]:
         """Extract unique values for a specific field"""
         
         values = set()
         
         for product in catalog_data:
-            value = product.get(field)
+            value = getattr(product, field, "")
             if value and isinstance(value, str):
                 # Clean and normalize the value
                 cleaned_value = value.strip().lower()
@@ -274,32 +513,10 @@ class CatalogFilterAnalyzer:
         
         return values
     
-    def _extract_numeric_values(self, catalog_data: List[Dict[str, Any]], field: str) -> List[float]:
-        """Extract numeric values for a specific field"""
-        
-        values = []
-        
-        for product in catalog_data:
-            value = product.get(field)
-            if value is not None:
-                # Try to convert to float
-                try:
-                    if isinstance(value, (int, float)):
-                        values.append(float(value))
-                    elif isinstance(value, str):
-                        # Extract numeric part from strings like "$1,999" or "7.2kg"
-                        numeric_match = re.search(r'[\d,]+\.?\d*', value.replace(',', ''))
-                        if numeric_match:
-                            values.append(float(numeric_match.group()))
-                except (ValueError, AttributeError):
-                    continue
-        
-        return values
-    
-    def _extract_multi_values(self, product: Dict[str, Any], field: str) -> List[str]:
+    def _extract_multi_values(self, product: Product, field: str) -> List[str]:
         """Extract multiple values from a field (arrays or comma-separated)"""
         
-        value = product.get(field)
+        value = getattr(product, field, None)
         if not value:
             return []
         
@@ -474,12 +691,12 @@ class CatalogFilterAnalyzer:
             "recreational": ["leisure", "casual", "fun"]
         }
     
-    def _count_field_value(self, catalog_data: List[Dict[str, Any]], field: str, value: str) -> int:
+    def _count_field_value(self, catalog_data: List[Product], field: str, value: str) -> int:
         """Count how many products have a specific field value"""
         
         count = 0
         for product in catalog_data:
-            product_value = product.get(field, "").strip().lower()
+            product_value = getattr(product, field, "").strip().lower()
             if product_value == value:
                 count += 1
         return count
@@ -506,26 +723,38 @@ class CatalogFilterAnalyzer:
             }
         }
     
-    def save_filters_to_file(self, filters: Dict[str, Any], filename: str = "catalog_filters.json"):
-        """Save extracted filters to file for reuse"""
+    async def save_filters_to_file(self, filters: Dict[str, Any], filename: str = "catalog_filters.json"):
+        """Save extracted filters using storage provider"""
         
-        output_path = self.brand_path / filename
-        output_path.parent.mkdir(exist_ok=True)
-        
-        with open(output_path, 'w') as f:
-            json.dump(filters, f, indent=2)
-        
-        logger.info(f"💾 Saved catalog filters to {output_path}")
+        try:
+            # Convert filters to JSON string
+            filters_json = json.dumps(filters, indent=2)
+            
+            # Save using storage provider
+            success = await self.storage.write_file(
+                account=self.brand_domain,
+                file_path=filename,
+                content=filters_json,
+                content_type="application/json"
+            )
+            
+            if success:
+                logger.info(f"💾 Saved catalog filters to {filename} via storage provider")
+            else:
+                logger.error(f"❌ Failed to save catalog filters to {filename}")
+                
+        except Exception as e:
+            logger.error(f"❌ Error saving catalog filters: {e}")
 
 
 # Factory function for easy usage
-def analyze_brand_catalog(brand_domain: str, catalog_data: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+async def analyze_brand_catalog(brand_domain: str, catalog_data: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Analyze a brand's catalog and return available filters"""
     
     analyzer = CatalogFilterAnalyzer(brand_domain)
-    filters = analyzer.analyze_product_catalog(catalog_data)
+    filters = await analyzer.analyze_product_catalog(catalog_data)
     
     # Save for future use
-    analyzer.save_filters_to_file(filters)
+    await analyzer.save_filters_to_file(filters)
     
     return filters

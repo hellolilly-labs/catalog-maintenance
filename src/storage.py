@@ -85,7 +85,7 @@ class AccountStorageProvider(ABC):
     # Utility Methods
     def _should_compress_catalog(self, catalog_size: int) -> bool:
         """Determine if catalog should be compressed (>500KB)"""
-        return catalog_size > 500 * 1024
+        return catalog_size > 500 * 1024 and False
     
     def _get_catalog_hash(self, products: List[dict]) -> str:
         """Generate hash for catalog content"""
@@ -277,7 +277,7 @@ class GCPAccountStorageProvider(AccountStorageProvider):
                 return None
             
             # Create backup with timestamp
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
             backup_path = f"accounts/{account}/backup/products-{timestamp}.json"
             backup_blob = self.bucket.blob(backup_path)
             
