@@ -16,9 +16,9 @@ import os
 # Add packages to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "packages")))
 
-from liddy_voice.spence.rag_unified import PineconeRAG
-from liddy_voice.spence.search_service import SearchService
-from liddy_voice.spence.model import UserState
+from liddy_voice.rag_unified import PineconeRAG
+from liddy_voice.search_service import SearchService
+from liddy_voice.model import UserState
 
 # Configure logging
 logging.basicConfig(

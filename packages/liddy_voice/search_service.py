@@ -7,10 +7,10 @@ import logging
 from typing import Any, Dict, List, Callable, Optional, Union
 from livekit.agents import llm
 
-from liddy_voice.spence.llm_service import LlmService
-from liddy_voice.spence.product import Product
-from liddy_voice.spence.rag_unified import PineconeRAG
-from liddy_voice.spence.assistant import UserState
+from liddy_voice.llm_service import LlmService
+from liddy.models.product import Product
+from liddy_voice.rag_unified import PineconeRAG
+from liddy_voice.assistant import UserState
 
 logger = logging.getLogger(__name__)
 
@@ -250,7 +250,7 @@ class SearchService:
             product_catalog += "# PRODUCT CATALOG:\n\n"
             
             for product in products[:500]:  # Limit to 100 products to avoid context limits
-                product_catalog += f"{Product.to_markdown(depth=1, product=product)}\n\n"
+                product_catalog += f"{Product.to_markdown(product, depth=1)}\n\n"
             
             chat_ctx.add_message(
                 role="user",
@@ -267,8 +267,12 @@ class SearchService:
             # Parse results and find products
             product_ids = LlmService.parse_json_response(search_results)
             if product_ids:
+                # Import ProductManager to find products
+                from liddy_voice.product_manager import get_product_manager
+                product_manager = await get_product_manager(user_state.account)
+                
                 for product_id in product_ids:
-                    product = await Product.find_by_id(productId=product_id, account=user_state.account)
+                    product = await product_manager.find_by_id(product_id)
                     if product:
                         results.append(product)
             

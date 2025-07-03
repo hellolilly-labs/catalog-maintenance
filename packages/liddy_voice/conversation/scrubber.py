@@ -19,14 +19,14 @@ if __name__ == "__main__":
     # add parent's parent directory to path
     sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 
-from liddy_voice.spence.config_service import ConfigService
+from liddy_voice.config_service import ConfigService
 
 # Import your existing services
 # These would need to be converted or adapted from TypeScript
-from liddy_voice.spence.llm_service import LlmService
-from liddy_voice.spence.model import BasicChatMessage
-from liddy_voice.spence.prompt_manager import PromptManager
-from liddy_voice.spence.conversation.model import ConversationDetails
+from liddy_voice.llm_service import LlmService
+from liddy_voice.model import BasicChatMessage
+from liddy_voice.prompt_manager import PromptManager
+from liddy_voice.conversation.model import ConversationDetails
 
 
 logger = logging.getLogger("conversation-evaluator")

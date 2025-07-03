@@ -21,20 +21,20 @@ from livekit.agents.voice import UserStateChangedEvent, AgentStateChangedEvent
 from livekit.plugins import openai
 from livekit.rtc import RemoteParticipant
 
-from liddy_voice.spence.product import Product
-from liddy_voice.spence.session_state_manager import SessionStateManager
-from liddy_voice.spence.model import UserState, BasicChatMessage
-from liddy_voice.spence.llm_service import LlmService
+from liddy.models.product import Product
+from liddy_voice.session_state_manager import SessionStateManager
+from liddy_voice.model import UserState, BasicChatMessage
+from liddy_voice.llm_service import LlmService
 from redis_client import get_user_state, save_user_state, update_user_room_reconnect_time, save_user_latest_conversation
-from liddy_voice.spence.storage import get_storage_provider
-from liddy_voice.spence.account_manager import AccountManager
+from liddy_voice.storage import get_storage_provider
+from liddy_voice.account_manager import AccountManager
 # Conditional import to avoid circular dependency
 try:
-    from liddy_voice.spence.search_service import SearchService
+    from liddy_voice.search_service import SearchService
 except ImportError:
     SearchService = None
-from liddy_voice.spence.prompt_manager import PromptManager
-from liddy_voice.spence.supervisor_assistant import SupervisorAssistant, SupervisorResponse
+from liddy_voice.prompt_manager import PromptManager
+from liddy_voice.supervisor_assistant import SupervisorAssistant, SupervisorResponse
 
 logger = logging.getLogger(__name__)
 

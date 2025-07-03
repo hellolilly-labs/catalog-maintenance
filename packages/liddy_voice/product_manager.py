@@ -12,7 +12,7 @@ import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
-from .storage import get_account_storage_provider
+from liddy.storage import get_account_storage_provider
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ class ProductManager:
         Returns:
             Product object if found, None otherwise
         """
-        from .product import Product
+        from liddy.models.product import Product
         
         products_data = await self.get_products()
         for product_data in products_data:
@@ -129,7 +129,7 @@ class ProductManager:
         Returns:
             Product object if found, None otherwise
         """
-        from .product import Product
+        from liddy.models.product import Product
         
         # Get the base URL
         base_url = product_url.split('?')[0]
@@ -147,7 +147,7 @@ class ProductManager:
         Returns:
             List of Product objects
         """
-        from .product import Product
+        from liddy.models.product import Product
         
         products_data = await self.get_products()
         return [Product.from_metadata(metadata=item) for item in products_data]

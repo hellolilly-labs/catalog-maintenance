@@ -9,9 +9,9 @@ from typing import Dict, List, Optional
 from livekit.agents import llm, utils, Agent
 from livekit.agents.llm import ChatMessage
 
-from liddy_voice.spence.sentiment import SentimentService, SentimentAnalysis, SentimentStorage
-from liddy_voice.spence.session_state_manager import SessionStateManager
-from liddy_voice.spence.model import UserState
+from liddy_voice.sentiment import SentimentService, SentimentAnalysis, SentimentStorage
+from liddy_voice.session_state_manager import SessionStateManager
+from liddy_voice.model import UserState
 from redis_client import get_user_state, save_user_state
 
 logger = logging.getLogger("sentiment-analyzer")

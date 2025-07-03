@@ -12,7 +12,7 @@ from typing import List, Dict, Optional, Union, Any
 
 from liddy.search.pinecone import PineconeRAG as LiddyPineconeRAG
 from liddy.search.service import SearchService as LiddySearchService
-from liddy_voice.spence.account_manager import get_account_manager
+from liddy_voice.account_manager import get_account_manager
 
 logger = logging.getLogger(__name__)
 

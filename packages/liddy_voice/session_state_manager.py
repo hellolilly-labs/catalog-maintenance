@@ -9,8 +9,8 @@ from typing import Dict, List, Optional, Any, Tuple
 
 from .markdown_utils import obj_to_markdown
 from redis_client import get_user_state, save_user_state, get_user_recent_history
-from liddy_voice.spence.product import Product
-from liddy_voice.spence.model import BasicChatMessage, UrlTracking, UserState, ConversationExitState, ConversationResumptionState
+from liddy.models.product import Product
+from liddy_voice.model import BasicChatMessage, UrlTracking, UserState, ConversationExitState, ConversationResumptionState
 
 
 logger = logging.getLogger("session-state-manager")

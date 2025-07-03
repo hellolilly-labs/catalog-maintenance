@@ -17,7 +17,7 @@ from typing import List, Dict, Optional, Union, Any, Awaitable, Tuple, cast
 
 # from pinecone.grpc import PineconeGRPC as Pinecone
 from pinecone import Pinecone, SearchQuery, SearchRerank, RerankModel
-from liddy_voice.spence.account_manager import get_account_manager
+from liddy_voice.account_manager import get_account_manager
 
 logger = logging.getLogger(__name__)
 

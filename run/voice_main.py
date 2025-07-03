@@ -27,10 +27,10 @@ async def test_voice_components():
     
     # Test imports
     try:
-        from liddy_voice.spence.assistant import Assistant, UserState
-        from liddy_voice.spence.account_manager import get_account_manager
-        from liddy_voice.spence.search_service import SearchService
-        from liddy_voice.spence.rag_unified import PineconeRAG
+        from liddy_voice.assistant import Assistant, UserState
+        from liddy_voice.account_manager import get_account_manager
+        from liddy_voice.search_service import SearchService
+        from liddy_voice.rag_unified import PineconeRAG
         
         print("✅ All imports successful!")
         

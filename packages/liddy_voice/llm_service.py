@@ -4,7 +4,7 @@ import logging
 from livekit.agents import llm
 from livekit.plugins import google, openai, groq
 from typing import Optional, Any
-from liddy_voice.spence.langfuse_llm import LangfuseLKOpenAILLM
+from liddy_voice.langfuse_llm import LangfuseLKOpenAILLM
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ class LlmService:
         try:
           # Use Langfuse-enhanced Google LLM for automatic observability
           logger.info(f"Using Langfuse-enhanced Google LLM for model: {model_name}")
-          from liddy_voice.spence.langfuse_llm import LangfuseLKGoogleLLM
+          from liddy_voice.langfuse_llm import LangfuseLKGoogleLLM
           if "2.5" in model_name:
             return LangfuseLKGoogleLLM(
               model=model_name, 

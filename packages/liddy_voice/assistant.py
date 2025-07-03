@@ -34,19 +34,19 @@ from livekit.protocol.models import RpcError
 from livekit.agents.voice import UserStateChangedEvent, AgentStateChangedEvent
 from livekit.plugins import deepgram, groq, openai, silero
 from typing import Optional, AsyncIterable, List
-from liddy_voice.spence.conversation.analyzer import ConversationAnalyzer
+from liddy_voice.conversation.analyzer import ConversationAnalyzer
 
-from liddy_voice.spence.product import Product
-from liddy_voice.spence.session_state_manager import SessionStateManager
-from liddy_voice.spence.rag_unified import PineconeRAG
-from liddy_voice.spence.model import UserState, BasicChatMessage
-from liddy_voice.spence.llm_service import LlmService
+from liddy.models.product import Product
+from liddy_voice.session_state_manager import SessionStateManager
+from liddy_voice.rag_unified import PineconeRAG
+from liddy_voice.model import UserState, BasicChatMessage
+from liddy_voice.llm_service import LlmService
 from redis_client import get_user_state, save_user_state, update_user_room_reconnect_time, save_user_latest_conversation
-# from liddy_voice.spence.storage import get_storage_provider
-from liddy_voice.spence.account_manager import get_account_manager
-from liddy_voice.spence.search_service import SearchService
+# from liddy_voice.storage import get_storage_provider
+from liddy_voice.account_manager import get_account_manager
+from liddy_voice.search_service import SearchService
 from livekit.rtc import RemoteParticipant
-from liddy_voice.spence.prompt_manager import PromptManager
+from liddy_voice.prompt_manager import PromptManager
 
 logger = logging.getLogger(__name__)
 
@@ -313,7 +313,7 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
             total_start = time.time()
             init_start = time.time()
             
-            from .product import Product
+            from liddy.models.product import Product
             from .product_manager import load_product_catalog_for_assistant
             
             init_time = time.time() - init_start

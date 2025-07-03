@@ -17,10 +17,10 @@ def update_imports_in_file(file_path):
     # Update imports from spence.* to liddy_voice.spence.*
     # But skip relative imports and external package imports
     import_patterns = [
-        (r'from spence\.', 'from liddy_voice.spence.'),
-        (r'import spence\.', 'import liddy_voice.spence.'),
+        (r'from spence\.', 'from liddy_voice.'),
+        (r'import spence\.', 'import liddy_voice.'),
         # Update the rag import to use unified version
-        (r'from liddy_voice\.spence\.rag import', 'from liddy_voice.spence.rag_unified import'),
+        (r'from liddy_voice\.spence\.rag import', 'from liddy_voice.rag_unified import'),
     ]
     
     for pattern, replacement in import_patterns:

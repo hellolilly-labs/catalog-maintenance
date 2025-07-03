@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from typing import List, Optional
 
-from liddy_voice.spence.model import BasicChatMessage
+from liddy_voice.model import BasicChatMessage
 
 @dataclass
 class ConversationDetails:

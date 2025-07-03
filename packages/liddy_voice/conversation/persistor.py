@@ -8,7 +8,7 @@
 # from livekit.agents import utils
 # from livekit.agents.llm import ChatMessage
 
-# from liddy_voice.spence.session_state_manager import SessionStateManager
+# from liddy_voice.session_state_manager import SessionStateManager
 
 # import redis_client as redis_client
 

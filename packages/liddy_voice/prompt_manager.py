@@ -5,7 +5,7 @@ import re
 import shutil
 from datetime import datetime
 from typing import Dict, Any, Optional
-from liddy_voice.spence.product import Product
+from liddy.models.product import Product
 
 from langfuse import get_client
 from langfuse.types import PromptClient

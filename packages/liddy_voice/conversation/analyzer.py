@@ -24,10 +24,10 @@ if __name__ == "__main__":
     sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 
 
-from liddy_voice.spence.session_state_manager import SessionStateManager
-from liddy_voice.spence.model import BasicChatMessage, UserState, ConversationExitState
-from liddy_voice.spence.llm_service import LlmService
-from liddy_voice.spence.sentiment import SentimentService
+from liddy_voice.session_state_manager import SessionStateManager
+from liddy_voice.model import BasicChatMessage, UserState, ConversationExitState
+from liddy_voice.llm_service import LlmService
+from liddy_voice.sentiment import SentimentService
 from redis_client import get_user_state, save_user_state, get_user_recent_history
 
 logger = logging.getLogger("conversation-analyzer")

@@ -10,10 +10,10 @@ if __name__ == "__main__":
     from pathlib import Path
     sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from liddy_voice.spence.config_service import ConfigService
-from liddy_voice.spence.model import BasicChatMessage, SentimentAnalysis, Sentiment, CommunicationDirective, UserState
+from liddy_voice.config_service import ConfigService
+from liddy_voice.model import BasicChatMessage, SentimentAnalysis, Sentiment, CommunicationDirective, UserState
 from redis_client import get_user_state, save_user_state
-from liddy_voice.spence.llm_service import LlmService
+from liddy_voice.llm_service import LlmService
 
 logger = logging.getLogger("sentiment")
 

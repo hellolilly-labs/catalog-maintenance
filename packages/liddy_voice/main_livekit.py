@@ -35,12 +35,12 @@ from livekit.plugins import (
 from google.cloud import texttospeech
 from livekit.plugins.turn_detector.english import EnglishModel
 # from livekit.plugins.turn_detector.multilingual import MultilingualModel
-from liddy_voice.spence.llm_service import LlmService
-from liddy_voice.spence.session_state_manager import SessionStateManager, ConversationResumptionState
-from liddy_voice.spence.assistant import Assistant
-from liddy_voice.spence.model import BasicChatMessage, UserState
+from liddy_voice.llm_service import LlmService
+from liddy_voice.session_state_manager import SessionStateManager, ConversationResumptionState
+from liddy_voice.assistant import Assistant
+from liddy_voice.model import BasicChatMessage, UserState
 from redis_client import get_user_state, get_user_latest_conversation
-from liddy_voice.spence.account_manager import ElevenLabsTtsProviderSettings, get_account_manager
+from liddy_voice.account_manager import ElevenLabsTtsProviderSettings, get_account_manager
 
 # Configure logging first, before any functions try to use it
 def setup_logging():
