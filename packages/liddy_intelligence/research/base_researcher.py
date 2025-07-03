@@ -568,10 +568,10 @@ class BaseResearcher:
             if hasattr(self.storage_manager, 'base_dir'):
                 # Local storage
                 import os
-                research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research_phases")
+                research_dir = os.path.join(self.storage_manager.base_dir, "accounts", brand_domain, "research", phase_name)
                 
-                content_path = os.path.join(research_dir, f"{phase_name}_research.md")
-                metadata_path = os.path.join(research_dir, f"{phase_name}_research_metadata.json")
+                content_path = os.path.join(research_dir, "research.md")
+                metadata_path = os.path.join(research_dir, "research_metadata.json")
                 
                 if all(os.path.exists(p) for p in [content_path, metadata_path]):
                     # Check cache expiry
@@ -598,10 +598,10 @@ class BaseResearcher:
                         }
             else:
                 # GCP storage 
-                research_dir = f"accounts/{brand_domain}/research_phases"
+                research_dir = f"accounts/{brand_domain}/research/{phase_name}"
                 
-                content_blob = f"{research_dir}/{phase_name}_research.md"
-                metadata_blob = f"{research_dir}/{phase_name}_research_metadata.json"
+                content_blob = f"{research_dir}/research.md"
+                metadata_blob = f"{research_dir}/research_metadata.json"
                 
                 content_blob_obj = self.storage_manager.bucket.blob(content_blob)
                 metadata_blob_obj = self.storage_manager.bucket.blob(metadata_blob)
