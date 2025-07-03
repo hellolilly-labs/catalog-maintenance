@@ -37,9 +37,9 @@ from dotenv import load_dotenv
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from liddy_intelligence.ingestion.separate_index_ingestion import SeparateIndexIngestion
-from liddy_intelligence.catalog.unified_descriptor_generator import UnifiedDescriptorGenerator
-from liddy_intelligence.agents.catalog_filter_analyzer import CatalogFilterAnalyzer
+from ..core.separate_index_ingestion import SeparateIndexIngestion
+from ...catalog.unified_descriptor_generator import UnifiedDescriptorGenerator
+from ...agents.catalog_filter_analyzer import CatalogFilterAnalyzer
 from liddy.models.product_manager import get_product_manager
 from liddy.storage import get_account_storage_provider
 

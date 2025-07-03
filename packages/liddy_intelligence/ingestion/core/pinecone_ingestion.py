@@ -21,10 +21,10 @@ from collections import defaultdict
 from pinecone import Pinecone
 from tqdm import tqdm
 
-from liddy_intelligence.ingestion.universal_product_processor import UniversalProductProcessor
-from liddy_intelligence.ingestion.sparse_embeddings import SparseEmbeddingGenerator
-from liddy_intelligence.agents.catalog_filter_analyzer import CatalogFilterAnalyzer
-from liddy_intelligence.catalog.unified_descriptor_generator import UnifiedDescriptorGenerator
+from .universal_product_processor import UniversalProductProcessor
+from .sparse_embeddings import SparseEmbeddingGenerator
+from ...agents.catalog_filter_analyzer import CatalogFilterAnalyzer
+from ...catalog.unified_descriptor_generator import UnifiedDescriptorGenerator
 
 logger = logging.getLogger(__name__)
 

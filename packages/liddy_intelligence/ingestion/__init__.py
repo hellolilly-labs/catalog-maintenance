@@ -1,13 +1,40 @@
 """
-Ingestion module for RAG system
+Product Catalog Ingestion Package
+
+This package provides comprehensive product catalog ingestion capabilities:
+
+Core Components:
+- UniversalProductProcessor: Handles any product format
+- SeparateIndexIngestion: Manages separate dense/sparse indexes
+- PineconeIngestion: Legacy single-index ingestion
+- SparseEmbeddingGenerator: Creates sparse embeddings
+- STTVocabularyExtractor: Extracts vocabulary for speech recognition
+
+Scripts:
+- ingest_catalog.py: Main ingestion script
+- pre_generate_descriptors.py: Pre-generate product descriptors
 """
 
-from liddy_intelligence.ingestion.universal_product_processor import UniversalProductProcessor
-from liddy_intelligence.ingestion.sparse_embeddings import SparseEmbeddingGenerator
+# Core imports
+from .core.universal_product_processor import UniversalProductProcessor
+from .core.sparse_embeddings import SparseEmbeddingGenerator
+from .core.separate_index_ingestion import SeparateIndexIngestion
+from .core.stt_vocabulary_extractor import STTVocabularyExtractor
 
-# Conditionally import PineconeIngestion to avoid import errors
+# Try to import PineconeIngestion (may fail if pinecone not installed)
 try:
-    from liddy_intelligence.ingestion.pinecone_ingestion import PineconeIngestion
-    __all__ = ['UniversalProductProcessor', 'PineconeIngestion', 'SparseEmbeddingGenerator']
+    from .core.pinecone_ingestion import PineconeIngestion
+    __all__ = [
+        'UniversalProductProcessor',
+        'SparseEmbeddingGenerator', 
+        'SeparateIndexIngestion',
+        'STTVocabularyExtractor',
+        'PineconeIngestion'
+    ]
 except ImportError:
-    __all__ = ['UniversalProductProcessor', 'SparseEmbeddingGenerator']
+    __all__ = [
+        'UniversalProductProcessor',
+        'SparseEmbeddingGenerator',
+        'SeparateIndexIngestion', 
+        'STTVocabularyExtractor'
+    ]

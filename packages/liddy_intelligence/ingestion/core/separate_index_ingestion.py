@@ -17,10 +17,10 @@ from pathlib import Path
 from pinecone import Pinecone, ServerlessSpec
 import numpy as np
 
-from liddy_intelligence.ingestion.universal_product_processor import UniversalProductProcessor
+from .universal_product_processor import UniversalProductProcessor
 # Removed custom sparse embeddings - using Pinecone's sparse model instead
-from liddy_intelligence.ingestion.stt_vocabulary_extractor import STTVocabularyExtractor
-from liddy_intelligence.catalog.unified_descriptor_generator import UnifiedDescriptorGenerator
+from .stt_vocabulary_extractor import STTVocabularyExtractor
+from ...catalog.unified_descriptor_generator import UnifiedDescriptorGenerator
 from liddy.storage import get_account_storage_provider
 from liddy.models.product import Product
 

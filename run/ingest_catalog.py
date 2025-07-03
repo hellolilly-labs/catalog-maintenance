@@ -16,7 +16,7 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 sys.path.insert(0, os.path.join(project_root, 'packages'))
 
-from liddy_intelligence.catalog_ingestion.ingest_product_catalog import main
+from liddy_intelligence.ingestion.scripts.ingest_catalog import main
 
 if __name__ == "__main__":
     # Pass through all arguments except the script name
