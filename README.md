@@ -40,20 +40,20 @@ source venv/bin/activate
 
 ```bash
 # Run brand research
-python -m liddy_intelligence.brand_research.brand_researcher --brand specialized.com
+python run/brand_research.py specialized.com
 
-# Ingest product catalog
-python -m liddy_intelligence.catalog_ingestion.ingest_product_catalog --brand specialized.com
+# Ingest product catalog  
+python run/ingest_catalog.py specialized.com
 
 # Generate descriptors
-python -m liddy_intelligence.catalog_ingestion.pre_generate_descriptors --brand specialized.com
+python run/generate_descriptors.py specialized.com
 ```
 
 #### Voice Assistant
 
 ```bash
 # Start voice assistant
-python -m liddy_voice.main
+python run/voice_main.py
 ```
 
 ## Key Components

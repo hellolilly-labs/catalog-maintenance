@@ -4,9 +4,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a **Brand Intelligence & Catalog Maintenance System** that orchestrates an 8-phase AI-powered brand research pipeline. The system performs comprehensive brand intelligence gathering, product catalog ingestion, and knowledge base creation to enable AI-powered brand-aware customer service agents.
+This is a **Brand Intelligence & Catalog Maintenance System** organized as a Python monorepo. The system orchestrates an 8-phase AI-powered brand research pipeline, performs comprehensive brand intelligence gathering, product catalog ingestion, and knowledge base creation to enable AI-powered brand-aware customer service agents.
 
-**Core Technology**: Python 3.12+ with async/await patterns, LLM integration (OpenAI, Anthropic, Gemini), and cloud storage (Google Cloud, Pinecone vector DB).
+**Core Technology**: Python 3.12+ with async/await patterns, LLM integration (OpenAI, Anthropic, Gemini), cloud storage (Google Cloud, Pinecone vector DB), and real-time voice capabilities (AssemblyAI).
+
+## Monorepo Structure
+
+```
+catalog-maintenance/
+├── packages/
+│   ├── liddy/              # Core shared functionality
+│   ├── liddy_intelligence/ # Brand research & catalog processing
+│   └── liddy_voice/        # Voice assistant capabilities
+├── run/                    # Runner scripts for CLI usage
+├── deployments/            # Deployment configurations
+├── scripts/               # Automation and workflow scripts
+├── tests/                 # Test suites
+└── src/                   # Legacy code (being migrated)
+```
 
 ## Common Commands
 
@@ -15,11 +30,11 @@ This is a **Brand Intelligence & Catalog Maintenance System** that orchestrates 
 # Activate virtual environment
 source activate_venv.sh
 
+# Install all packages in development mode
+./scripts/setup_dev.sh
+
 # Install dependencies
 pip install -r requirements.txt
-
-# Run Python scripts
-python brand_researcher.py --brand specialized.com --auto-continue
 ```
 
 ### Brand Research Pipeline Commands
@@ -31,58 +46,104 @@ python brand_researcher.py --brand specialized.com --auto-continue
 ./scripts/brand_manager.sh resume specialized.com
 
 # Individual research phases
-python brand_researcher.py --brand specialized.com --phase foundation_research
-python brand_researcher.py --brand specialized.com --phase all
+python run/brand_research.py specialized.com --phase foundation_research
+python run/brand_research.py specialized.com --phase all
 
 # Batch operations
 ./scripts/batch_operations.sh --operation status-check --discover
 ./scripts/brand_manager.sh dashboard
 ```
 
+### Catalog Ingestion Commands
+```bash
+# Ingest product catalog
+python run/ingest_catalog.py specialized.com
+
+# Preview ingestion
+python run/ingest_catalog.py specialized.com --preview
+
+# Generate descriptors
+python run/generate_descriptors.py specialized.com
+```
+
+### Voice Assistant Commands
+```bash
+# Run voice assistant
+python run/voice_main.py
+
+# Test voice search
+python run/test_voice_search.py specialized.com
+```
+
 ### Testing & Validation
 ```bash
-# Run individual test files
-python test_specialized.py
-python test_web_search_only.py
+# Run test suites
+pytest tests/core/
+pytest tests/intelligence/
+pytest tests/voice/
 
-# Test specific components
-pytest tests/test_configuration.py
-pytest tests/test_openai_service.py
+# Run specific test files
+python tests/intelligence/test_unified_ingestion_core.py
 ```
 
 ## Architecture Overview
 
-### Core Research Pipeline (8 Phases)
-The system follows a sequential 8-phase brand intelligence pipeline orchestrated by `brand_researcher.py`:
+### Package Architecture
 
-1. **Foundation Research** (`src/research/foundation_research.py`) - Company history, mission, values
-2. **Market Positioning** (`src/research/market_positioning_research.py`) - Competitive landscape analysis  
-3. **Product Style** (`src/research/product_style_research.py`) - Design language, aesthetics
-4. **Customer Cultural** (`src/research/customer_cultural_research.py`) - Psychology, behavior patterns
-5. **Voice Messaging** (`src/research/voice_messaging_research.py`) - Brand voice and communication style
-6. **Interview Synthesis** (`src/research/interview_synthesis_research.py`) - Human insights integration
-7. **Linearity Analysis** (`src/research/linearity_analysis_research.py`) - Brand consistency analysis
-8. **Research Integration** (`src/research/research_integration.py`) - Final synthesis and validation
+**liddy** (Core Package):
+- Storage abstraction (local/GCS)
+- Data models (Product, Brand)
+- Configuration management
+- Shared utilities
+
+**liddy_intelligence** (Intelligence Package):
+- 8-phase brand research pipeline
+- Product catalog ingestion
+- LLM integration (multi-provider)
+- Intelligent agents
+
+**liddy_voice** (Voice Package):
+- Real-time voice assistant
+- RAG-powered search
+- Session management
+- WebSocket API
+
+### Core Research Pipeline (8 Phases)
+The system follows a sequential 8-phase brand intelligence pipeline:
+
+1. **Foundation Research** (`liddy_intelligence.research.foundation_research`) - Company history, mission, values
+2. **Market Positioning** (`liddy_intelligence.research.market_positioning_research`) - Competitive landscape analysis  
+3. **Product Style** (`liddy_intelligence.research.product_style_research`) - Design language, aesthetics
+4. **Customer Cultural** (`liddy_intelligence.research.customer_cultural_research`) - Psychology, behavior patterns
+5. **Voice Messaging** (`liddy_intelligence.research.voice_messaging_research`) - Brand voice and communication style
+6. **Interview Synthesis** (`liddy_intelligence.research.interview_synthesis_research`) - Human insights integration
+7. **Linearity Analysis** (`liddy_intelligence.research.linearity_analysis_research`) - Brand consistency analysis
+8. **Research Integration** (`liddy_intelligence.research.research_integration`) - Final synthesis and validation
 
 ### Key Architectural Components
 
-**LLM Factory Pattern** (`src/llm/`):
+**LLM Factory Pattern** (`liddy_intelligence.llm`):
 - `simple_factory.py` - Model-agnostic LLM service factory
 - `anthropic_service.py`, `openai_service.py`, `gemini_service.py` - Provider implementations
 - `prompt_manager.py` - Langfuse integration for prompt management
 
-**Research Framework** (`src/research/`):
+**Research Framework** (`liddy_intelligence.research`):
 - `base_researcher.py` - Base class with integrated quality evaluation (8.0+ threshold)
 - Quality evaluation with feedback loops and automatic retry (max 3 attempts)
 - Phase-specific researchers inherit from BaseResearcher
 
-**Workflow State Management** (`src/workflow/`):
+**Ingestion System** (`liddy_intelligence.ingestion`):
+- `core/` - Core ingestion modules (UniversalProductProcessor, SeparateIndexIngestion)
+- `scripts/` - CLI tools for catalog processing
+- Supports separate dense/sparse indexes for hybrid search
+
+**Workflow State Management** (`liddy_intelligence.workflow`):
 - `workflow_state_manager.py` - Tracks pipeline progress and enables resume functionality
 - `research_phase_tracker.py` - Individual phase progress tracking
 
 **Storage & Configuration**:
-- `src/storage.py` - Account-based storage provider (Google Cloud Storage)
-- `configs/settings.py` - Centralized configuration with environment awareness
+- `liddy.storage` - Account-based storage provider (Google Cloud Storage)
+- `liddy.config` - Centralized configuration with environment awareness
 - `local/account_storage/` - File-based research data storage
 
 ### Quality Evaluation System
@@ -93,6 +154,11 @@ The system includes an integrated LLM-based quality evaluation framework:
 - Quality metadata stored in `research_metadata.json` files alongside research content
 
 ### Important Integration Patterns
+
+**Package Imports**:
+- Use absolute imports for cross-package dependencies: `from liddy.storage import get_account_storage_provider`
+- Use relative imports within packages: `from ..research.base_researcher import BaseResearcher`
+- Runner scripts add packages to path for CLI usage
 
 **Langfuse Integration**: 
 - Uses chat template pattern for prompt management
@@ -123,18 +189,30 @@ These scripts provide intelligent workflow state management with "next step" rec
 
 ## Key Project Context
 
-**Active Development**: Currently implementing Phase 1 Quality Evaluation Framework with LLM-based quality assessment and feedback loops.
+**Monorepo Migration**: The project has been restructured into a monorepo with namespace packages. Legacy code in `src/` is being migrated.
 
-**Storage Strategy**: Account-based storage under `local/account_storage/{brand}/` with research phases, metadata, and progress tracking.
+**Storage Strategy**: Account-based storage under `accounts/{brand}/` with:
+- `research/{phase}/research.md` - Research content
+- `research/{phase}/research_metadata.json` - Quality metadata
+- `products.json` - Product catalog
+- `filter_dictionary.json` - Extracted filters
 
 **Cost Optimization**: Smart refresh strategies to minimize LLM API costs while maintaining data freshness.
 
-**Documentation Integration**: Follow existing patterns in `.cursorrules` for GitHub issue tracking, commit message formats, and project context preservation in `COPILOT_NOTES.md` and `PROJECT_FILEMAP.md`.
+**Documentation Integration**: Follow existing patterns for GitHub issue tracking, commit message formats, and project context preservation.
 
 ## Environment Setup
 
 **Python Version**: 3.12+
-**Key Dependencies**: openai, anthropic (optional), google-cloud-storage, pinecone-client, langfuse, tavily-python, pydantic, aiohttp
+**Key Dependencies**: openai, anthropic (optional), google-cloud-storage, pinecone-client, langfuse, tavily-python, pydantic, aiohttp, assemblyai, websockets
 
 **Configuration**: Environment variables in `.env` file (see `environment.example.txt`)
 **Authentication**: Google Cloud service account key in `auth/` directory
+
+## Development Guidelines
+
+1. **Package Development**: When adding features, determine the appropriate package (core, intelligence, or voice)
+2. **Import Patterns**: Follow the established import patterns (absolute for cross-package, relative within)
+3. **Runner Scripts**: Add runner scripts in `run/` for CLI access to package functionality
+4. **Testing**: Add tests in the appropriate `tests/` subdirectory
+5. **Documentation**: Update package README files when adding significant features
