@@ -16,9 +16,8 @@ import os
 # Add packages to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "packages")))
 
-from liddy_voice.rag_unified import PineconeRAG
-from liddy_voice.search_service import SearchService
-from liddy_voice.model import UserState
+from liddy_voice.search_service import VoiceOptimizedSearchService
+from liddy_voice.session_state_manager import SessionStateManager
 
 # Configure logging
 logging.basicConfig(
@@ -33,36 +32,30 @@ async def test_legacy_index_compatibility():
     print("\n=== Testing Legacy Index Compatibility ===")
     
     brands = [
-        ("specialized.com", "specialized-llama-2048"),
-        ("gucci.com", "gucci-llama-2048"),
-        ("balenciaga.com", "balenciaga-llama-2048"),
+        ("specialized.com", "specialized-dense", "specialized-sparse"),
     ]
     
-    for account, expected_index in brands:
+    for account, dense_index, sparse_index in brands:
         print(f"\nTesting {account}...")
         try:
-            # Create RAG instance
-            rag = PineconeRAG(
-                account=account,
-                index_name=expected_index,
-                namespace=account.split('.')[0]
+            # Create search service
+            search_service = VoiceOptimizedSearchService(
+                brand_domain=account,
+                dense_index_name=dense_index,
+                sparse_index_name=sparse_index
             )
-            
-            # Wait for initialization
-            await asyncio.sleep(2)
             
             # Test search
-            results = await rag.search(
+            results = await search_service.search(
                 query="test query",
-                top_k=5,
-                top_n=3
+                top_k=5
             )
             
-            print(f"✅ Successfully connected to {expected_index}")
-            print(f"   Found {len(results)} results")
+            print(f"✅ Successfully connected to {dense_index}/{sparse_index}")
+            print(f"   Found {len(results.products)} results")
             
         except Exception as e:
-            print(f"❌ Failed to connect to {expected_index}: {e}")
+            print(f"❌ Failed to connect: {e}")
 
 
 async def test_unified_search():
@@ -70,29 +63,32 @@ async def test_unified_search():
     print("\n=== Testing Unified Search Service ===")
     
     account = "specialized.com"
-    user_state = UserState(account=account, user_id="test_user")
     
     # Test product search
     print(f"\nTesting product search for {account}...")
     try:
-        results = await SearchService.search_products_rag(
+        # Create search service
+        search_service = VoiceOptimizedSearchService(
+            brand_domain=account,
+            dense_index_name="specialized-dense",
+            sparse_index_name="specialized-sparse"
+        )
+        
+        results = await search_service.search(
             query="mountain bike",
-            account=account,
-            top_k=10,
-            top_n=5
+            top_k=10
         )
         
         print(f"✅ Product search successful")
-        print(f"   Found {len(results)} products")
+        print(f"   Found {len(results.products)} products")
         
         # Display first result if available
-        if results:
-            first = results[0]
-            metadata = first.get('metadata', {})
+        if results.products:
+            first = results.products[0]
             print(f"\n   First result:")
-            print(f"   - Score: {first.get('score', 0):.3f}")
-            print(f"   - Name: {metadata.get('name', 'Unknown')}")
-            print(f"   - ID: {metadata.get('product_id', metadata.get('id', 'Unknown'))}")
+            print(f"   - Score: {first.score:.3f}")
+            print(f"   - Name: {first.name}")
+            print(f"   - ID: {first.id}")
             
     except Exception as e:
         print(f"❌ Product search failed: {e}")
@@ -101,33 +97,27 @@ async def test_unified_search():
 
 
 async def test_query_enhancement():
-    """Test query enhancement functionality."""
-    print("\n=== Testing Query Enhancement ===")
-    
-    from livekit.agents import llm
-    
-    # Create test context
-    ctx = llm.ChatContext([])
-    ctx.add_message(role="user", content="I need a bike for trails")
-    ctx.add_message(role="assistant", content="What type of trails will you be riding?")
-    ctx.add_message(role="user", content="Mostly technical downhill")
-    
-    user_state = UserState(account="specialized.com", user_id="test_user")
+    """Test session management functionality."""
+    print("\n=== Testing Session Management ===")
     
     try:
-        enhanced = await SearchService.enhance_product_query(
-            query="mountain bike",
-            user_state=user_state,
-            chat_ctx=ctx,
-            product_knowledge="Specialized makes Stumpjumper, Demo, and Enduro for mountain biking"
-        )
+        # Create session manager
+        session = SessionStateManager(agent_id="specialized-assistant")
         
-        print(f"✅ Query enhancement successful")
-        print(f"   Original: 'mountain bike'")
-        print(f"   Enhanced: '{enhanced}'")
+        # Add some messages
+        session.add_message("user", "I need a bike for trails")
+        session.add_message("assistant", "What type of trails will you be riding?")
+        session.add_message("user", "Mostly technical downhill")
+        
+        # Get conversation history
+        history = session.get_conversation_history()
+        
+        print(f"✅ Session management successful")
+        print(f"   Messages in history: {len(history)}")
+        print(f"   Agent ID: {session.agent_id}")
         
     except Exception as e:
-        print(f"❌ Query enhancement failed: {e}")
+        print(f"❌ Session management failed: {e}")
 
 
 async def main():

@@ -26,7 +26,7 @@ from typing import Dict, Any, List, Optional
 from liddy_intelligence.llm.simple_factory import LLMFactory
 from liddy.prompt_manager import PromptManager
 from liddy.storage import get_account_storage_provider
-from configs.settings import get_settings
+from liddy.config import get_settings
 from liddy_intelligence.progress_tracker import (
     get_progress_tracker, 
     StepType, 

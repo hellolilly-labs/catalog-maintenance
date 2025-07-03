@@ -18,7 +18,9 @@ from liddy_intelligence.llm.errors import (
     LLMError, RateLimitError, TokenLimitError, ModelNotFoundError,
     AuthenticationError, NetworkError, InvalidRequestError, ServiceUnavailableError
 )
-from configs import settings
+from liddy.config import get_settings
+
+settings = get_settings()
 
 logger = logging.getLogger(__name__)
 

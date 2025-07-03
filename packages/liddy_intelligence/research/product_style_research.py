@@ -27,7 +27,7 @@ from liddy_intelligence.llm.simple_factory import LLMFactory
 from liddy_intelligence.progress_tracker import ProgressTracker, StepType, create_console_listener
 from liddy_intelligence.web_search import TavilySearchProvider
 from liddy.storage import get_account_storage_provider, AccountStorageProvider
-from configs.settings import get_settings
+from liddy.config import get_settings
 from liddy_intelligence.research.base_researcher import BaseResearcher
 from liddy_intelligence.research.data_sources import WebSearchDataSource, DataGatheringContext
 

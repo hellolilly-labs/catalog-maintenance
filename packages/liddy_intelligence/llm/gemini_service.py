@@ -7,7 +7,7 @@ from typing import Dict, Any, List, Optional
 
 from liddy_intelligence.llm.base import LLMModelService
 from liddy_intelligence.llm.errors import LLMError, AuthenticationError
-from configs.settings import get_settings
+from liddy.config import get_settings
 
 logger = logging.getLogger(__name__)
 

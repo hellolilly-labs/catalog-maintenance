@@ -13,7 +13,7 @@ from liddy_intelligence.progress_tracker import (
     ProgressTracker
 )
 from liddy.storage import get_account_storage_provider
-from configs.settings import get_settings
+from liddy.config import get_settings
 import time
 import json
 from langfuse.types import PromptClient

@@ -27,10 +27,11 @@ async def test_voice_components():
     
     # Test imports
     try:
-        from liddy_voice.assistant import Assistant, UserState
-        from liddy_voice.account_manager import get_account_manager
-        from liddy_voice.search_service import SearchService
-        from liddy_voice.rag_unified import PineconeRAG
+        # Updated imports for monorepo structure
+        from liddy_voice.sample_assistant import VoiceAssistant
+        from liddy_voice.search_service import VoiceOptimizedSearchService
+        from liddy_voice.session_state_manager import SessionStateManager
+        from liddy.account_manager import get_account_manager
         
         print("✅ All imports successful!")
         
@@ -62,20 +63,23 @@ async def test_voice_components():
     # Test search functionality
     print("\n=== Testing Search Service ===")
     try:
-        user_state = UserState(account="specialized.com", user_id="test_user")
+        # Create search service
+        search_service = VoiceOptimizedSearchService(
+            brand_domain="specialized.com",
+            dense_index_name="specialized-dense",
+            sparse_index_name="specialized-sparse"
+        )
         
         # Test product search
-        results = await SearchService.search_products_rag(
+        results = await search_service.search(
             query="mountain bike",
-            account="specialized.com",
             top_k=5
         )
         
-        print(f"Search Results: {len(results)} products found")
-        if results:
-            first = results[0]
-            metadata = first.get('metadata', {})
-            print(f"First result: {metadata.get('name', 'Unknown')} (score: {first.get('score', 0):.3f})")
+        print(f"Search Results: {len(results.products)} products found")
+        if results.products:
+            first = results.products[0]
+            print(f"First result: {first.name} (score: {first.score:.3f})")
             
     except Exception as e:
         print(f"❌ Search service error: {e}")

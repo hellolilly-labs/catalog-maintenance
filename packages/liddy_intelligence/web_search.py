@@ -19,7 +19,7 @@ from abc import ABC, abstractmethod
 import os
 from urllib.parse import urlparse
 
-from configs.settings import get_settings
+from liddy.config import get_settings
 # from src.redis_client import get_redis_client  # TODO: Implement redis support
 
 logger = logging.getLogger(__name__)

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from liddy.account_manager import get_account_manager
 from .base import BaseRAG
-from .search_pinecone import PineconeRAG
+from .pinecone import PineconeRAG
 
 logger = logging.getLogger(__name__)
 
