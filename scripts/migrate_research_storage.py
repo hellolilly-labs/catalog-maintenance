@@ -103,7 +103,7 @@ class ResearchStorageMigrator:
         except Exception as e:
             logger.error(f"❌ Failed to delete {old_path}: {e}")
     
-    def migrate_account(self, account: str, dry_run: bool = True) -> int:
+    def migrate_account(self, account: str, dry_run: bool = True, cleanup: bool = False) -> int:
         """Migrate all research files for a single account."""
         logger.info(f"\n{'='*60}")
         logger.info(f"Processing account: {account}")
@@ -117,6 +117,7 @@ class ResearchStorageMigrator:
         logger.info(f"Found {len(migrations)} files to migrate")
         
         successful = 0
+        cleanup_list = []
         for old_path, new_path in migrations:
             if dry_run:
                 logger.info(f"[DRY RUN] Would migrate: {old_path} → {new_path}")
@@ -124,23 +125,30 @@ class ResearchStorageMigrator:
             else:
                 if self.migrate_file(old_path, new_path):
                     successful += 1
-                    # Optionally delete old file after successful migration
-                    # self.delete_old_file(old_path)
+                    cleanup_list.append(old_path)
+        
+        # Cleanup old files if requested and not in dry run
+        if cleanup and not dry_run and cleanup_list:
+            logger.info(f"\n🧹 Cleaning up {len(cleanup_list)} old files...")
+            for old_path in cleanup_list:
+                self.delete_old_file(old_path)
         
         return successful
     
-    def run_migration(self, dry_run: bool = True):
+    def run_migration(self, dry_run: bool = True, cleanup: bool = False):
         """Run the full migration for all accounts."""
         logger.info(f"Starting research storage migration in bucket: {self.bucket_name}")
         if dry_run:
             logger.info("🔍 DRY RUN MODE - No files will be modified")
+        elif cleanup:
+            logger.info("🧹 CLEANUP MODE - Old files will be deleted after successful migration")
         
         accounts = self.list_accounts()
         logger.info(f"Found {len(accounts)} accounts to process")
         
         total_migrated = 0
         for account in accounts:
-            migrated = self.migrate_account(account, dry_run)
+            migrated = self.migrate_account(account, dry_run, cleanup)
             total_migrated += migrated
         
         logger.info(f"\n{'='*60}")
@@ -149,6 +157,8 @@ class ResearchStorageMigrator:
         
         if dry_run:
             logger.info("\nTo perform the actual migration, run with --execute flag")
+            if not cleanup:
+                logger.info("To also cleanup old files, add --cleanup flag")
 
 
 def main():
@@ -157,11 +167,17 @@ def main():
     parser = argparse.ArgumentParser(description="Migrate research storage structure in GCS")
     parser.add_argument("--execute", action="store_true", 
                        help="Execute the migration (default is dry run)")
+    parser.add_argument("--cleanup", action="store_true",
+                       help="Delete old files after successful migration (requires --execute)")
     parser.add_argument("--bucket", default="liddy-account-documents-dev",
                        help="GCS bucket name (default: liddy-account-documents-dev)")
     parser.add_argument("--account", help="Migrate only a specific account")
     
     args = parser.parse_args()
+    
+    # Validate arguments
+    if args.cleanup and not args.execute:
+        parser.error("--cleanup requires --execute flag")
     
     # Ensure Google Cloud credentials are set
     settings = get_settings()
@@ -172,10 +188,10 @@ def main():
     
     if args.account:
         # Migrate single account
-        migrator.migrate_account(args.account, dry_run=not args.execute)
+        migrator.migrate_account(args.account, dry_run=not args.execute, cleanup=args.cleanup)
     else:
         # Migrate all accounts
-        migrator.run_migration(dry_run=not args.execute)
+        migrator.run_migration(dry_run=not args.execute, cleanup=args.cleanup)
 
 
 if __name__ == "__main__":

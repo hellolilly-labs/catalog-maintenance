@@ -1,8 +1,7 @@
 """
-Liddy Voice AI Assistant
+Liddy Voice Package - Voice Assistant Components
 
-Real-time conversational AI powered by the Liddy Intelligence Engine,
-built on LiveKit for scalable voice interactions.
+This package contains voice-specific components for the Liddy AI system.
 """
 
 __version__ = "0.1.0"
