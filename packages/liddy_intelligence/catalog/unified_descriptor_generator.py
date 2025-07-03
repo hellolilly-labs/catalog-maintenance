@@ -147,11 +147,6 @@ class UnifiedDescriptorGenerator:
                     else:
                         includes_unsaved_products = True
 
-            # Extract filter labels if enabled
-            filter_labels = {}
-            if self.config.extract_filters:
-                filter_labels = await self.filter_analyzer.analyze_product_catalog(products)
-                logger.info(f"  📋 Extracted {len(filter_labels) - 1} filter types")
         except Exception as e:
             logger.error(f"Failed to process catalog: {e}")
         finally:
@@ -161,6 +156,12 @@ class UnifiedDescriptorGenerator:
                 success = await product_manager.save_products(products)
                 if success:
                     logger.info(f"  💾 Saved to ProductManager")
+
+        # Extract filter labels if enabled
+        filter_labels = {}
+        if self.config.extract_filters:
+            filter_labels = await self.filter_analyzer.analyze_product_catalog(products)
+            logger.info(f"  📋 Extracted {len(filter_labels) - 1} filter types")
         
         logger.info(f"✅ Processing complete: {stats}")
         

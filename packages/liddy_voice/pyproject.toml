@@ -38,4 +38,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["liddy_voice", "liddy_voice.spence", "liddy_voice.conversation"]
+packages = ["liddy_voice", "liddy_voice.conversation"]
+
+[project.scripts]
+liddy-voice = "liddy_voice.voice_agent:main"

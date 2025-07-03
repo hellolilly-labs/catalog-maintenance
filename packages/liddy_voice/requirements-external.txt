@@ -1,0 +1,30 @@
+aiofiles>=23.2.1
+cerebras_cloud_sdk==1.35.0
+python-dotenv>=1.0.0
+openai>=1.76.0
+google-cloud-storage>=3.1.0
+google-generativeai>=0.8.4
+anthropic>=0.8.0
+redis>=5.0.0
+requests>=2.31.0
+livekit-agents==1.1.1
+livekit-plugins-anthropic==1.1.1
+livekit-plugins-assemblyai==1.1.1
+livekit-plugins-deepgram==1.1.1
+livekit-plugins-elevenlabs==1.1.1
+livekit-plugins-google==1.1.1
+livekit-plugins-groq==1.1.1
+livekit-plugins-noise_cancellation==0.2.3
+livekit-plugins-openai==1.1.1
+livekit-plugins-silero==1.1.1
+livekit-plugins-turn-detector==1.1.1
+pinecone>=6.0.2
+psutil>=5.9.0
+PyPDF2>=3.0.1
+
+# Vector similarity search
+faiss-cpu>=1.7.4
+# For GPU support (optional, for development environments with GPU):
+# faiss-gpu>=1.7.4
+
+google-cloud-secret-manager

@@ -15,15 +15,15 @@ from typing import Dict, Any, List, Optional, Tuple, Literal
 from datetime import datetime
 from dataclasses import dataclass
 
-from src.agents.catalog_filter_analyzer import CatalogFilterAnalyzer
-from src.llm.simple_factory import LLMFactory
-from src.llm.prompt_manager import PromptManager
-from src.storage import get_account_storage_provider
-from src.models.product_manager import get_product_manager
-from src.models.product import Product, DescriptorMetadata
+from liddy_intelligence.agents.catalog_filter_analyzer import CatalogFilterAnalyzer
+from liddy_intelligence.llm.simple_factory import LLMFactory
+from liddy.prompt_manager import PromptManager
+from liddy.storage import get_account_storage_provider
+from liddy.models.product_manager import get_product_manager
+from liddy.models.product import Product, DescriptorMetadata
 
 # Import product catalog researcher (synthesizes all research phases)
-from src.research.product_catalog_research import get_product_catalog_researcher
+from liddy_intelligence.research.product_catalog_research import get_product_catalog_researcher
 
 logger = logging.getLogger(__name__)
 
@@ -748,7 +748,7 @@ JUSTIFICATION: [brief explanation]"""
                 logger.info(f"✅ Loaded product catalog intelligence (quality: {cached_result.get('quality_score', 'unknown')})")
                 return cached_result["content"]
             else:
-                logger.warning(f"⚠️  No product catalog intelligence found - run: python liddy_intelligence/research/brand_intelligence_pipeline.py --brand {self.brand_domain} --phase product_catalog")
+                logger.warning(f"⚠️  No product catalog intelligence found - run: python run/research.py {self.brand_domain} --phase product_catalog")
                 return ""
                 
         except Exception as e:
