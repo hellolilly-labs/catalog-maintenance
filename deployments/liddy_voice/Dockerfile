@@ -69,23 +69,18 @@ COPY packages/liddy_voice/ packages/liddy_voice/
 RUN --mount=type=cache,target=/home/appuser/.cache/pip,uid=10001 \
     python -m pip install --user --no-cache-dir -e packages/liddy_voice
 
-# Copy runtime data directories
-COPY data/ ./data/
-COPY config/ ./config/
-COPY prompts/ ./prompts/
-
 # Set environment type for GCP deployment
 ENV ENV_TYPE=gcp
 
 # Set Python path to include packages
 ENV PYTHONPATH=/home/appuser/packages:$PYTHONPATH
 
-# Run file download (this will re-run when code changes, but that's likely desired)
-RUN set -a && \
-    . config/.env.gcp && \
-    set +a && \
-    cd packages/liddy_voice && \
-    python voice_agent.py download-files
+# Note: Account data (account.json, products.json) is loaded from GCS at runtime
+# No need to copy data/config/prompts directories - they don't exist in monorepo
+
+# Pre-download required model files during build (if needed)
+# This step is optional - models can be downloaded at runtime if preferred
+# RUN cd packages/liddy_voice && python voice_agent.py download-files
 
 # Expose healthcheck port
 EXPOSE 8081
