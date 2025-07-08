@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 class AccountStorageProvider(ABC):
     """Extended storage provider for account configurations and product catalogs"""
     
+    @abstractmethod
+    async def get_accounts(self) -> List[str]:
+        """Get all accounts"""
+        pass
+    
     # Account Configuration Methods
     @abstractmethod
     async def get_account_config(self, account: str) -> Optional[Dict[str, Any]]:
@@ -55,6 +60,17 @@ class AccountStorageProvider(ABC):
     async def get_product_catalog_metadata(self, account: str) -> Optional[Dict[str, Any]]:
         """Get product catalog metadata (size, count, last_updated)"""
         pass
+    
+    @abstractmethod
+    async def get_research_data(self, account: str, research_type: str) -> Optional[str]:
+        """Get research data for an account"""
+        pass
+    
+    @abstractmethod
+    async def get_research_data_metadata(self, account: str, research_type: str) -> Optional[Dict[str, Any]]:
+        """Get research data metadata for an account"""
+        pass
+    
     
     # File System Methods for Workflow State Management
     @abstractmethod
@@ -110,6 +126,18 @@ class GCPAccountStorageProvider(AccountStorageProvider):
         self.client = storage.Client()
         self.bucket = self.client.bucket(bucket_name)
     
+    async def get_accounts(self) -> List[str]:
+        """Get all accounts"""
+        try:
+            blobs = self.client.list_blobs(self.bucket, prefix="accounts/")
+            account_names = [blob.name.split("/")[1] for blob in blobs]
+            # deduplicate
+            account_names = list(set(account_names))
+            return account_names
+        except Exception as e:
+            logger.error(f"Error getting accounts: {e}")
+            return []
+    
     async def get_account_config(self, account: str) -> Optional[Dict[str, Any]]:
         """Get account config from accounts/{domain}/account.json"""
         try:
@@ -126,6 +154,11 @@ class GCPAccountStorageProvider(AccountStorageProvider):
     async def save_account_config(self, account: str, config: Dict[str, Any]) -> bool:
         """Save account config with backup"""
         try:
+            if "agents" in config and isinstance(config["agents"][0], str):
+                raise ValueError(f"Invalid account config for {account}: agents must be a list of dicts")
+            elif "agent" in config and isinstance(config["agent"], str):
+                raise ValueError(f"Invalid account config for {account}: agent must be a dict")
+            
             # Create backup first
             backup_path = await self.backup_account_config(account)
             if backup_path:
@@ -291,6 +324,28 @@ class GCPAccountStorageProvider(AccountStorageProvider):
         except Exception as e:
             logger.error(f"Error creating product catalog backup for {account}: {e}")
             return None
+    
+    async def get_research_data(self, account: str, research_type: str) -> Optional[str]:
+        """Get research data for an account"""
+        try:
+            blob = self.bucket.blob(f"accounts/{account}/research/{research_type}/research.md")
+            if not blob.exists():
+                return None
+            return blob.download_as_text()
+        except Exception as e:
+            logger.error(f"Error getting research data for {account}: {e}")
+            return None
+    
+    async def get_research_data_metadata(self, account: str, research_type: str) -> Optional[Dict[str, Any]]:
+        """Get research data metadata for an account"""
+        try:
+            blob = self.bucket.blob(f"accounts/{account}/research/{research_type}/research_metadata.json")
+            if not blob.exists():
+                return None
+            return json.loads(blob.download_as_text())
+        except Exception as e:
+            logger.error(f"Error getting research data metadata for {account}: {e}")
+            return None
 
     # File System Methods for Workflow State Management
     async def list_files(self, account: str, directory: str) -> List[str]:
@@ -370,6 +425,14 @@ class LocalAccountStorageProvider(AccountStorageProvider):
     def __init__(self, base_dir: str = "storage"):
         self.base_dir = base_dir
         os.makedirs(base_dir, exist_ok=True)
+    
+    async def get_accounts(self) -> List[str]:
+        """Get all accounts"""
+        try:
+            return [d.rstrip('/') for d in os.listdir(os.path.join(self.base_dir, "accounts")) if d.endswith('/')]
+        except Exception as e:
+            logger.error(f"Error getting accounts: {e}")
+            return []
     
     async def get_account_config(self, account: str) -> Optional[Dict[str, Any]]:
         """Get account config from local storage"""
@@ -583,6 +646,31 @@ class LocalAccountStorageProvider(AccountStorageProvider):
         except Exception as e:
             logger.error(f"Error creating product catalog backup for {account}: {e}")
             return None
+    
+    async def get_research_data(self, account: str, research_type: str) -> Optional[str]:
+        """Get research data for an account"""
+        try:
+            filepath = os.path.join(self.base_dir, "accounts", account, "research", research_type + "research.md")
+            if not os.path.exists(filepath):
+                return None
+            with open(filepath, "r") as f:  
+                return f.read()
+        except Exception as e:
+            logger.error(f"Error getting research data for {account}: {e}")
+            return None
+    
+    async def get_research_data_metadata(self, account: str, research_type: str) -> Optional[Dict[str, Any]]:
+        """Get research data metadata for an account"""
+        try:
+            filepath = os.path.join(self.base_dir, "accounts", account, "research", research_type + "research_metadata.json")
+            if not os.path.exists(filepath):
+                return None
+            with open(filepath, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error getting research data metadata for {account}: {e}")
+            return None
+    
 
     # File System Methods for Workflow State Management
     async def list_files(self, account: str, directory: str) -> List[str]:
@@ -915,7 +1003,9 @@ class BrandDataManager:
         try:
             # Clear brand vertical cache if it exists
             # This would integrate with the descriptor.py caching mechanism
-            from src.descriptor import DescriptorGenerator
+            # Legacy descriptor support - needs migration
+            # from liddy_intelligence.descriptor import DescriptorGenerator
+            pass
             generator = DescriptorGenerator()
             
             # Clear the brand from cache if present

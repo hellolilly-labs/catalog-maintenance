@@ -33,7 +33,7 @@ def test_package_imports():
     try:
         from liddy_intelligence.research.base_researcher import BaseResearcher
         from liddy_intelligence.ingestion import UniversalProductProcessor
-        from liddy_intelligence.llm.simple_factory import LLMFactory
+        from liddy.llm.simple_factory import LLMFactory
         print("✅ liddy_intelligence imports successful")
     except ImportError as e:
         raise ImportError(f"Failed to import liddy_intelligence: {e}")
@@ -138,7 +138,7 @@ async def test_product_model():
 async def test_llm_factory():
     """Test LLM factory pattern."""
     
-    from liddy_intelligence.llm.simple_factory import LLMFactory
+    from liddy.llm.simple_factory import LLMFactory
     
     # Create factory
     factory = LLMFactory()

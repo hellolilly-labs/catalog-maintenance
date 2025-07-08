@@ -18,7 +18,9 @@ Usage:
     python catalog_sync.py status specialized.com
 """
 
-from src.sync.sync_cli import main
+# TODO: Migrate sync functionality to monorepo
+# from liddy.sync.sync_cli import main
+raise NotImplementedError("catalog_sync.py needs migration to monorepo structure")
 
 if __name__ == "__main__":
     main()

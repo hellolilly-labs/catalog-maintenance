@@ -383,8 +383,14 @@ class Product:
         if product.sizing and 'size_chart' in product.sizing:
             markdown += f"\n{prehash}## Sizing\n"
             markdown += "- Size Chart: \n"
-            for key, value in product.sizing['size_chart'].items():
-                markdown += f"  - {key}: {value}\n"
+            if isinstance(product.sizing['size_chart'], str):
+                markdown += f"  - {product.sizing['size_chart']}\n"
+            elif isinstance(product.sizing['size_chart'], dict):
+                for key, value in product.sizing['size_chart'].items():
+                    markdown += f"  - {key}: {value}\n"
+            elif isinstance(product.sizing['size_chart'], list):
+                for size_chart in product.sizing['size_chart']:
+                    markdown += f"  - {size_chart}\n"
             if 'fit_advice' in product.sizing:
                 markdown += f"- Fit Advice: {product.sizing['fit_advice']}\n"
             markdown += "\n"

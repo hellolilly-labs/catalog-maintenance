@@ -19,7 +19,8 @@ import numpy as np
 
 from .universal_product_processor import UniversalProductProcessor
 # Removed custom sparse embeddings - using Pinecone's sparse model instead
-from .stt_vocabulary_extractor import STTVocabularyExtractor
+# Using V3 of STT vocabulary extractor for brand-agnostic linguistic patterns
+from .stt_vocabulary_extractor_v3 import STTVocabularyExtractorV3
 from ...catalog.unified_descriptor_generator import UnifiedDescriptorGenerator
 from liddy.storage import get_account_storage_provider
 from liddy.models.product import Product
@@ -67,8 +68,8 @@ class SeparateIndexIngestion:
         # Use unified descriptor generator (has research integration built-in)
         self.descriptor_generator = UnifiedDescriptorGenerator(brand_domain)
         
-        # Initialize STT vocabulary extractor
-        self.stt_extractor = STTVocabularyExtractor(brand_domain)
+        # Initialize STT vocabulary extractor (using V3 for brand-agnostic patterns)
+        self.stt_extractor = STTVocabularyExtractorV3(brand_domain)
         
         # Storage provider for consistent data management
         self.storage = get_account_storage_provider()
@@ -122,7 +123,7 @@ class SeparateIndexIngestion:
     async def ingest_catalog(
         self,
         namespace: str = "products",
-        batch_size: int = 100,
+        batch_size: int = 92,
         force_update: bool = False
     ) -> Dict[str, Any]:
         """

@@ -54,7 +54,7 @@ class PineconeRAG(BaseRAG):
         self.namespace = namespace
         
         # Auto-generate index names if not provided
-        brand_name = brand_domain.split('.')[0]
+        brand_name = brand_domain.replace('.', '-')
         self.dense_index_name = dense_index_name or f"{brand_name}-dense"
         self.sparse_index_name = sparse_index_name or f"{brand_name}-sparse"
         

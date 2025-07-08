@@ -29,9 +29,9 @@ from test_search_comparison import (
     SearchComparator,
     ConversationTurn
 )
-from src.models.product_manager import ProductManager
-from src.storage import get_account_storage_provider
-from src.search.search_service import SearchService
+from liddy.models.product_manager import ProductManager
+from liddy.storage import get_account_storage_provider
+from liddy.search.service import SearchService
 from dataclasses import dataclass
 
 # Define UserState locally for this test
