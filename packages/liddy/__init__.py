@@ -26,6 +26,7 @@ from .account_manager.models import (
     ElevenLabsTtsProviderSettings,
     AccountTTSSettings,
 )
+from .auth_utils import setup_google_auth, get_google_credentials
 
 # Backward compatibility aliases
 Config = Settings
@@ -47,4 +48,6 @@ __all__ = [
     "TtsProviderSettings",
     "ElevenLabsTtsProviderSettings",
     "AccountTTSSettings",
+    "setup_google_auth",
+    "get_google_credentials",
 ]

@@ -52,12 +52,15 @@ services:
       - PYTHONUNBUFFERED=1
       
     volumes:
-      # Mount GCP credentials
+      # Primary method: Mount GCP credentials from gcloud auth
       - ~/.config/gcloud:/home/appuser/.config/gcloud:ro
-      # If using service account key:
+      # Alternative: If using service account key, uncomment below:
       # - ./service-account-key.json:/tmp/gcp-key.json:ro
-    # environment:
+    environment:
+      # For service account key method, uncomment:
       # - GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-key.json
+      # For local testing, you might want to use dev bucket:
+      - PROMPTS_BUCKET=liddy-account-documents-dev
     
     # Health check
     healthcheck:

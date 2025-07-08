@@ -123,7 +123,27 @@ class GCPAccountStorageProvider(AccountStorageProvider):
     
     def __init__(self, bucket_name: str):
         from google.cloud import storage
-        self.client = storage.Client()
+        from ..auth_utils import setup_google_auth, get_google_credentials
+        
+        # Set up authentication
+        auth_success = setup_google_auth()
+        if not auth_success:
+            logger.warning("Google Cloud authentication may not be properly configured")
+        
+        # Get credentials
+        credentials = get_google_credentials()
+        
+        # Create client with explicit credentials if available
+        if credentials:
+            self.client = storage.Client(credentials=credentials)
+        else:
+            # Try to create client anyway - it might work with default auth
+            try:
+                self.client = storage.Client()
+            except Exception as e:
+                logger.error(f"Failed to create GCS client: {e}")
+                raise
+        
         self.bucket = self.client.bucket(bucket_name)
     
     async def get_accounts(self) -> List[str]:

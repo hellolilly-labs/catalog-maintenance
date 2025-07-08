@@ -223,11 +223,11 @@ class UserManager:
         pass
 
     @staticmethod
-    def get_user_state(self, user_id: str) -> Optional[UserState]:
+    def get_user_state(user_id: str) -> Optional[UserState]:
         return get_user_state(user_id)
     
     @staticmethod
-    def save_user_state(self, state: UserState, ttl: Optional[int] = None) -> bool:
+    def save_user_state(state: UserState, ttl: Optional[int] = None) -> bool:
         return save_user_state(state, ttl)
     
     @staticmethod
