@@ -6,10 +6,10 @@ Provides fallback to hardcoded defaults for graceful degradation.
 """
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 
-from .storage import get_account_storage_provider
+from liddy.storage import get_account_storage_provider
 from .account_config_cache import AccountConfigCache
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,10 @@ class AccountConfigLoader:
         self.storage_provider = storage_provider or get_account_storage_provider()
         self.cache = cache or AccountConfigCache()
         self.fallback_configs = {}  # Loaded from hardcoded defaults
+    
+    async def get_accounts(self) -> List[str]:
+        """Get all accounts from storage provider"""
+        return await self.storage_provider.get_accounts()
     
     async def get_account_config(self, account: str) -> Optional[Dict[str, Any]]:
         """
@@ -48,7 +52,7 @@ class AccountConfigLoader:
         
         # Try cache first
         try:
-            cached_config = self.cache.get_config(account)
+            cached_config = await self.cache.get_config_async(account)
             if cached_config:
                 logger.info(f"Loaded {account} config from cache")
                 return cached_config
@@ -61,7 +65,7 @@ class AccountConfigLoader:
             if config:
                 # Cache the config for future requests
                 try:
-                    self.cache.set_config(account, config)
+                    await self.cache.set_config_async(account, config)
                 except Exception as e:
                     logger.warning(f"Failed to cache config for {account}: {e}")
                 
@@ -106,7 +110,7 @@ class AccountConfigLoader:
             
             if success:
                 # Invalidate cache so next request loads fresh data
-                self.cache.invalidate_config(account)
+                await self.cache.invalidate_config_async(account)
                 logger.info(f"Saved and invalidated cache for {account}")
             
             return success
