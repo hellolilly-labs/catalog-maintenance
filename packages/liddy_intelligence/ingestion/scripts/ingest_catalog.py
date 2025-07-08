@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 import asyncio
 from datetime import datetime, timezone
+import time
 
 from dotenv import load_dotenv
 
@@ -42,6 +43,7 @@ from ...catalog.unified_descriptor_generator import UnifiedDescriptorGenerator
 from ...agents.catalog_filter_analyzer import CatalogFilterAnalyzer
 from liddy.models.product_manager import get_product_manager
 from liddy.storage import get_account_storage_provider
+from ...research.stt_vocabulary_researcher import extract_stt_vocabulary
 
 # Load environment variables
 load_dotenv()
@@ -212,7 +214,7 @@ class ProductCatalogIngestor:
     async def ingest_catalog(
         self,
         namespace: str = "products",
-        batch_size: int = 100,
+        batch_size: int = 92,
         force_update: bool = False
     ) -> Dict[str, Any]:
         """
@@ -630,7 +632,7 @@ async def main():
     try:
         stats = await ingestor.ingest_catalog(
             namespace=args.namespace,
-            batch_size=args.batch_size,
+            batch_size=min(args.batch_size, 92),
             force_update=args.force
         )
         

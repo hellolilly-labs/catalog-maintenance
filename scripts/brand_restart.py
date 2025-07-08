@@ -28,7 +28,7 @@ from pathlib import Path
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.storage import get_brand_data_manager
+from liddy.storage import get_brand_data_manager
 
 
 async def inspect_brand_data(brand_domain: str):

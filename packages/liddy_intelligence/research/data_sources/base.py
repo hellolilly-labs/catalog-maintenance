@@ -6,7 +6,7 @@ Each strategy handles a specific type of data collection (web search, product ca
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Union
+from typing import Dict, Any, List, Union, Optional
 from dataclasses import dataclass
 
 

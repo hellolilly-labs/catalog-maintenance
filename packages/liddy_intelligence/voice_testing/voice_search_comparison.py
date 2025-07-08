@@ -23,7 +23,7 @@ import numpy as np
 from liddy.models.product import Product
 from liddy.models.product_manager import ProductManager
 from liddy.storage import get_account_storage_provider
-from liddy_intelligence.llm.simple_factory import LLMFactory
+from liddy.llm.simple_factory import LLMFactory
 from liddy.prompt_manager import PromptManager
 from liddy.search.service import SearchService, SearchMetrics
 from test_search_comparison import (

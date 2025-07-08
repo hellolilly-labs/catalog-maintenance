@@ -25,7 +25,7 @@ from liddy_voice.config_service import ConfigService
 # These would need to be converted or adapted from TypeScript
 from liddy_voice.llm_service import LlmService
 from liddy_voice.model import BasicChatMessage
-from liddy_voice.prompt_manager import PromptManager
+from liddy_voice.prompt_manager import AccountPromptManager
 from liddy_voice.conversation.model import ConversationDetails
 
 
@@ -323,7 +323,7 @@ if __name__ == "__main__":
     conversation_ids = list(set(conversation_ids))
     
     # load the system prompt from the prompt manager
-    prompt_manager = PromptManager(account="specialized.com")
+    prompt_manager = AccountPromptManager(account="specialized.com")
     system_prompt = prompt_manager.build_system_instruction_prompt(account="specialized.com")
     scrubber = ConversationScrubber()
     

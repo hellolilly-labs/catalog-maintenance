@@ -15,7 +15,7 @@ IMPORT_FIXES = {
     # Fix llm __init__.py
     r'from liddy_intelligence\.ingestion\.base import': 'from liddy_intelligence.llm.base import',
     r'from liddy_intelligence\.ingestion\.errors import': 'from liddy_intelligence.llm.errors import',
-    r'from liddy_intelligence\.ingestion\.simple_factory import': 'from liddy_intelligence.llm.simple_factory import',
+    r'from liddy_intelligence\.ingestion\.simple_factory import': 'from liddy.llm.simple_factory import',
     r'from liddy_intelligence\.ingestion\.openai_service import': 'from liddy_intelligence.llm.openai_service import',
     r'from liddy_intelligence\.ingestion\.anthropic_service import': 'from liddy_intelligence.llm.anthropic_service import',
     r'from liddy_intelligence\.ingestion\.gemini_service import': 'from liddy_intelligence.llm.gemini_service import',

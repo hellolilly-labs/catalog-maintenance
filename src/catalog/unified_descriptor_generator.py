@@ -16,7 +16,7 @@ from datetime import datetime
 from dataclasses import dataclass
 
 from liddy_intelligence.agents.catalog_filter_analyzer import CatalogFilterAnalyzer
-from liddy_intelligence.llm.simple_factory import LLMFactory
+from liddy.llm.simple_factory import LLMFactory
 from liddy.prompt_manager import PromptManager
 from liddy.storage import get_account_storage_provider
 from liddy.models.product_manager import get_product_manager

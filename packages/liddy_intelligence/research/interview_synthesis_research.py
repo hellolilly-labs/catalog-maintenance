@@ -19,7 +19,7 @@ from typing import Dict, Any, List, Optional
 
 from liddy.storage import get_account_storage_provider
 from liddy_intelligence.progress_tracker import ProgressTracker, StepType, create_console_listener
-from liddy_intelligence.llm.simple_factory import LLMFactory
+from liddy.llm.simple_factory import LLMFactory
 from liddy.prompt_manager import PromptManager
 from liddy_intelligence.research.base_researcher import BaseResearcher
 

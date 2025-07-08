@@ -17,23 +17,23 @@ Usage:
     response = await service.chat_completion(...)
 """
 
-from liddy_intelligence.llm.base import LLMModelService
-from liddy_intelligence.llm.errors import (
+from liddy.llm.base import LLMModelService
+from liddy.llm.errors import (
     LLMError, RateLimitError, TokenLimitError, ModelNotFoundError,
     AuthenticationError, NetworkError, ServiceError
 )
-from liddy_intelligence.llm.simple_factory import LLMFactory
-from liddy_intelligence.llm.openai_service import OpenAIService, create_openai_service
+from liddy.llm.simple_factory import LLMFactory
+from liddy.llm.openai_service import OpenAIService, create_openai_service
 
 # Optional imports with graceful fallbacks
 try:
-    from liddy_intelligence.llm.anthropic_service import AnthropicService, create_anthropic_service
+    from liddy.llm.anthropic_service import AnthropicService, create_anthropic_service
 except ImportError:
     AnthropicService = None
     create_anthropic_service = None
 
 try:
-    from liddy_intelligence.llm.gemini_service import GeminiService, create_gemini_service
+    from liddy.llm.gemini_service import GeminiService, create_gemini_service
 except ImportError:
     GeminiService = None
     create_gemini_service = None

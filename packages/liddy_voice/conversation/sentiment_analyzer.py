@@ -11,8 +11,8 @@ from livekit.agents.llm import ChatMessage
 
 from liddy_voice.sentiment import SentimentService, SentimentAnalysis, SentimentStorage
 from liddy_voice.session_state_manager import SessionStateManager
-from liddy_voice.model import UserState
-from redis_client import get_user_state, save_user_state
+from liddy.model import UserState
+from liddy_voice.user_manager import UserManager
 
 logger = logging.getLogger("sentiment-analyzer")
 
@@ -178,13 +178,13 @@ class SentimentAnalyzer():
             f"{sentiment_analysis.communication_directive.formality.reasoning}"
         )
 
-        user_state = get_user_state(self.user_id)
+        user_state = UserManager.get_user_state(self.user_id)
         if not user_state:
             user_state = UserState(user_id=self.user_id)
         
         user_state.sentiment_analysis = sentiment_analysis
         user_state.communication_directive = sentiment_analysis.communication_directive if sentiment_analysis else None
-        save_user_state(user_state=user_state)
+        UserManager.save_user_state(user_state=user_state)
         
         # # Find existing directive or create new one
         # if self._model.chat_ctx:

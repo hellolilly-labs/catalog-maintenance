@@ -18,7 +18,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 
-from liddy_intelligence.llm.simple_factory import LLMFactory
+from liddy.llm.simple_factory import LLMFactory
 from liddy.prompt_manager import PromptManager
 from liddy.storage import get_account_storage_provider
 from liddy_intelligence.progress_tracker import ProgressTracker, StepType, create_console_listener
@@ -125,7 +125,7 @@ class CustomerCulturalResearcher(BaseResearcher):
                         else:
                             failed_searches += 1
                             
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(0.25)
                         
                     except Exception as e:
                         failed_searches += 1

@@ -23,7 +23,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 
-from liddy_intelligence.llm.simple_factory import LLMFactory
+from liddy.llm.simple_factory import LLMFactory
 from liddy.prompt_manager import PromptManager
 from liddy.storage import get_account_storage_provider
 from liddy.config import get_settings

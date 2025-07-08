@@ -13,8 +13,8 @@ from typing import List, Dict, Any, Optional
 import openai
 from openai import AsyncOpenAI
 
-from liddy_intelligence.llm.base import LLMModelService
-from liddy_intelligence.llm.errors import (
+from liddy.llm.base import LLMModelService
+from liddy.llm.errors import (
     LLMError, RateLimitError, TokenLimitError, ModelNotFoundError,
     AuthenticationError, NetworkError, InvalidRequestError, ServiceUnavailableError
 )
@@ -56,6 +56,13 @@ class OpenAIService(LLMModelService):
             'description': 'Smaller optimized model',
             'uses_max_completion_tokens': False,
             'speed': 'fast'
+        },
+        'gpt-4.1-nano': {
+            'max_tokens': 32768,
+            'context_window': 1047576,
+            'description': 'Smaller optimized model',
+            'uses_max_completion_tokens': False,
+            'speed': 'fastest'
         },
         'o3': {
             'max_tokens': 100000,

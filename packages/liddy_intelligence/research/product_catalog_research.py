@@ -26,7 +26,7 @@ from typing import Dict, Any, List, Optional
 
 from liddy.storage import get_account_storage_provider
 from liddy_intelligence.progress_tracker import ProgressTracker, StepType, create_console_listener
-from liddy_intelligence.llm.simple_factory import LLMFactory
+from liddy.llm.simple_factory import LLMFactory
 from liddy.prompt_manager import PromptManager
 from liddy_intelligence.research.base_researcher import BaseResearcher
 from liddy_intelligence.research.data_sources import WebSearchDataSource, DataGatheringContext
@@ -247,10 +247,14 @@ class ProductCatalogResearcher(BaseResearcher):
         # Log feedback integration
         if feedback_context:
             logger.info("📋 Including improvement feedback in product catalog synthesis prompt")
+
+        brand_domain = synthesis_data["brand_domain"]
+        brand_name = brand_domain.split(".")[0].title()
         
         # Prepare template variables (limit content length for prompt efficiency)
         template_vars = {
-            "brand_domain": synthesis_data["brand_domain"],
+            "brand_name": brand_name,
+            "brand_domain": brand_domain,
             "foundation": synthesis_data["foundation"][:4000] if synthesis_data["foundation"] else "No foundation research available",
             "market_positioning": synthesis_data["market_positioning"][:2000] if synthesis_data["market_positioning"] else "No market positioning available",
             "product_style": synthesis_data["product_style"][:2500] if synthesis_data["product_style"] else "No product style research available",
@@ -492,6 +496,172 @@ Create a comprehensive framework to enhance product search intelligence. This co
 - **Filtering & Refinement**: [How customers can narrow down choices]
 - **Search Result Presentation**: [How to display products effectively]
 
+## Part C: Product Search Enhancement Prompt
+
+Create a compact, tactical prompt that can be used directly for search query enhancement. This should be a ready-to-use prompt that distills the key insights from your research.
+
+**THIS SECTION IS FOR DIRECT USE IN SEARCH QUERY ENHANCEMENT - COPY AS-IS**
+
+### Search Enhancement Instructions for {{brand_name}}
+
+You are enhancing product search queries for {{brand_name}}. Apply these specific insights:
+
+#### 1. Brand-Specific Terminology
+Transform generic terms to {{brand_name}}-specific language:
+[List 5-10 key terminology mappings based on brand research, e.g., "bike" → "bicycle, cycle, {{brand_name}} bike"]
+
+#### 2. Product Category Intelligence
+When users search broadly, guide them to these specific categories:
+[List main product categories and subcategories with guidance on when to suggest each]
+
+#### 3. Technical Translation Rules
+Convert customer language to product specifications:
+[List 5-8 common customer terms and their technical equivalents in the catalog]
+
+#### 4. Feature Expansion Patterns
+Expand simple queries with relevant features:
+[List 5-8 query patterns showing how to expand basic searches with relevant attributes]
+
+#### 5. Use Case Associations
+Connect problems/needs to product solutions:
+[Map 5-8 common customer problems/needs to relevant product features or categories]
+
+#### 6. Query Enhancement Examples
+[Provide 3-5 concrete examples showing original query → enhanced query transformations]
+
+#### Search Enhancement Rules:
+1. **Maintain Intent**: Never change what the user is looking for, only enhance how they express it
+2. **Add Context**: Include relevant technical terms, features, and specifications that match the intent
+3. **Expand Synonyms**: Add {{brand_name}}-specific terminology alongside generic terms
+4. **Include Attributes**: Add likely filters (price range, category, features) based on query context
+5. **Preserve Simplicity**: Keep enhanced queries natural and not overly complex
+
+**END OF SEARCH ENHANCEMENT PROMPT**
+
+## Part D: Knowledge Search Enhancement Prompt
+
+Create a compact, tactical prompt for enhancing knowledge/support queries. This should guide AI to enhance customer service and informational queries.
+
+**THIS SECTION IS FOR DIRECT USE IN KNOWLEDGE SEARCH ENHANCEMENT - COPY AS-IS**
+
+### Knowledge Search Enhancement Instructions for {{brand_name}}
+
+You are enhancing knowledge/support queries for {{brand_name}}. Apply these specific insights:
+
+#### 1. Common Support Topics
+Transform vague questions into specific support categories:
+[List 5-10 common support query mappings, e.g., "help" → "returns, warranty, sizing, care instructions"]
+
+#### 2. Brand Policy Intelligence
+When users ask about policies, include these specific areas:
+[List key policy areas like returns, warranties, shipping, with brand-specific details]
+
+#### 3. Technical Support Translation
+Convert customer problems to searchable support topics:
+[List 5-8 common problem descriptions and their support article keywords]
+
+#### 4. FAQ Pattern Recognition
+Identify and expand frequently asked questions:
+[List 5-8 FAQ patterns and how to enhance them for better knowledge base matches]
+
+#### 5. Customer Journey Mapping
+Connect customer situations to relevant help content:
+[Map 5-8 customer scenarios to appropriate support categories]
+
+#### 6. Knowledge Query Enhancement Examples
+[Provide 3-5 examples: original support query → enhanced knowledge search]
+
+#### Knowledge Enhancement Rules:
+1. **Clarify Intent**: Identify if user needs how-to, troubleshooting, or policy information
+2. **Add Context**: Include product categories or specific issues when relevant
+3. **Expand Coverage**: Add related topics the user might also need
+4. **Brand Specifics**: Include {{brand_name}}-specific terminology and processes
+5. **Maintain Helpfulness**: Keep queries focused on solving the user's problem
+
+**END OF KNOWLEDGE ENHANCEMENT PROMPT**
+
+## Part E: STT Word Boost Vocabulary
+
+Extract and organize domain-specific vocabulary for Speech-to-Text (STT) enhancement. These terms will improve recognition accuracy for brand-specific, technical, and product-related speech.
+
+### E1. Brand & Product Names
+Extract all variations of brand names, product lines, and model names:
+- **Primary Brand Names**: [Main brand name and common variations]
+- **Sub-brands & Collections**: [Product lines, collections, series names]
+- **Product Model Names**: [Specific model names and numbers]
+- **Brand Nicknames**: [Common abbreviations or colloquialisms]
+
+### E2. Technical Terminology
+Identify technical terms specific to the product category:
+- **Technical Features**: [Technology names, specifications, features]
+- **Materials & Components**: [Materials, parts, components mentioned]
+- **Performance Metrics**: [Units, measurements, performance terms]
+- **Industry Jargon**: [Category-specific technical language]
+
+### E3. Phonetically Challenging Terms
+Terms that are commonly mispronounced or misheard:
+- **Complex Product Names**: [Hard-to-pronounce model names]
+- **Technical Acronyms**: [Industry acronyms that might be spelled out]
+- **Foreign Terms**: [Non-English terms used in products]
+- **Compound Terms**: [Multi-word technical phrases]
+
+### E4. Customer Vernacular
+How customers actually talk about products:
+- **Slang & Shortcuts**: [Common abbreviations customers use]
+- **Alternative Names**: [What customers call products vs official names]
+- **Common Misspellings**: [How terms might be phonetically interpreted]
+- **Regional Variations**: [Different terms by region if applicable]
+
+### E5. STT Word Boost List
+
+**THIS SECTION IS FOR DIRECT USE IN STT CONFIGURATION - COPY AS-IS**
+
+### STT Word Boost Terms for {{brand_name}}
+
+```json
+{
+  "word_boost": [
+    // Brand Names (weight: high)
+    "{{brand_name}}",
+    "{{brand_name_variations}}",
+    
+    // Product Lines (weight: high)
+    [List top 20-30 product line names],
+    
+    // Technical Terms (weight: medium)
+    [List top 50-100 technical terms specific to the category],
+    
+    // Model Names (weight: high)
+    [List top 30-50 specific model names],
+    
+    // Common Phrases (weight: medium)
+    [List 20-30 common multi-word phrases],
+    
+    // Acronyms (weight: low)
+    [List 10-20 relevant acronyms]
+  ],
+  "boost_weight": {
+    "brand_names": 0.3,
+    "product_names": 0.25,
+    "technical_terms": 0.2,
+    "model_names": 0.15,
+    "phrases": 0.1
+  },
+  "total_terms": "[Total count, aim for 200-500 terms]",
+  "update_frequency": "monthly",
+  "notes": "[Any special considerations for this brand's STT vocabulary]"
+}
+```
+
+### STT Integration Guidelines:
+1. **Term Selection**: Focus on terms that are unique to the brand/industry
+2. **Avoid Common Words**: Don't boost generic English words
+3. **Update Regularly**: Refresh list when new products launch
+4. **Test Recognition**: Validate that boosted terms improve accuracy
+5. **Regional Considerations**: Add regional product name variations if applicable
+
+**END OF STT WORD BOOST**
+
 **SYNTHESIS REQUIREMENTS:**
 - Base all recommendations on the provided research foundation
 - Use numbered citations [1], [2], [3] for all research-based insights
@@ -504,6 +674,8 @@ Create a comprehensive framework to enhance product search intelligence. This co
 Write professional product catalog intelligence suitable for AI system integration and strategic product marketing implementation.
 Focus on synthesized insights that leverage the complete research foundation.
 Include clear implementation guidance and practical examples.
+Part C and D should be immediately usable as search/knowledge enhancement prompts without modification.
+Part E should provide a ready-to-use JSON structure for STT word_boost configuration.
 
 BRAND: {{brand_domain}}
 
@@ -568,9 +740,11 @@ Generate practical, implementation-ready product catalog intelligence that bridg
         content_length = len(catalog_content)
         content_bonus = min(0.06, content_length / 12000)  # Up to 0.06 for comprehensive content
         
-        # Check for structured sections (Part A and Part B)
-        section_indicators = catalog_content.count("Part A") + catalog_content.count("Part B")
-        section_bonus = min(0.04, section_indicators * 0.02)  # Bonus for proper structure
+        # Check for structured sections (Part A through Part E)
+        section_indicators = (catalog_content.count("Part A") + catalog_content.count("Part B") + 
+                            catalog_content.count("Part C") + catalog_content.count("Part D") + 
+                            catalog_content.count("Part E"))
+        section_bonus = min(0.04, section_indicators * 0.008)  # Bonus for proper structure
         
         # Check for actionable recommendations
         action_indicators = (catalog_content.count("Framework") + 

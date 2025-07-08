@@ -13,7 +13,7 @@ import logging
 import tiktoken
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Union
-from liddy_intelligence.llm.errors import LLMError, RateLimitError, TokenLimitError, NetworkError
+from liddy.llm.errors import LLMError, RateLimitError, TokenLimitError, NetworkError
 
 logger = logging.getLogger(__name__)
 

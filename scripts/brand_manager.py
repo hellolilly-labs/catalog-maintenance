@@ -11,10 +11,11 @@ import sys
 import os
 from datetime import datetime
 
-# Add the project root to the Python path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add packages to path for monorepo imports
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(project_root, 'packages'))
 
-from src.workflow.workflow_state_manager import get_workflow_manager, WorkflowState
+from liddy_intelligence.workflow.workflow_state_manager import get_workflow_manager, WorkflowState
 
 def format_time_ago(dt: datetime) -> str:
     """Format datetime as time ago string"""

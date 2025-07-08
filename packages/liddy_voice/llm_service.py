@@ -16,6 +16,7 @@ class LlmService:
     account: str,
     user: Optional[str] = None,
     model_use: Optional[str] = None,
+    parallel_tool_calls: Optional[bool] = False,
   ) -> llm.LLM:
     
     metadata = {
@@ -63,28 +64,49 @@ class LlmService:
         else:
           return google.llm.LLM(model=model_name)
     # else if model name starts with 'gpt' or 'o', then instantiate openai.llm with Langfuse if enabled
-    elif model_name.__contains__('gpt') or model_name.startswith('o') or model_name.startswith('ft:'):
+    elif model_name.__contains__('gpt') or model_name.startswith('o') or model_name.startswith('ft:') or model_name.startswith('openai/'):
       # Check if Langfuse observability should be enabled
+      
+      if model_name.startswith('openai/'):
+        model_name = model_name[7:]
+      
       if (os.getenv("LANGFUSE_SECRET_KEY") and 
           os.getenv("LANGFUSE_PUBLIC_KEY") and 
           user and account):
         try:
           # Use Langfuse-enhanced LLM for automatic observability
           logger.info(f"Using Langfuse-enhanced LLM for model: {model_name}")
-          return LangfuseLKOpenAILLM(
-            model=model_name, 
-            user_id=user,
-            account=account,
-            store=model_name=="gpt-4.1" or True, 
-            metadata=metadata
-          )
+          if parallel_tool_calls:
+            return LangfuseLKOpenAILLM(
+              model=model_name, 
+              user_id=user,
+              account=account,
+              parallel_tool_calls=parallel_tool_calls,
+              metadata=metadata,
+            )
+          else:
+            return LangfuseLKOpenAILLM(
+              model=model_name, 
+              user_id=user,
+              account=account,
+              # store=model_name=="gpt-4.1" or True, 
+              metadata=metadata,
+            )
         except Exception as e:
           logger.warning(f"Failed to initialize Langfuse LLM, falling back to regular OpenAI: {e}")
           # Fallback to regular OpenAI LLM
-          return openai.llm.LLM(model=model_name, store=model_name=="gpt-4.1" or True, user=user, metadata=metadata)
+          # return openai.llm.LLM(model=model_name, store=model_name=="gpt-4.1" or True, user=user, metadata=metadata)
+          if parallel_tool_calls:
+            return openai.llm.LLM(model=model_name, parallel_tool_calls=parallel_tool_calls, user=user, metadata=metadata)
+          else:
+            return openai.llm.LLM(model=model_name, user=user, metadata=metadata)
       else:
         # Use regular OpenAI LLM (no observability or missing credentials)
-        return openai.llm.LLM(model=model_name, store=model_name=="gpt-4.1" or True, user=user, metadata=metadata)
+        # return openai.llm.LLM(model=model_name, store=model_name=="gpt-4.1" or True, user=user, metadata=metadata)
+        if parallel_tool_calls:
+          return openai.llm.LLM(model=model_name, parallel_tool_calls=parallel_tool_calls, user=user, metadata=metadata)
+        else:
+          return openai.llm.LLM(model=model_name, user=user, metadata=metadata)
     elif model_name.startswith('llama'):
       return openai.llm.LLM.with_cerebras(model=model_name, user=user)
     elif model_name.startswith('meta'):

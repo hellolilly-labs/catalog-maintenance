@@ -35,7 +35,7 @@ class LangfuseRAGManager:
     
     def __init__(self, brand_domain: str):
         self.brand_domain = brand_domain
-        self.brand_key = brand_domain.split('.')[0].lower()
+        self.brand_key = brand_domain.replace('.', '-').lower()
         
         # Initialize Langfuse if available
         self.langfuse = None

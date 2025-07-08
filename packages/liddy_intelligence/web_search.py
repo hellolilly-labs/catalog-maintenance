@@ -20,7 +20,7 @@ import os
 from urllib.parse import urlparse
 
 from liddy.config import get_settings
-# from src.redis_client import get_redis_client  # TODO: Implement redis support
+from liddy.redis_client import get_redis_client  # TODO: Implement redis support
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +140,7 @@ class TavilySearchProvider(WebSearchProvider):
         self.api_key = api_key or get_settings().TAVILY_API_KEY or os.getenv("TAVILY_API_KEY")
         self.base_url = "https://api.tavily.com"
         self.client = TavilyClient(api_key=api_key)
-        self.redis_client = None  # get_redis_client()  # TODO: Re-enable redis when needed
+        self.redis_client = get_redis_client()  # TODO: Re-enable redis when needed
     
     async def search(self, query: str, **kwargs) -> List[SearchResult]:
         """Search using official Tavily library with Redis caching"""
@@ -170,8 +170,10 @@ class TavilySearchProvider(WebSearchProvider):
                 try:
                     cached_results = self.redis_client.get(cache_key)
                     if cached_results:
-                        logger.info(f"🔄 Cache HIT for query: {query[:50]}...")
-                        return _deserialize_search_results(cached_results)
+                        cached_results = _deserialize_search_results(cached_results)
+                        if cached_results and len(cached_results) > 0:
+                            logger.info(f"🔄 Cache HIT for query: {query[:50]}...")
+                            return cached_results
                 except Exception as e:
                     logger.warning(f"Redis cache read failed: {e}")
             

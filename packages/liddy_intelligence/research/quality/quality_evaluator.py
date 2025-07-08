@@ -13,7 +13,7 @@ import time
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
-from liddy_intelligence.llm.simple_factory import LLMFactory
+from liddy.llm.simple_factory import LLMFactory
 from liddy_intelligence.web_search import get_web_search_engine
 
 logger = logging.getLogger(__name__)

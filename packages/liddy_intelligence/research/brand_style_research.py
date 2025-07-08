@@ -23,7 +23,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 
-from liddy_intelligence.llm.simple_factory import LLMFactory
+from liddy.llm.simple_factory import LLMFactory
 from liddy.storage import get_account_storage_provider
 from liddy.config import get_settings
 from liddy_intelligence.progress_tracker import (
@@ -231,7 +231,7 @@ class BrandStyleResearcher(BaseResearcher):
         """Analyze screenshot using LLM vision to extract design patterns"""
         
         try:
-            from liddy_intelligence.llm.simple_factory import LLMFactory
+            from liddy.llm.simple_factory import LLMFactory
             
             visual_analysis_prompt = f"""Analyze this {page_name} page screenshot from {self.brand_domain} and extract detailed design characteristics:
 

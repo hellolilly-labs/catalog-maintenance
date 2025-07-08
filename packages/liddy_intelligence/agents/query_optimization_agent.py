@@ -14,7 +14,7 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from liddy_intelligence.agents.base_agent import BaseAgent, AgentInsight
 from liddy_intelligence.agents.context import ConversationContext
-from liddy_intelligence.llm.simple_factory import LLMFactory
+from liddy.llm.simple_factory import LLMFactory
 from liddy_intelligence.ingestion.catalog_filter_analyzer import CatalogFilterAnalyzer
 
 logger = logging.getLogger(__name__)

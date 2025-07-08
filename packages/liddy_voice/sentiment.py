@@ -11,8 +11,8 @@ if __name__ == "__main__":
     sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from liddy_voice.config_service import ConfigService
-from liddy_voice.model import BasicChatMessage, SentimentAnalysis, Sentiment, CommunicationDirective, UserState
-from redis_client import get_user_state, save_user_state
+from liddy.model import BasicChatMessage, SentimentAnalysis, Sentiment, CommunicationDirective, UserState
+from liddy_voice.user_manager import UserManager
 from liddy_voice.llm_service import LlmService
 
 logger = logging.getLogger("sentiment")
@@ -199,7 +199,7 @@ if __name__ == "__main__":
     sentiment_service = SentimentService()
     # user_id="4d1b1f89-563e-483f-9d9d-a17c6524c633"
     user_id="cf8ea811-9e56-4357-b1ff-e4e917171034"
-    user_state = get_user_state(user_id=user_id)
+    user_state = UserManager.get_user_state(user_id=user_id)
     sentiment_analysis = asyncio.run(sentiment_service.analyze_sentiment(
         user_state=user_state,
         source="chat",
@@ -208,5 +208,5 @@ if __name__ == "__main__":
         force=True
     ))
     user_state.sentiment_analysis = sentiment_analysis
-    save_user_state(user_state=user_state)
+    UserManager.save_user_state(user_state)
     print(sentiment_analysis)

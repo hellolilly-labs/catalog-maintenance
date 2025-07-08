@@ -14,21 +14,21 @@ import logging
 from typing import Dict, Any, List, Optional
 import asyncio
 
-from liddy_intelligence.llm.base import LLMModelService
-from liddy_intelligence.llm.openai_service import OpenAIService
-from liddy_intelligence.llm.errors import ModelNotFoundError
+from liddy.llm.base import LLMModelService
+from liddy.llm.openai_service import OpenAIService
+from liddy.llm.errors import ModelNotFoundError
 
 logger = logging.getLogger(__name__)
 
 # Optional imports with graceful fallbacks
 try:
-    from liddy_intelligence.llm.anthropic_service import AnthropicService
+    from liddy.llm.anthropic_service import AnthropicService
     ANTHROPIC_AVAILABLE = True
 except ImportError:
     ANTHROPIC_AVAILABLE = False
 
 try:
-    from liddy_intelligence.llm.gemini_service import GeminiService
+    from liddy.llm.gemini_service import GeminiService
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False

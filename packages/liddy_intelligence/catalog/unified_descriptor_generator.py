@@ -16,7 +16,7 @@ from datetime import datetime
 from dataclasses import dataclass
 
 from liddy_intelligence.agents.catalog_filter_analyzer import CatalogFilterAnalyzer
-from liddy_intelligence.llm.simple_factory import LLMFactory
+from liddy.llm.simple_factory import LLMFactory
 from liddy.prompt_manager import PromptManager
 from liddy.storage import get_account_storage_provider
 from liddy.models.product_manager import get_product_manager
@@ -109,7 +109,7 @@ class UnifiedDescriptorGenerator:
             non_descriptors = [p for p in products if not p.descriptor or not p.descriptor_metadata]
             products_to_process = random.sample(non_descriptors, min(limit, len(non_descriptors)))
         
-        save_mod = 23 # save every 23 products
+        save_mod = 13 # save every 13 products
         includes_unsaved_products = False
         
         try:
@@ -149,6 +149,8 @@ class UnifiedDescriptorGenerator:
 
         except Exception as e:
             logger.error(f"Failed to process catalog: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             # Save if caching enabled
             if self.config.cache_enabled and includes_unsaved_products:

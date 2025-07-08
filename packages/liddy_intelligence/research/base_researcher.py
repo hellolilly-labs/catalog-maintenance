@@ -4,7 +4,7 @@ Base class for all researchers with integrated quality evaluation
 import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
-from liddy_intelligence.llm.simple_factory import LLMFactory
+from liddy.llm.simple_factory import LLMFactory
 from liddy.prompt_manager import PromptManager, ChatMessageDict
 from liddy_intelligence.progress_tracker import (
     get_progress_tracker, 
@@ -99,6 +99,8 @@ class BaseResearcher:
             
         except Exception as e:
             logger.error(f"❌ Quality evaluator initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
             # This should never happen - if it does, we have bigger problems
             raise RuntimeError(f"Cannot initialize quality evaluator: {e}")
 
@@ -322,6 +324,8 @@ class BaseResearcher:
         
         # Check if we have sufficient data for analysis
         total_sources = data.get("total_sources", 0)
+        answers = data.get("answers", [])
+        follow_up_questions = data.get("follow_up_questions", [])
         search_stats = data.get("search_stats", {})
         success_rate = search_stats.get("success_rate", 0)
         
@@ -350,7 +354,12 @@ class BaseResearcher:
             search_context += f"**Title:** {result.get('title', '')}\n"
             search_context += f"**URL:** {result.get('url', '')}\n"
             search_context += f"**Content:** {result.get('snippet', '')}\n"
-            search_context += f"**Query:** {result.get('source_query', '')}\n\n---\n\n"
+            search_context += f"**Query:** {result.get('source_query', '')}\n"
+            if result.get('answer'):
+                search_context += f"**Answer:** {result.get('answer', '')}\n"
+            if result.get('follow_up_questions'):
+                search_context += f"**Follow-up Questions:** {result.get('follow_up_questions', '')}\n"
+            search_context += "\n---\n\n"
         
         # Create source reference guide for LLM
         source_reference_guide = "\n".join([
@@ -368,6 +377,8 @@ class BaseResearcher:
             "brand_name": data.get('brand_name', self.brand_domain),
             "brand_domain": self.brand_domain,
             "total_sources": str(total_sources),
+            "answers": answers,
+            "follow_up_questions": follow_up_questions,
             "success_rate": f"{success_rate:.1%}",
             "data_quality": "High" if success_rate > 0.7 else "Medium" if success_rate > 0.5 else "Limited",
             "search_context": search_context,
@@ -430,7 +441,9 @@ class BaseResearcher:
                     "search_success_rate": success_rate,
                     "detailed_sources": data.get('detailed_sources', []),
                     "source_citations": source_citations,
-                    "search_stats": search_stats
+                    "search_stats": search_stats,
+                    "answers": answers,
+                    "follow_up_questions": follow_up_questions
                 }
             else:
                 error_msg = "ANALYSIS FAILED: No response from LLM analysis despite having valid data"

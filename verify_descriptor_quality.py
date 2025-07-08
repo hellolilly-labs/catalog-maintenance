@@ -12,8 +12,8 @@ from typing import Dict, List, Any, Tuple
 from pathlib import Path
 import re
 
-from src.ingestion.universal_product_processor import UniversalProductProcessor
-from src.catalog.enhanced_descriptor_generator import EnhancedDescriptorGenerator
+from liddy_intelligence.ingestion.core.universal_product_processor import UniversalProductProcessor
+from liddy_intelligence.catalog.enhanced_descriptor_generator import EnhancedDescriptorGenerator
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

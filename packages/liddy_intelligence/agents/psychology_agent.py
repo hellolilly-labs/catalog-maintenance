@@ -12,7 +12,7 @@ from typing import Dict, Any, List, Optional
 
 from liddy_intelligence.agents.base_agent import BaseAgent, AgentInsight
 from liddy_intelligence.agents.context import ConversationContext, CustomerIntent, ConversationStage
-from liddy_intelligence.llm.simple_factory import LLMFactory
+from liddy.llm.simple_factory import LLMFactory
 
 logger = logging.getLogger(__name__)
 

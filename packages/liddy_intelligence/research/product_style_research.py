@@ -21,9 +21,9 @@ import time
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 
-from liddy_intelligence.llm.openai_service import OpenAIService
+from liddy.llm.openai_service import OpenAIService
 from liddy.prompt_manager import PromptManager
-from liddy_intelligence.llm.simple_factory import LLMFactory
+from liddy.llm.simple_factory import LLMFactory
 from liddy_intelligence.progress_tracker import ProgressTracker, StepType, create_console_listener
 from liddy_intelligence.web_search import TavilySearchProvider
 from liddy.storage import get_account_storage_provider, AccountStorageProvider

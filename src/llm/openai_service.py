@@ -106,7 +106,7 @@ class OpenAIService(LLMModelService):
         # Initialize async client
         self.client = AsyncOpenAI(api_key=self.api_key)
         
-        logger.info(f"OpenAI service initialized with default model: {default_model}")
+        # logger.info(f"OpenAI service initialized with default model: {default_model}")
     
     async def chat_completion(self, system: str = None, messages: List[Dict[str, str]] = None,
                             model: str = None, **kwargs) -> Dict[str, Any]:

@@ -5,6 +5,7 @@ Implements web search-based data gathering using the existing web search infrast
 Extracts and centralizes the common web search patterns from researcher implementations.
 """
 
+import asyncio
 import logging
 from typing import List, Dict, Any
 from liddy_intelligence.research.data_sources.base import DataSource, DataGatheringContext, DataGatheringResult
@@ -89,7 +90,7 @@ class WebSearchDataSource(DataSource):
                     max_results = 3
                     search_results = await web_search.search(query_string)
                 
-                if search_results.get("results"):
+                if search_results["results"]:
                     successful_searches += 1
                     
                     # Process results (limited by max_results)
@@ -106,6 +107,8 @@ class WebSearchDataSource(DataSource):
                         
                         # Add search context to result
                         result_dict["source_query"] = query if isinstance(query, str) else query_string
+                        result_dict["answer"] = search_results.get("answer", "")
+                        result_dict["follow_up_questions"] = search_results.get("follow_up_questions", [])
                         result_dict["source_type"] = context.researcher_name
                         result_dict["query_index"] = query_idx
                         result_dict["result_index"] = result_idx
@@ -126,11 +129,34 @@ class WebSearchDataSource(DataSource):
                             "query_rank": query_idx + 1
                         }
                         detailed_sources.append(source_record)
-                        
+                
+                elif search_results.get("answer"):
+                    successful_searches += 1
+                    all_results.append({
+                        "title": search_results.get("answer", ""),
+                        "url": "",
+                        "content": search_results.get("answer", ""),
+                        "snippet": search_results.get("answer", ""),
+                        "answer": search_results.get("answer", ""),
+                        "follow_up_questions": search_results.get("follow_up_questions", []),
+                        "score": 1.0,
+                        "published_date": None,
+                        "source_query": query_string,
+                    })
+                    detailed_sources.append({
+                        "source_id": f"query_{query_idx}_result_{result_idx}",
+                        "title": search_results.get("answer", ""),
+                        "url": "",
+                        "snippet": search_results.get("answer", ""),
+                        "search_query": query_string,
+                    })
+
                 else:
                     failed_searches += 1
                     logger.warning(f"No results found for query: {query_string}")
                     
+                # pause for half a second
+                await asyncio.sleep(0.125)
             except Exception as e:
                 failed_searches += 1
                 

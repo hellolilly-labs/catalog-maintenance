@@ -25,10 +25,10 @@ if __name__ == "__main__":
 
 
 from liddy_voice.session_state_manager import SessionStateManager
-from liddy_voice.model import BasicChatMessage, UserState, ConversationExitState
+from liddy.model import BasicChatMessage, UserState, ConversationExitState
 from liddy_voice.llm_service import LlmService
 from liddy_voice.sentiment import SentimentService
-from redis_client import get_user_state, save_user_state, get_user_recent_history
+from liddy_voice.user_manager import UserManager
 
 logger = logging.getLogger("conversation-analyzer")
 
@@ -400,7 +400,7 @@ class ConversationAnalyzer:
                 "Focus on bike types, features, price ranges, and other preferences mentioned. "
                 "This will be combined with the customer's new question to retrieve relevant information.")
 
-        user_state = get_user_state(self.user_id)
+        user_state = UserManager.get_user_state(self.user_id)
         current_search_context = user_state.get("search_context", "") if user_state else ""
         
         user_message = f"Create a search context from this conversation:\n\n\"\"\"\n{conversation_text}\n\"\"\""
@@ -532,7 +532,7 @@ class ConversationAnalyzer:
                     formatted_messages.append({"role": "user", "parts": [{"text": f"Previous Conversation Summary:\n\n{previous_transcript_summary}"}]})
             
             # see if we have information on the current URL and any product details
-            history = get_user_recent_history(user_id=user_state.user_id)
+            history = UserManager.get_user_recent_history(user_id=user_state.user_id)
             most_recent_history = history[0] if history else None
             if most_recent_history:
                 browsing_history_message = None
@@ -682,7 +682,7 @@ class ConversationAnalyzer:
             )
             
             # save the user state
-            save_user_state(user_state=user_state)
+            UserManager.save_user_state(user_state=user_state)
             
             # logger.info(f"Chat completion response: {response_text}")
 

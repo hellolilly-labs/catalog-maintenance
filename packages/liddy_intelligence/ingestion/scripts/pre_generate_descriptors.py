@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from liddy_intelligence.catalog.unified_descriptor_generator import generate_descriptors, UnifiedDescriptorGenerator, DescriptorConfig
 from liddy.models.product_manager import get_product_manager
 from liddy.models.product import Product
-from liddy_intelligence.llm.simple_factory import LLMFactory
+from liddy.llm.simple_factory import LLMFactory
 
 # Import researcher classes
 from liddy_intelligence.research.foundation_research import get_foundation_researcher

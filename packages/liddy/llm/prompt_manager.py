@@ -138,4 +138,3 @@ class PromptManager:
             "client_initialized": self.langfuse is not None,
             "mode": "langfuse" if self.langfuse is not None else "fallback"
         }
-        
