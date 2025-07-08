@@ -23,17 +23,17 @@ from livekit.rtc import RemoteParticipant
 
 from liddy.models.product import Product
 from liddy_voice.session_state_manager import SessionStateManager
-from liddy_voice.model import UserState, BasicChatMessage
+from liddy.model import UserState, BasicChatMessage
 from liddy_voice.llm_service import LlmService
-from redis_client import get_user_state, save_user_state, update_user_room_reconnect_time, save_user_latest_conversation
-from liddy_voice.storage import get_storage_provider
+from liddy_voice.user_manager import UserManager
+from liddy.storage import get_account_storage_provider as get_storage_provider
 from liddy_voice.account_manager import AccountManager
 # Conditional import to avoid circular dependency
 try:
-    from liddy_voice.search_service import SearchService
+    from liddy_voice.voice_search_wrapper import VoiceSearchService as SearchService
 except ImportError:
     SearchService = None
-from liddy_voice.prompt_manager import PromptManager
+from liddy_voice.account_prompt_manager import AccountPromptManager
 from liddy_voice.supervisor_assistant import SupervisorAssistant, SupervisorResponse
 
 logger = logging.getLogger(__name__)
@@ -61,7 +61,7 @@ class ChatAgent(Agent):
         
         # Initialize PromptManager for knowledge injection
         prompts_dir = os.getenv("PROMPTS_DIR", None)
-        self._prompt_manager = PromptManager(account=account, prompts_dir=prompts_dir)
+        self._prompt_manager = AccountPromptManager(account=account, prompts_dir=prompts_dir)
         
         # Store account and initialize core attributes first
         self._account = account
@@ -612,7 +612,7 @@ Use this context to provide more personalized and contextually appropriate respo
             await self._update_conversation_state(chat_ctx)
             
             # Update session userdata
-            user_state: UserState = self.session.userdata if hasattr(self, 'session') and self.session else None or get_user_state(user_id=self._user_id)
+            user_state: UserState = self.session.userdata if hasattr(self, 'session') and self.session else None or UserManager.get_user_state(user_id=self._user_id)
             if not user_state:
                 user_state = UserState(user_id=self._user_id)
             if hasattr(self, 'session') and self.session:
@@ -620,7 +620,7 @@ Use this context to provide more personalized and contextually appropriate respo
                 self.session.userdata.last_interaction_time = time.time()
             self.last_stt_message = new_message
                 
-            save_user_state(user_state=user_state)
+            UserManager.save_user_state(user_state)
             
             # Save conversation asynchronously
             asyncio.create_task(self._save_conversation_to_storage())

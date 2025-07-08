@@ -15,7 +15,7 @@ import base64
 from typing import List, Dict, Any, Optional
 import logging
 
-from redis_client import get_redis_client
+from .redis_client import get_redis_client
 
 logger = logging.getLogger(__name__)
 

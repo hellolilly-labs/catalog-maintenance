@@ -24,8 +24,8 @@ except ImportError:
 
 # Import enhanced components from catalog-maintenance
 try:
-    from src.agents.query_optimization_agent import QueryOptimizationAgent
-    from src.agents.catalog_filter_analyzer import CatalogFilterAnalyzer
+    from liddy_intelligence.agents.query_optimization_agent import QueryOptimizationAgent
+    from liddy_intelligence.agents.catalog_filter_analyzer import CatalogFilterAnalyzer
     logger.info("Advanced RAG components loaded successfully")
 except ImportError as e:
     logger.warning(f"Advanced RAG components not available: {e}")
@@ -198,7 +198,7 @@ class SearchService:
             Dictionary containing product catalog research
         """
         try:
-            from src.storage import get_account_storage_provider
+            from liddy.storage import get_account_storage_provider
             
             storage = get_account_storage_provider()
             
@@ -938,7 +938,7 @@ class SearchService:
         """
         try:
             # Import the unified SearchPinecone implementation
-            from src.search.search_pinecone import get_search_pinecone
+            from liddy.search.pinecone import get_search_pinecone
             
             # Get or create SearchPinecone instance for this account
             search_pinecone = await get_search_pinecone(

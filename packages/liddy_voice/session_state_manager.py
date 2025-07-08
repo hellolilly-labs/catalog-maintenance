@@ -8,9 +8,9 @@ from typing import Dict, List, Optional, Any, Tuple
 # from livekit.agents import llm, utils
 
 from .markdown_utils import obj_to_markdown
-from redis_client import get_user_state, save_user_state, get_user_recent_history
+from liddy_voice.user_manager import UserManager
 from liddy.models.product import Product
-from liddy_voice.model import BasicChatMessage, UrlTracking, UserState, ConversationExitState, ConversationResumptionState
+from liddy.model import BasicChatMessage, UrlTracking, UserState, ConversationExitState, ConversationResumptionState
 
 
 logger = logging.getLogger("session-state-manager")
@@ -143,7 +143,7 @@ class SessionStateManager:
                 conversation_exit_state.exit_reason = reason
                 conversation_exit_state.last_interaction_time = time.time()
             
-            return save_user_state(user_state=user_state)
+            return save_user_state(user_state)
         except Exception as e:
             logger.error(f"Error storing conversation exit reason: {e}")
             return False
@@ -254,10 +254,10 @@ class SessionStateManager:
     def clear_conversation_resumption(cls, user_id: str) -> bool:
         """Clear conversation resumption data after it's been used"""
         try:
-            user_state = get_user_state(user_id)
+            user_state = UserManager.get_user_state(user_id)
             if user_state:
                 user_state.conversation_exit_state = None
-                save_user_state(user_state=user_state)
+                UserManager.save_user_state(user_state)
             return True
             
         except Exception as e:
@@ -278,7 +278,7 @@ class SessionStateManager:
         if not user_id:
             return ""
 
-        user_state = user_state or get_user_state(user_id)
+        user_state = user_state or UserManager.get_user_state(user_id)
         if not user_state:
             user_state: UserState = UserState(user_id=user_id)
         

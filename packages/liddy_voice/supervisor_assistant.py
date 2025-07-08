@@ -37,18 +37,18 @@ from liddy_voice.conversation.analyzer import ConversationAnalyzer
 from liddy.models.product import Product
 from liddy_voice.session_state_manager import SessionStateManager
 from liddy_voice.rag_unified import PineconeRAG
-from liddy_voice.model import UserState, BasicChatMessage
+from liddy.model import UserState, BasicChatMessage
 from liddy_voice.llm_service import LlmService
-from redis_client import get_user_state, save_user_state, update_user_room_reconnect_time, save_user_latest_conversation
-from liddy_voice.storage import get_storage_provider
+from liddy_voice.user_manager import UserManager
+from liddy.storage import get_account_storage_provider as get_storage_provider
 from liddy_voice.account_manager import get_account_manager
 # Conditional import to avoid circular dependency
 try:
-    from liddy_voice.search_service import SearchService
+    from liddy_voice.voice_search_wrapper import VoiceSearchService as SearchService
 except ImportError:
     SearchService = None
 from livekit.rtc import RemoteParticipant
-from liddy_voice.prompt_manager import PromptManager
+from liddy_voice.account_prompt_manager import AccountPromptManager
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ class SupervisorAssistant(Agent):
     def __init__(self, ctx: JobContext, primary_model: str, user_id: str = None, 
                  chat_ctx: Optional[llm.ChatContext | None] = None, account: str = None):
         prompts_dir = os.getenv("PROMPTS_DIR", None)
-        self._prompt_manager = PromptManager(account=account, prompts_dir=prompts_dir)
+        self._prompt_manager = AccountPromptManager(account=account, prompts_dir=prompts_dir)
         super().__init__(
             instructions=self._prompt_manager.build_system_instruction_prompt(account=account), 
             chat_ctx=chat_ctx
@@ -824,7 +824,7 @@ Focus on: products discussed, preferences revealed, what ChatAgent can handle ne
             
             # Because this potentially causes the UI to do a hard nav to a new page, update the should_reconnect_until timeout for this account/user_id
             if user_state:
-                update_user_room_reconnect_time(
+                UserManager.update_user_room_reconnect_time(
                     account=self._account,
                     user_id=user_state.user_id,
                     room_id=room_name,

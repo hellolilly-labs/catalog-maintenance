@@ -28,9 +28,7 @@ async def test_voice_components():
     # Test imports
     try:
         # Updated imports for monorepo structure
-        from liddy_voice.sample_assistant import VoiceAssistant
         from liddy_voice.search_service import VoiceOptimizedSearchService
-        from liddy_voice.session_state_manager import SessionStateManager
         from liddy.account_manager import get_account_manager
         
         print("✅ All imports successful!")
