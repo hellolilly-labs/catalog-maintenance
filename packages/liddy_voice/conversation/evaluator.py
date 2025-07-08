@@ -134,7 +134,7 @@ class ConversationEvaluator:
             # llm_service = LlmService.fetch_model_service_from_model('gpt-4.1')
             
             client = OpenAI(
-              api_key=os.getenv("OPENAI_API_KEY", "sk-lilly-dev-CNn9IbrmNAOvaskOOvWET3BlbkFJfGk7YH7HNFVakZL0oLAu"),
+              api_key=os.getenv("OPENAI_API_KEY"),
             )
 
             # response = client.responses.create(
@@ -464,7 +464,7 @@ The current conversation is as follows:
     async def create_openai(self, model: str, messages: List[BasicChatMessage], max_tokens: int=1024*8) -> str:
         # Initialize OpenAI client
         openai_client = OpenAI(
-            api_key=os.environ.get("OPENAI_API_KEY", "sk-lilly-dev-CNn9IbrmNAOvaskOOvWET3BlbkFJfGk7YH7HNFVakZL0oLAu"),
+            api_key=os.environ.get("OPENAI_API_KEY"),
         )
         
         # response = openai_client.responses.create(

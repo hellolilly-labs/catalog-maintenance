@@ -111,7 +111,7 @@ class ConversationScrubber:
                 ]
             )
             # client = OpenAI(
-            #   api_key=os.getenv("OPENAI_API_KEY", "sk-lilly-dev-CNn9IbrmNAOvaskOOvWET3BlbkFJfGk7YH7HNFVakZL0oLAu"),
+            #   api_key=os.getenv("OPENAI_API_KEY"),
             # )
             # response = client.responses.create(
             #     model="o3",
@@ -152,7 +152,7 @@ class ConversationScrubber:
     async def create_openai(self, model: str, messages: List[BasicChatMessage], max_tokens: int=1024*8) -> str:
         # Initialize OpenAI client
         openai_client = OpenAI(
-            api_key=os.environ.get("OPENAI_API_KEY", "sk-lilly-dev-CNn9IbrmNAOvaskOOvWET3BlbkFJfGk7YH7HNFVakZL0oLAu"),
+            api_key=os.environ.get("OPENAI_API_KEY"),
         )
         
         # response = openai_client.responses.create(
