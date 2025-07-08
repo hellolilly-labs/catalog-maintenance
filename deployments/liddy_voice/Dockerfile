@@ -65,7 +65,8 @@ COPY --chown=appuser:appuser packages/liddy_voice/pyproject.toml packages/liddy_
 COPY --chown=appuser:appuser packages/liddy_voice/setup.py packages/liddy_voice/setup.py
 COPY --chown=appuser:appuser packages/liddy_voice/ packages/liddy_voice/
 RUN --mount=type=cache,target=/home/appuser/.cache/pip,uid=10001 \
-    python -m pip install --user --no-cache-dir -e packages/liddy_voice
+    python -m pip install --user --no-cache-dir -e packages/liddy_voice && \
+    python -m pip uninstall -y pinecone-client 2>/dev/null || true
 
 # Set environment type for GCP deployment
 ENV ENV_TYPE=gcp

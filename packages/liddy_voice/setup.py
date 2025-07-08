@@ -19,7 +19,7 @@ setup(
         "livekit-agents",
         "aiofiles",
         "redis",
-        "pinecone-client",
+        "pinecone>=6.0.2",
         "python-dotenv",
     ],
     extras_require={

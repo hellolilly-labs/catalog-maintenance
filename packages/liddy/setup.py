@@ -16,5 +16,6 @@ setup(
         "langfuse>=2.0.0",
         "redis>=4.0.0",
         "aiohttp>=3.8.0",
+        "tiktoken>=0.5.0",
     ],
 )

@@ -24,7 +24,7 @@ dependencies = [
     "livekit-plugins-turn-detector",
     "aiofiles",
     "redis",
-    "pinecone-client",
+    "pinecone>=6.0.2",
     "python-dotenv",
     "google-cloud-texttospeech",
 ]
