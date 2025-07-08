@@ -55,10 +55,12 @@ class BaseRAG(ABC):
     async def search(
         self,
         query: str,
-        top_k: int = 10,
+        top_k: int = 50,
+        top_n: int = 10,
         filters: Optional[Dict[str, Any]] = None,
         search_mode: str = "hybrid",
         namespace: Optional[str] = None,
+        rerank: bool = True,
         **kwargs
     ) -> List[SearchResult]:
         """
@@ -81,7 +83,9 @@ class BaseRAG(ABC):
         self,
         query: str,
         filters: Optional[Dict[str, Any]] = None,
-        top_k: int = 10,
+        top_k: int = 50,
+        top_n: int = 7,
+        rerank: bool = True,
         **kwargs
     ) -> List[Dict[str, Any]]:
         """
@@ -94,6 +98,8 @@ class BaseRAG(ABC):
             filters=filters,
             top_k=top_k,
             namespace="products",
+            top_n=top_n,
+            rerank=rerank,
             **kwargs
         )
         
