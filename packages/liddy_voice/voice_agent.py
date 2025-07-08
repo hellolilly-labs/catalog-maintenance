@@ -922,353 +922,6 @@ async def entrypoint(ctx: JobContext):
     # # Stay connected until session ends
     # await ctx.wait_until_disconnected()
 
-async def entrypoint_BAK(ctx: JobContext):
-    """Main entrypoint for the Spence voice agent with optimized user response time"""
-    start_total = time.monotonic()  # total timer
-    timing_breakdown = {}  # Store detailed timing breakdown
-    global participant, agent
-    
-    # 1. Room Connection
-    logger.info(f"🚀 Starting entrypoint for Room: {ctx.room.name}")
-    start_connect = time.monotonic()
-    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-    timing_breakdown['room_connect'] = time.monotonic() - start_connect
-    logger.info(f"✅ Connected to room in {timing_breakdown['room_connect']:.3f}s")
-    
-    # PHASE 1: Fast path - minimal agent setup for immediate response
-    phase1_start = time.monotonic()
-    
-    # 2. Configure room options
-    options_start = time.monotonic()
-    use_noise_cancellation = os.getenv("USE_NOISE_CANCELLATION", "false").lower() == "true"
-    if use_noise_cancellation:
-        room_input_options = RoomInputOptions(
-            close_on_disconnect=False,
-            noise_cancellation=noise_cancellation.BVC()
-        )
-    else:
-        room_input_options = RoomInputOptions(
-            close_on_disconnect=False,
-        )
-    timing_breakdown['room_options'] = time.monotonic() - options_start
-    
-    primary_model_name = os.getenv("MODEL_NAME", "openai/gpt-4o-mini")
-    
-    # 3. Wait for participant
-    logger.info("⏳ Waiting for first participant...")
-    start_wait = time.monotonic()
-    participant = await ctx.wait_for_participant()
-    timing_breakdown['wait_participant'] = time.monotonic() - start_wait
-    logger.info(f"✅ First participant connected in {timing_breakdown['wait_participant']:.3f}s")
-    
-    # 4. User state retrieval
-    user_state_start = time.monotonic()
-    user_state = UserManager.get_user_state(participant.identity)
-    if user_state is None:
-        user_state = UserState(user_id=participant.identity)
-    timing_breakdown['user_state_retrieval'] = time.monotonic() - user_state_start
-    
-    # 5. Parse metadata and get account
-    metadata_start = time.monotonic()
-    metadata = json.loads(participant.metadata) if participant.metadata else {}
-    account = None
-    if metadata:
-        if "account" in metadata:
-            account = metadata["account"]
-    timing_breakdown['metadata_parse'] = time.monotonic() - metadata_start
-
-    # 6. Account manager setup
-    account_mgr_start = time.monotonic()
-    account_manager = await get_account_manager(account)
-    user_state.account = account_manager.account
-    timing_breakdown['account_manager'] = time.monotonic() - account_mgr_start
-    
-    # 7. Agent session setup
-    session_start = time.monotonic()
-    session = await setup_agent(user_state)
-    timing_breakdown['session_setup'] = time.monotonic() - session_start
-    
-    # 8. Metrics setup
-    metrics_setup_start = time.monotonic()
-    usage_collector = metrics.UsageCollector()
-    # current_speech_metrics: List[metrics.AgentMetrics] = []
-    eou_metric: metrics.EOUMetrics = None
-    llm_metric: metrics.LLMMetrics = None
-    tts_metric: metrics.TTSMetrics = None
-    def handle_metrics_collected(ev: MetricsCollectedEvent):
-        metrics.log_metrics(ev.metrics)
-        nonlocal eou_metric, llm_metric, tts_metric
-        if isinstance(ev.metrics, metrics.EOUMetrics):
-            eou_metric = ev.metrics
-        elif isinstance(ev.metrics, metrics.LLMMetrics):
-            llm_metric = ev.metrics
-        elif isinstance(ev.metrics, metrics.TTSMetrics):
-            tts_metric = ev.metrics
-            if eou_metric and llm_metric and tts_metric:
-                total_latency = eou_metric.end_of_utterance_delay + llm_metric.ttft + tts_metric.ttfb
-                logger.info(f"📊 Metrics - EOU: {eou_metric.end_of_utterance_delay:.3f}s, "
-                           f"LLM TTFT: {llm_metric.ttft:.3f}s, TTS TTFB: {tts_metric.ttfb:.3f}s, "
-                           f"Total: {total_latency:.3f}s")
-                eou_metric = None
-                llm_metric = None
-                tts_metric = None
-        usage_collector.collect(ev.metrics)
-        # asyncio.create_task(agent.on_metrics_collected(ev))
-    session.on("metrics_collected", handle_metrics_collected)
-    
-    async def log_usage():
-        summary = usage_collector.get_summary()
-        logger.info(f"📊 Usage summary: {summary}")
-
-    # At shutdown, generate and log the summary from the usage collector
-    ctx.add_shutdown_callback(log_usage)
-    
-    # Note: Assistant cleanup callback will be added after agent is created
-    timing_breakdown['metrics_setup'] = time.monotonic() - metrics_setup_start
-
-    # 9. Assistant instantiation
-    assistant_start = time.monotonic()
-    agent = Assistant(ctx=ctx, primary_model=primary_model_name, account=account_manager.account)
-    timing_breakdown['assistant_init'] = time.monotonic() - assistant_start
-    logger.info(f"✅ Assistant created in {timing_breakdown['assistant_init']:.3f}s")
-    
-    # Also add assistant cleanup to shutdown (AFTER agent is created)
-    async def cleanup_assistant():
-        try:
-            await agent.cleanup()
-        except Exception as e:
-            logger.error(f"Error cleaning up Assistant: {e}")
-    
-    ctx.add_shutdown_callback(cleanup_assistant)
-    
-    # 10. Session start
-    session_start_time = time.monotonic()
-    await session.start(
-        room=ctx.room,
-        agent=agent,
-        room_input_options=room_input_options
-    )
-    timing_breakdown['session_start'] = time.monotonic() - session_start_time
-    
-    # Phase 1 complete
-    timing_breakdown['phase1_total'] = time.monotonic() - phase1_start
-    logger.info(f"✅ Phase 1 completed in {timing_breakdown['phase1_total']:.3f}s")
-    
-    # 11. Background audio setup (if enabled)
-    bg_audio_start = time.monotonic()
-    use_background_audio = os.getenv("USE_BACKGROUND_AUDIO", "false").lower() == "true"
-    if use_background_audio:
-        background_audio = BackgroundAudioPlayer(
-            # play office ambience sound looping in the background
-            ambient_sound=AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=0.05),
-            # play keyboard typing sound when the agent is thinking
-            thinking_sound=[
-                    AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING, volume=0.125),
-                    AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.1),
-                ],
-            )
-        await background_audio.start(room=ctx.room, agent_session=session)
-    timing_breakdown['background_audio'] = time.monotonic() - bg_audio_start
-
-    # 12. Event handlers setup
-    handlers_start = time.monotonic()
-    def handle_agent_state_changed(ev):
-        asyncio.create_task(agent.on_agent_state_changed(ev))
-    session.on("agent_state_changed", handle_agent_state_changed)
-    
-    def handle_user_state_changed(ev):
-        asyncio.create_task(agent.on_user_state_changed(ev))
-    session.on("user_state_changed", handle_user_state_changed)
-    
-    def handle_participant_disconnected(p):
-        asyncio.create_task(agent.on_participant_disconnected(p))
-    ctx.room.on("participant_disconnected", handle_participant_disconnected)
-    
-    def handle_participant_connected(p):
-        asyncio.create_task(agent.on_participant_connected(p))
-    ctx.room.on("participant_connected", handle_participant_connected)
-    
-    def handle_room_disconnected(ev):
-        asyncio.create_task(agent.on_room_disconnected(ev))
-    ctx.room.on("disconnected", handle_room_disconnected)
-    
-    # participant_metadata_changed
-    def handle_participant_metadata_changed(p):
-        asyncio.create_task(agent.on_participant_metadata_changed(p))
-    ctx.room.on("participant_metadata_changed", handle_participant_metadata_changed)
-    
-    # participant_attributes_changed
-    def handle_participant_attributes_changed(attributes, p):
-        asyncio.create_task(agent.on_participant_attributes_changed(attributes=attributes, participant=p))
-    ctx.room.on("participant_attributes_changed", handle_participant_attributes_changed)
-    timing_breakdown['event_handlers'] = time.monotonic() - handlers_start
-    
-    # 13. User ID setup
-    user_id_start = time.monotonic()
-    logger.debug(f"Starting voice assistant for participant {participant.identity}")
-    user_id = participant.identity
-    agent.set_user_id(user_id)
-    timing_breakdown['user_id_setup'] = time.monotonic() - user_id_start
-    
-    # Check if there's a recent conversation to resume
-    resumption_data: ConversationResumptionState = SessionStateManager.get_conversation_resumption(user_state=user_state)
-    is_resumable = resumption_data is not None and resumption_data.is_resumable
-    resumption_message = None
-    has_previous_conversation = resumption_data is not None
-    
-    time_since_last_conversation = None
-    
-    # TODO: See ROADMAP/CONVERSATION_RESUMPTION_STRATEGY.md for more details
-    # # if conversation is resumable, then attempt to apply the previous conversation transcript to the chat_ctx
-    # if has_previous_conversation:
-    #     last_interaction = resumption_data.last_interaction_time
-    #     if last_interaction:
-    #         current_time = time.time()
-    #         time_since_last_conversation = current_time - last_interaction
-        
-    #     # Load the conversation history into the chat context
-    #     chat_ctx: ChatContext = None
-
-    #     # Get the resumption message if available
-    #     if is_resumable:
-    #         resumption_message = resumption_data.resumption_message
-    #         logger.debug(f"Resumption message: {resumption_message}")
-            
-    #         # attempt to load the conversation history
-    #         messages: List[BasicChatMessage] = resumption_data.chat_messages
-    #         if messages:
-    #             chat_ctx = agent.chat_ctx.copy()
-    #             for message in messages:
-    #                 chat_ctx.add_message(
-    #                     role=message.role,
-    #                     content=message.content
-    #                 )
-    #     else:
-    #         resumption_message = None
-
-    #     user_state_message = resumption_data.user_state_message
-    #     if user_state_message:
-    #         if not chat_ctx:
-    #             chat_ctx = agent.chat_ctx.copy()
-
-    #         # append the user state message to the chat context
-    #         chat_ctx.add_message(
-    #             role="system",
-    #             content=user_state_message
-    #         )
-
-    #     if chat_ctx:
-    #         await agent.update_chat_ctx(chat_ctx=chat_ctx)
-            
-    # # # load up the previous conversation into the chat context
-    # # # and say the response message
-    # # has_previous_conversation = False
-    # # try:
-    # #     conversation_json = get_user_latest_conversation(
-    # #         account=account,
-    # #         user_id=user_id
-    # #     )
-        
-    # #     if conversation_json:
-    # #         # Get the conversation history from the JSON
-    # #         conversation_history = conversation_json.get("messages", [])
-    # #         if conversation_history:
-    # #             # Create a new chat context with the conversation history
-    # #             chat_ctx = agent.chat_ctx.copy()
-    # #             for message in conversation_history:
-    # #                 if message.get('type') == "message" and message.get("role") in ["user", "assistant"]:
-    # #                     has_previous_conversation = True
-    # #                     chat_ctx.add_message(
-    # #                         role=message["role"],
-    # #                         content=message["content"]
-    # #                     )
-
-    # #             if has_previous_conversation:
-    # #                 await agent.update_chat_ctx(chat_ctx=chat_ctx)
-    # # except Exception as e:
-    # #     logger.error(f"Error loading conversation history: {e}")
-    # #     # Fallback to default behavior if conversation history cannot be loaded
-    # #     has_previous_conversation = False
-
-    # # Prepare welcome message - use resumption message if available
-    # logger.info(f"Time to first utterance: {time.monotonic() - start_total:.2f} seconds")
-    # response_message = participant.attributes.get("responseMessage") or metadata.get("responseMessage")
-    # if time_since_last_conversation and time_since_last_conversation < 120:
-    #     logger.info(f"Generating resumption message for user {user_id}")
-    #     session.generate_reply(instructions="the user just reconnected after a short break so say something appropriate based on the context")
-    #     # await speech
-    # elif response_message:        
-    #     logger.info(f"Using response message: {response_message}")
-    #     welcome_message = response_message
-    #     # Say welcome immediately - this happens in parallel with setup below
-    #     # print time to first response
-    #     session.say(text=welcome_message, allow_interruptions=True)
-    # elif resumption_message:
-    #     logger.info(f"Using resumption message: {resumption_message}")
-    #     session.generate_reply(instructions=f"The user just reconnected after a short break so say something appropriate based on the context. The following was the resumption message after their last converstion. However, keep in mind that they may or may not be in the same state (for example, they may be looking at a different product now):\n\n{resumption_message}")
-    # else:
-    #     # if there is a previous conversation, then generate a reply based on the context
-    #     if has_previous_conversation:
-    #         logger.info(f"Previous conversation found, generating reply")
-    #         session.generate_reply(instructions="The user just reconnected after a short break so say something appropriate based on the context")
-    #     else:
-    #         welcome_message = await account_manager.get_default_greeting()
-    #         logger.info(f"Using default greeting: {welcome_message}")
-    #         # Say welcome immediately - this happens in parallel with setup below
-    #         # print time to first response
-    #         # await session.say(text=welcome_message, allow_interruptions=True)
-    #         session.say(text=welcome_message, allow_interruptions=True)
-
-    # 14. Greeting setup and delivery
-    greeting_start = time.monotonic()
-    welcome_message = await account_manager.get_default_greeting()
-    logger.info(f"🎙️ Using default greeting: {welcome_message}")
-    # Say welcome immediately - this happens in parallel with setup below
-    session.say(text=welcome_message, allow_interruptions=True)
-    timing_breakdown['greeting'] = time.monotonic() - greeting_start
-    timing_breakdown['time_to_first_word'] = time.monotonic() - start_total
-    logger.info(f"⚡ Time to first word: {timing_breakdown['time_to_first_word']:.3f}s")
-        
-    # PHASE 2: Full setup happens in parallel with welcome message
-    phase2_start = time.monotonic()
-    await _complete_agent_setup(
-        ctx=ctx, agent=agent, participant=participant
-    )
-    timing_breakdown['phase2_total'] = time.monotonic() - phase2_start
-    
-    # Calculate total time
-    timing_breakdown['total_time'] = time.monotonic() - start_total
-    
-    # Log comprehensive timing summary
-    logger.info(f"\n🎯 ENTRYPOINT TIMING SUMMARY 🎯\n"
-                f"{'='*50}\n"
-                f"Time to first word:     {timing_breakdown['time_to_first_word']:.3f}s\n"
-                f"Total initialization:   {timing_breakdown['total_time']:.3f}s\n"
-                f"{'='*50}\n"
-                f"PHASE 1 Breakdown ({timing_breakdown['phase1_total']:.3f}s):\n"
-                f"  Room connect:         {timing_breakdown['room_connect']:.3f}s\n"
-                f"  Wait participant:     {timing_breakdown['wait_participant']:.3f}s\n"
-                f"  Account manager:      {timing_breakdown['account_manager']:.3f}s\n"
-                f"  Session setup:        {timing_breakdown['session_setup']:.3f}s\n"
-                f"  Assistant init:       {timing_breakdown['assistant_init']:.3f}s\n"
-                f"  Session start:        {timing_breakdown['session_start']:.3f}s\n"
-                f"PHASE 2:                {timing_breakdown['phase2_total']:.3f}s\n"
-                f"{'='*50}")
-    
-    # Identify slowest components
-    sorted_timings = sorted(timing_breakdown.items(), key=lambda x: x[1], reverse=True)
-    slowest = [f"{k}: {v:.3f}s" for k, v in sorted_timings[:5] if k not in ['total_time', 'phase1_total', 'phase2_total', 'time_to_first_word']]
-    logger.info(f"🐌 Slowest components: {', '.join(slowest)}")
-    
-    # Performance warnings
-    if timing_breakdown['time_to_first_word'] > 2.0:
-        logger.warning(f"⚠️ Time to first word exceeded 2s target: {timing_breakdown['time_to_first_word']:.3f}s")
-    if timing_breakdown['total_time'] > 5.0:
-        logger.warning(f"⚠️ Total initialization exceeded 5s target: {timing_breakdown['total_time']:.3f}s")
-    
-    # # Stay connected until session ends
-    # await ctx.wait_until_disconnected()
-
 async def _complete_agent_setup(ctx, agent, participant):
     """Complete the full agent setup in the background while initial greeting plays"""
     try:
@@ -1479,340 +1132,306 @@ async def test_voice_search(account: str = "specialized.com", query: str = "top 
     
     print("\n✅ Test completed successfully")
 
-async def entrypoint_v2(ctx: JobContext):
-    """
-    Optimized entrypoint that prioritizes getting the agent talking ASAP.
+# async def entrypoint_v2(ctx: JobContext):
+#     """
+#     Optimized entrypoint that prioritizes getting the agent talking ASAP.
     
-    Strategy:
-    1. Connect and start minimal session immediately
-    2. Greet user while loading features in background
-    3. Progressive enhancement as components load
-    """
-    timing = {}
-    start_time = time.monotonic()
+#     Strategy:
+#     1. Connect and start minimal session immediately
+#     2. Greet user while loading features in background
+#     3. Progressive enhancement as components load
+#     """
+#     timing = {}
+#     start_time = time.monotonic()
     
-    logger.info("🚀 Starting optimized entrypoint_v2")
+#     logger.info("🚀 Starting optimized entrypoint_v2")
     
-    # PHASE 1: Critical Path - Get agent talking ASAP
-    critical_start = time.monotonic()
+#     # PHASE 1: Critical Path - Get agent talking ASAP
+#     critical_start = time.monotonic()
     
-    # 1. Connect to room immediately
-    await ctx.connect()
-    timing['connect'] = time.monotonic() - critical_start
+#     # 1. Connect to room immediately
+#     await ctx.connect()
+#     timing['connect'] = time.monotonic() - critical_start
     
-    # 2. Get participant info if available (non-blocking check)
-    participant = None
-    account = "default"
-    user_id = "default"
+#     # 2. Get participant info if available (non-blocking check)
+#     participant = None
+#     account = "default"
+#     user_id = "default"
     
-    # Check if participant already connected (don't wait)
-    if ctx.room.remote_participants:
-        participant = list(ctx.room.remote_participants.values())[0]
-        user_id = participant.identity
+#     # Check if participant already connected (don't wait)
+#     if ctx.room.remote_participants:
+#         participant = list(ctx.room.remote_participants.values())[0]
+#         user_id = participant.identity
         
-        # Quick metadata parse for account
-        if participant.metadata:
-            try:
-                metadata = json.loads(participant.metadata)
-                account = metadata.get("account", "default")
-            except:
-                pass
+#         # Quick metadata parse for account
+#         if participant.metadata:
+#             try:
+#                 metadata = json.loads(participant.metadata)
+#                 account = metadata.get("account", "default")
+#             except:
+#                 pass
     
-    # 3. Create minimal session with fallbacks
-    session_start = time.monotonic()
+#     # 3. Create minimal session with fallbacks
+#     session_start = time.monotonic()
     
-    # Create basic user state
-    user_state = UserState(user_id=user_id, account=account)
+#     # Create basic user state
+#     user_state = UserState(user_id=user_id, account=account)
     
-    # Get credentials for TTS/STT
-    credentials_file = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", None)
-    elevenlabs_api_key = os.getenv("ELEVEN_API_KEY")
+#     # Get credentials for TTS/STT
+#     credentials_file = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", None)
+#     elevenlabs_api_key = os.getenv("ELEVEN_API_KEY")
     
-    # Create minimal session
-    session = AgentSession(
-        userdata=user_state,
-        stt=deepgram.STT(model="nova-3-websocket"),  # Fastest STT
-        llm=openai.LLM(model="gpt-4.1-mini"),  # Fast LLM
-        tts=openai.TTS(voice="nova"),  # Fast TTS to start
-        vad=silero.VAD.load(),
-        turn_detection="stt",  # Fastest turn detection
-        user_away_timeout=30.0
-    )
-    timing['session_create'] = time.monotonic() - session_start
+#     # Create minimal session
+#     session = AgentSession(
+#         userdata=user_state,
+#         stt=deepgram.STT(model="nova-3-websocket"),  # Fastest STT
+#         llm=openai.LLM(model="gpt-4.1-mini"),  # Fast LLM
+#         tts=openai.TTS(voice="nova"),  # Fast TTS to start
+#         vad=silero.VAD.load(),
+#         turn_detection="stt",  # Fastest turn detection
+#         user_away_timeout=30.0
+#     )
+#     timing['session_create'] = time.monotonic() - session_start
     
-    # 4. Create minimal assistant
-    assistant_start = time.monotonic()
+#     # 4. Create minimal assistant
+#     assistant_start = time.monotonic()
     
-    # Start with minimal Assistant that will enhance itself
-    agent = Assistant(
-        ctx=ctx,
-        primary_model="gpt-4.1-mini",
-        user_id=user_id,
-        account=account
-    )
-    timing['assistant_create'] = time.monotonic() - assistant_start
+#     # Start with minimal Assistant that will enhance itself
+#     agent = Assistant(
+#         ctx=ctx,
+#         primary_model="gpt-4.1-mini",
+#         user_id=user_id,
+#         account=account
+#     )
+#     timing['assistant_create'] = time.monotonic() - assistant_start
     
-    # 5. Start session with noise cancellation
-    start_session = time.monotonic()
-    use_noise_cancellation = os.getenv("USE_NOISE_CANCELLATION", "false").lower() == "true"
+#     # 5. Start session with noise cancellation
+#     start_session = time.monotonic()
+#     use_noise_cancellation = os.getenv("USE_NOISE_CANCELLATION", "false").lower() == "true"
     
-    await session.start(
-        room=ctx.room,
-        agent=agent,
-        room_input_options=RoomInputOptions(
-            close_on_disconnect=False,
-            noise_cancellation=noise_cancellation.BVC() if use_noise_cancellation else None
-        )
-    )
-    timing['session_start'] = time.monotonic() - start_session
+#     await session.start(
+#         room=ctx.room,
+#         agent=agent,
+#         room_input_options=RoomInputOptions(
+#             close_on_disconnect=False,
+#             noise_cancellation=noise_cancellation.BVC() if use_noise_cancellation else None
+#         )
+#     )
+#     timing['session_start'] = time.monotonic() - start_session
     
-    timing['critical_path_total'] = time.monotonic() - critical_start
-    logger.info(f"✅ Critical path completed in {timing['critical_path_total']:.3f}s - Agent is ready to talk!")
+#     timing['critical_path_total'] = time.monotonic() - critical_start
+#     logger.info(f"✅ Critical path completed in {timing['critical_path_total']:.3f}s - Agent is ready to talk!")
     
-    # PHASE 2: Progressive Enhancement (all in background)
-    enhancement_start = time.monotonic()
+#     # PHASE 2: Progressive Enhancement (all in background)
+#     enhancement_start = time.monotonic()
     
-    # Create enhancement tasks that run in parallel
-    enhancement_tasks = []
+#     # Create enhancement tasks that run in parallel
+#     enhancement_tasks = []
     
-    # Task 1: Wait for participant if we don't have one yet
-    async def ensure_participant():
-        nonlocal participant, user_id, account
-        if not participant:
-            logger.info("⏳ Waiting for participant in background...")
-            participant = await ctx.wait_for_participant()
-            user_id = participant.identity
+#     # Task 1: Wait for participant if we don't have one yet
+#     async def ensure_participant():
+#         nonlocal participant, user_id, account
+#         if not participant:
+#             logger.info("⏳ Waiting for participant in background...")
+#             participant = await ctx.wait_for_participant()
+#             user_id = participant.identity
             
-            # Update metadata
-            if participant.metadata:
-                try:
-                    metadata = json.loads(participant.metadata)
-                    new_account = metadata.get("account", account)
-                    if new_account != account:
-                        account = new_account
-                        agent._account = account
-                        # Trigger account-specific loading
-                        await agent._load_products_for_account(account)
-                except:
-                    pass
+#             # Update metadata
+#             if participant.metadata:
+#                 try:
+#                     metadata = json.loads(participant.metadata)
+#                     new_account = metadata.get("account", account)
+#                     if new_account != account:
+#                         account = new_account
+#                         agent._account = account
+#                         # Trigger account-specific loading
+#                         await agent._load_products_for_account(account)
+#                 except:
+#                     pass
             
-            # Update user state
-            user_state.user_id = user_id
-            user_state.account = account
-            session.userdata = user_state
+#             # Update user state
+#             user_state.user_id = user_id
+#             user_state.account = account
+#             session.userdata = user_state
             
-            logger.info(f"✅ Participant {user_id} connected with account {account}")
+#             logger.info(f"✅ Participant {user_id} connected with account {account}")
     
-    enhancement_tasks.append(ensure_participant())
+#     enhancement_tasks.append(ensure_participant())
     
-    # Task 2: Upgrade to better TTS if configured
-    async def upgrade_tts():
-        try:
-            # Get account manager
-            account_manager = await get_account_manager(account)
-            tts_settings = account_manager.get_tts_settings()
+#     # Task 2: Upgrade to better TTS if configured
+#     async def upgrade_tts():
+#         try:
+#             # Get account manager
+#             account_manager = await get_account_manager(account)
+#             tts_settings = account_manager.get_tts_settings()
             
-            if tts_settings and tts_settings.providers:
-                logger.info("🔄 Upgrading TTS to account-specific voice...")
+#             if tts_settings and tts_settings.providers:
+#                 logger.info("🔄 Upgrading TTS to account-specific voice...")
                 
-                # Create new TTS models
-                tts_models = []
-                for provider in tts_settings.providers:
-                    if isinstance(provider, ElevenLabsTtsProviderSettings) and elevenlabs_api_key:
-                        tts_model = elevenlabs.TTS(
-                            voice_id=provider.voice_id,
-                            model=provider.voice_model,
-                            api_key=elevenlabs_api_key,
-                            voice_settings=elevenlabs.VoiceSettings(
-                                stability=provider.voice_stability,
-                                similarity_boost=provider.voice_similarity_boost,
-                                style=provider.voice_style,
-                                use_speaker_boost=provider.voice_use_speaker_boost,
-                                speed=provider.voice_speed if provider.voice_speed else 1.0
-                            )
-                        )
-                        tts_models.append(tts_model)
-                    elif provider.voice_provider == "google" and credentials_file:
-                        tts_model = google.TTS(
-                            credentials_file=credentials_file,
-                            voice_name=provider.voice_id,
-                            language="en-US"
-                        )
-                        tts_models.append(tts_model)
+#                 # Create new TTS models
+#                 tts_models = []
+#                 for provider in tts_settings.providers:
+#                     if isinstance(provider, ElevenLabsTtsProviderSettings) and elevenlabs_api_key:
+#                         tts_model = elevenlabs.TTS(
+#                             voice_id=provider.voice_id,
+#                             model=provider.voice_model,
+#                             api_key=elevenlabs_api_key,
+#                             voice_settings=elevenlabs.VoiceSettings(
+#                                 stability=provider.voice_stability,
+#                                 similarity_boost=provider.voice_similarity_boost,
+#                                 style=provider.voice_style,
+#                                 use_speaker_boost=provider.voice_use_speaker_boost,
+#                                 speed=provider.voice_speed if provider.voice_speed else 1.0
+#                             )
+#                         )
+#                         tts_models.append(tts_model)
+#                     elif provider.voice_provider == "google" and credentials_file:
+#                         tts_model = google.TTS(
+#                             credentials_file=credentials_file,
+#                             voice_name=provider.voice_id,
+#                             language="en-US"
+#                         )
+#                         tts_models.append(tts_model)
                 
-                # Update session TTS
-                if tts_models:
-                    new_tts = tts.FallbackAdapter(tts_models) if len(tts_models) > 1 else tts_models[0]
-                    session._tts = new_tts
-                    logger.info("✅ TTS upgraded to account-specific voice")
-        except Exception as e:
-            logger.error(f"Error upgrading TTS: {e}")
+#                 # Update session TTS
+#                 if tts_models:
+#                     new_tts = tts.FallbackAdapter(tts_models) if len(tts_models) > 1 else tts_models[0]
+#                     session._tts = new_tts
+#                     logger.info("✅ TTS upgraded to account-specific voice")
+#         except Exception as e:
+#             logger.error(f"Error upgrading TTS: {e}")
     
-    enhancement_tasks.append(upgrade_tts())
+#     enhancement_tasks.append(upgrade_tts())
     
-    # Task 3: Setup event handlers
-    async def setup_handlers():
-        # Metrics collection
-        usage_collector = metrics.UsageCollector()
+#     # Task 3: Setup event handlers
+#     async def setup_handlers():
+#         # Metrics collection
+#         usage_collector = metrics.UsageCollector()
         
-        def handle_metrics_collected(ev: MetricsCollectedEvent):
-            metrics.log_metrics(ev.metrics)
-            usage_collector.collect(ev.metrics)
+#         def handle_metrics_collected(ev: MetricsCollectedEvent):
+#             metrics.log_metrics(ev.metrics)
+#             usage_collector.collect(ev.metrics)
         
-        session.on("metrics_collected", handle_metrics_collected)
+#         session.on("metrics_collected", handle_metrics_collected)
         
-        # Agent event handlers
-        session.on("agent_state_changed", lambda ev: asyncio.create_task(agent.on_agent_state_changed(ev)))
-        session.on("user_state_changed", lambda ev: asyncio.create_task(agent.on_user_state_changed(ev)))
+#         # Agent event handlers
+#         session.on("agent_state_changed", lambda ev: asyncio.create_task(agent.on_agent_state_changed(ev)))
+#         session.on("user_state_changed", lambda ev: asyncio.create_task(agent.on_user_state_changed(ev)))
         
-        # Room event handlers
-        ctx.room.on("participant_disconnected", lambda p: asyncio.create_task(agent.on_participant_disconnected(p)))
-        ctx.room.on("participant_connected", lambda p: asyncio.create_task(agent.on_participant_connected(p)))
-        ctx.room.on("disconnected", lambda ev: asyncio.create_task(agent.on_room_disconnected(ev)))
+#         # Room event handlers
+#         ctx.room.on("participant_disconnected", lambda p: asyncio.create_task(agent.on_participant_disconnected(p)))
+#         ctx.room.on("participant_connected", lambda p: asyncio.create_task(agent.on_participant_connected(p)))
+#         ctx.room.on("disconnected", lambda ev: asyncio.create_task(agent.on_room_disconnected(ev)))
         
-        # Shutdown callback
-        async def log_usage():
-            summary = usage_collector.get_summary()
-            logger.info(f"📊 Usage summary: {summary}")
+#         # Shutdown callback
+#         async def log_usage():
+#             summary = usage_collector.get_summary()
+#             logger.info(f"📊 Usage summary: {summary}")
         
-        ctx.add_shutdown_callback(log_usage)
+#         ctx.add_shutdown_callback(log_usage)
         
-        # Add assistant cleanup
-        async def cleanup_assistant():
-            try:
-                await agent.cleanup()
-            except Exception as e:
-                logger.error(f"Error cleaning up Assistant: {e}")
+#         # Add assistant cleanup
+#         async def cleanup_assistant():
+#             try:
+#                 await agent.cleanup()
+#             except Exception as e:
+#                 logger.error(f"Error cleaning up Assistant: {e}")
         
-        ctx.add_shutdown_callback(cleanup_assistant)
-        logger.info("✅ Event handlers configured")
+#         ctx.add_shutdown_callback(cleanup_assistant)
+#         logger.info("✅ Event handlers configured")
     
-    enhancement_tasks.append(setup_handlers())
+#     enhancement_tasks.append(setup_handlers())
     
-    # Task 4: Setup user state properly
-    async def configure_user_state():
-        if participant:
-            stored_state = UserManager.get_user_state(participant.identity)
-            if stored_state:
-                # Merge stored state
-                user_state.voice_count = stored_state.voice_count
-                user_state.chat_count = stored_state.chat_count
-                user_state.last_chat_time = stored_state.last_chat_time
-                user_state.last_voice_time = stored_state.last_voice_time
+#     # Task 4: Setup user state properly
+#     async def configure_user_state():
+#         if participant:
+#             stored_state = UserManager.get_user_state(participant.identity)
+#             if stored_state:
+#                 # Merge stored state
+#                 user_state.voice_count = stored_state.voice_count
+#                 user_state.chat_count = stored_state.chat_count
+#                 user_state.last_chat_time = stored_state.last_chat_time
+#                 user_state.last_voice_time = stored_state.last_voice_time
                 
-            # Update for this session
-            user_state.interaction_start_time = time.time()
-            user_state.last_interaction_time = time.time()
-            user_state.voice_session_id = ctx.room.name
+#             # Update for this session
+#             user_state.interaction_start_time = time.time()
+#             user_state.last_interaction_time = time.time()
+#             user_state.voice_session_id = ctx.room.name
             
-            # Handle SIP calls
-            if participant.kind == 3:  # SIP
-                phone_number = participant.attributes.get("sip.phoneNumber", "")
-                phone_digits = ''.join(filter(str.isdigit, phone_number))
-                if len(phone_digits) >= 10:
-                    user_state.phone_number = phone_digits[-10:]
+#             # Handle SIP calls
+#             if participant.kind == 3:  # SIP
+#                 phone_number = participant.attributes.get("sip.phoneNumber", "")
+#                 phone_digits = ''.join(filter(str.isdigit, phone_number))
+#                 if len(phone_digits) >= 10:
+#                     user_state.phone_number = phone_digits[-10:]
             
-            # Save updated state
-            UserManager.save_user_state(user_state)
-            await UserManager.update_user_room_reconnect_time(user_state.user_id, ctx.room.name)
+#             # Save updated state
+#             UserManager.save_user_state(user_state)
+#             await UserManager.update_user_room_reconnect_time(user_state.user_id, ctx.room.name)
             
-            # Update agent's user tracking
-            agent._user_id = user_id
-            agent.session.userdata = user_state
-            logger.info("✅ User state configured")
+#             # Update agent's user tracking
+#             agent._user_id = user_id
+#             agent.session.userdata = user_state
+#             logger.info("✅ User state configured")
     
-    enhancement_tasks.append(configure_user_state())
+#     enhancement_tasks.append(configure_user_state())
     
-    # Task 5: Background audio (if enabled)
-    async def setup_background_audio():
-        use_background_audio = os.getenv("USE_BACKGROUND_AUDIO", "false").lower() == "true"
-        if use_background_audio:
-            background_audio = BackgroundAudioPlayer(
-                ambient_sound=AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=0.05),
-                thinking_sound=[
-                    AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING, volume=0.125),
-                    AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.1),
-                ]
-            )
-            await background_audio.start(room=ctx.room, agent_session=session)
-            logger.info("✅ Background audio started")
+#     # Task 5: Background audio (if enabled)
+#     async def setup_background_audio():
+#         use_background_audio = os.getenv("USE_BACKGROUND_AUDIO", "false").lower() == "true"
+#         if use_background_audio:
+#             background_audio = BackgroundAudioPlayer(
+#                 ambient_sound=AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=0.05),
+#                 thinking_sound=[
+#                     AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING, volume=0.125),
+#                     AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.1),
+#                 ]
+#             )
+#             await background_audio.start(room=ctx.room, agent_session=session)
+#             logger.info("✅ Background audio started")
     
-    enhancement_tasks.append(setup_background_audio())
+#     enhancement_tasks.append(setup_background_audio())
     
-    # Run all enhancement tasks in parallel
-    await asyncio.gather(*enhancement_tasks, return_exceptions=True)
+#     # Run all enhancement tasks in parallel
+#     await asyncio.gather(*enhancement_tasks, return_exceptions=True)
     
-    timing['enhancement_total'] = time.monotonic() - enhancement_start
-    timing['total'] = time.monotonic() - start_time
+#     timing['enhancement_total'] = time.monotonic() - enhancement_start
+#     timing['total'] = time.monotonic() - start_time
     
-    # Log final timing summary
-    logger.info("📊 Entrypoint V2 Timing Summary:")
-    logger.info(f"  - Critical Path: {timing['critical_path_total']:.3f}s")
-    logger.info(f"    - Connect: {timing['connect']:.3f}s")
-    logger.info(f"    - Session: {timing['session_create']:.3f}s")
-    logger.info(f"    - Assistant: {timing['assistant_create']:.3f}s")
-    logger.info(f"    - Start: {timing['session_start']:.3f}s")
-    logger.info(f"  - Enhancement: {timing['enhancement_total']:.3f}s (background)")
-    logger.info(f"  - Total Time: {timing['total']:.3f}s")
+#     # Log final timing summary
+#     logger.info("📊 Entrypoint V2 Timing Summary:")
+#     logger.info(f"  - Critical Path: {timing['critical_path_total']:.3f}s")
+#     logger.info(f"    - Connect: {timing['connect']:.3f}s")
+#     logger.info(f"    - Session: {timing['session_create']:.3f}s")
+#     logger.info(f"    - Assistant: {timing['assistant_create']:.3f}s")
+#     logger.info(f"    - Start: {timing['session_start']:.3f}s")
+#     logger.info(f"  - Enhancement: {timing['enhancement_total']:.3f}s (background)")
+#     logger.info(f"  - Total Time: {timing['total']:.3f}s")
     
-    # PHASE 3: Generate initial greeting (if appropriate)
-    if participant and not agent._planned_reconnect:
-        # Check conversation history for resumption
-        resumption_state = SessionStateManager.get_conversation_resumption(user_id)
+#     # PHASE 3: Generate initial greeting (if appropriate)
+#     if participant and not agent._planned_reconnect:
+#         # Check conversation history for resumption
+#         resumption_state = SessionStateManager.get_conversation_resumption(user_id)
         
-        if resumption_state and resumption_state.suggested_message:
-            # Resume conversation
-            agent.chat_ctx.add_message(
-                role="user",
-                content=[resumption_state.suggested_message]
-            )
-            await session.generate_reply(
-                instructions="The user has just returned. Respond to their message naturally."
-            )
-        else:
-            # Fresh greeting - get account manager for greeting
-            try:
-                account_mgr = await get_account_manager(account)
-                default_greeting = await account_mgr.get_default_greeting()
-                await session.say(default_greeting, add_to_chat_ctx=True)
-            except:
-                # Fallback greeting
-                await session.say("Hello! How can I help you today?", add_to_chat_ctx=True)
+#         if resumption_state and resumption_state.suggested_message:
+#             # Resume conversation
+#             agent.chat_ctx.add_message(
+#                 role="user",
+#                 content=[resumption_state.suggested_message]
+#             )
+#             await session.generate_reply(
+#                 instructions="The user has just returned. Respond to their message naturally."
+#             )
+#         else:
+#             # Fresh greeting - get account manager for greeting
+#             try:
+#                 account_mgr = await get_account_manager(account)
+#                 default_greeting = await account_mgr.get_default_greeting()
+#                 await session.say(default_greeting, add_to_chat_ctx=True)
+#             except:
+#                 # Fallback greeting
+#                 await session.say("Hello! How can I help you today?", add_to_chat_ctx=True)
 
-
-async def simple_entrypoint(ctx: JobContext):
-    primary_stt = assemblyai.STT(
-        buffer_size_seconds=0.05,
-        format_turns=False,
-        end_of_turn_confidence_threshold=0.7,
-        min_end_of_turn_silence_when_confident=160,
-        max_turn_silence=2400
-    )
-    
-    session = AgentSession(
-        stt=primary_stt,
-        llm=openai.LLM(model="gpt-4o-mini"),
-        tts=elevenlabs.TTS(voice="8sGzMkj2HZn6rYwGx6G0"),
-        vad=silero.VAD.load(),
-        turn_detection="stt",
-    )
-
-    await session.start(
-        room=ctx.room,
-        agent=Assistant(),
-        room_input_options=RoomInputOptions(
-            # LiveKit Cloud enhanced noise cancellation
-            # - If self-hosting, omit this parameter
-            # - For telephony applications, use `BVCTelephony` for best results
-            noise_cancellation=noise_cancellation.BVC(), 
-        ),
-    )
-
-    await ctx.connect()
-
-    await session.generate_reply(
-        instructions="Greet the user and offer your assistance."
-    )
 
 
 # ==============================
@@ -1930,18 +1549,11 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"⚠️ Failed to pre-cache configs: {e}")
         logger.warning("Continuing without pre-cached configs - prewarm may be slower")
-
-    # Check if we should use the optimized v2 entrypoint
-    use_v2 = os.getenv("USE_ENTRYPOINT_V2", "false").lower() == "true"
-    entrypoint_func = entrypoint_v2 if use_v2 else entrypoint
-    
-    if use_v2:
-        logger.info("🚀 Using optimized entrypoint_v2 for faster agent startup")
     
     # Run the application
     run_app(
         WorkerOptions(
-            entrypoint_fnc=entrypoint_func,
+            entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
             request_fnc=request_fnc,
             port=os.getenv("LIVEKIT_PORT", 8081),  # Use a different port for the agent
