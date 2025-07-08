@@ -28,29 +28,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-USER appuser
-
 RUN mkdir -p /home/appuser/.cache
-RUN chown -R appuser /home/appuser/.cache
+RUN chown -R appuser:appuser /home/appuser
+
+USER appuser
 
 WORKDIR /home/appuser
 
 # Copy and install base liddy package first (rarely changes)
-COPY packages/liddy/pyproject.toml packages/liddy/pyproject.toml
-COPY packages/liddy/setup.py packages/liddy/setup.py
-COPY packages/liddy/ packages/liddy/
+COPY --chown=appuser:appuser packages/liddy/setup.py packages/liddy/setup.py
+COPY --chown=appuser:appuser packages/liddy/ packages/liddy/
 RUN --mount=type=cache,target=/home/appuser/.cache/pip,uid=10001 \
     python -m pip install --user --no-cache-dir -e packages/liddy
 
 # Copy and install liddy_intelligence package (changes less frequently)
-COPY packages/liddy_intelligence/pyproject.toml packages/liddy_intelligence/pyproject.toml
-COPY packages/liddy_intelligence/setup.py packages/liddy_intelligence/setup.py
-COPY packages/liddy_intelligence/ packages/liddy_intelligence/
+COPY --chown=appuser:appuser packages/liddy_intelligence/setup.py packages/liddy_intelligence/setup.py
+COPY --chown=appuser:appuser packages/liddy_intelligence/ packages/liddy_intelligence/
 RUN --mount=type=cache,target=/home/appuser/.cache/pip,uid=10001 \
     python -m pip install --user --no-cache-dir -e packages/liddy_intelligence
 
 # Copy liddy_voice requirements and install external dependencies
-COPY packages/liddy_voice/requirements-external.txt packages/liddy_voice/requirements-external.txt
+COPY --chown=appuser:appuser packages/liddy_voice/requirements-external.txt packages/liddy_voice/requirements-external.txt
 RUN --mount=type=cache,target=/home/appuser/.cache/pip,uid=10001 \
     python -m pip install --user --no-cache-dir -r packages/liddy_voice/requirements-external.txt
 
@@ -63,9 +61,9 @@ RUN --mount=type=cache,target=/home/appuser/.cache/pip,uid=10001 \
 RUN mkdir -p response_logs requests logs KMS/logs
 
 # Copy voice service package and install
-COPY packages/liddy_voice/pyproject.toml packages/liddy_voice/pyproject.toml
-COPY packages/liddy_voice/setup.py packages/liddy_voice/setup.py
-COPY packages/liddy_voice/ packages/liddy_voice/
+COPY --chown=appuser:appuser packages/liddy_voice/pyproject.toml packages/liddy_voice/pyproject.toml
+COPY --chown=appuser:appuser packages/liddy_voice/setup.py packages/liddy_voice/setup.py
+COPY --chown=appuser:appuser packages/liddy_voice/ packages/liddy_voice/
 RUN --mount=type=cache,target=/home/appuser/.cache/pip,uid=10001 \
     python -m pip install --user --no-cache-dir -e packages/liddy_voice
 
@@ -85,5 +83,5 @@ ENV PYTHONPATH=/home/appuser/packages:$PYTHONPATH
 # Expose healthcheck port
 EXPOSE 8081
 
-# Run the application
-CMD ["python", "packages/liddy_voice/voice_agent.py", "start"]
+# Run the application (use "dev" for development mode)
+CMD ["python", "packages/liddy_voice/voice_agent.py", "dev"]

@@ -1,18 +1,18 @@
 #!/bin/bash
 set -e
 
-# Migration script to copy all accounts from dev to production bucket
+# Simple migration script using cp instead of rsync to avoid ACL issues
 # This is a ONE-TIME operation to initialize the production environment
 
 echo "==================================================="
-echo "Account Data Migration: Dev → Production"
+echo "Account Data Migration: Dev → Production (Simple)"
 echo "==================================================="
 echo ""
 echo "This script will copy ALL account data from:"
 echo "  Source: gs://liddy-account-documents-dev"
 echo "  Destination: gs://liddy-account-documents"
 echo ""
-echo "⚠️  WARNING: This will OVERWRITE all data in the production bucket!"
+echo "⚠️  WARNING: This will REPLACE all data in the production bucket!"
 echo ""
 
 # Verify we're using the correct GCP account
@@ -51,20 +51,6 @@ if [ -z "$SOURCE_EXISTS" ]; then
   exit 1
 fi
 
-# Count objects in source
-OBJECT_COUNT=$(gsutil ls -r ${SOURCE_BUCKET}/** | wc -l)
-echo "✅ Found ${OBJECT_COUNT} objects in source bucket"
-
-# Check destination bucket
-echo ""
-echo "Checking destination bucket..."
-DEST_EXISTS=$(gcloud storage buckets describe ${DEST_BUCKET} --format="value(name)" 2>/dev/null || echo "")
-if [ -z "$DEST_EXISTS" ]; then
-  echo "❌ ERROR: Destination bucket ${DEST_BUCKET} does not exist!"
-  echo "Please create it first or check the bucket name."
-  exit 1
-fi
-
 # List accounts that will be migrated
 echo ""
 echo "Accounts to be migrated:"
@@ -76,10 +62,7 @@ echo ""
 echo "==================================================="
 echo "FINAL CONFIRMATION"
 echo "==================================================="
-echo "This operation will:"
-echo "1. DELETE all existing data in ${DEST_BUCKET}"
-echo "2. Copy all data from ${SOURCE_BUCKET}"
-echo "3. Preserve all file metadata and structure"
+echo "This operation will copy all data from dev to production."
 echo ""
 read -p "Type 'MIGRATE' to proceed with the migration: " -r
 echo
@@ -93,42 +76,58 @@ echo ""
 echo "🚀 Starting migration..."
 START_TIME=$(date +%s)
 
-# Step 1: Clear destination bucket (optional - comment out if you want to merge instead)
-echo "Clearing destination bucket..."
-gsutil -m rm -r ${DEST_BUCKET}/** 2>/dev/null || echo "Destination bucket is empty or partially empty"
-
-# Step 2: Copy all data (without ACL preservation to avoid permission issues)
-echo "Copying all account data..."
-# Using -r (recursive) and -d (delete extra files in dest) but NOT -p (preserve ACLs)
-# This avoids "No OWNER permission" errors
-gsutil -m rsync -r -d ${SOURCE_BUCKET}/ ${DEST_BUCKET}/
+# Use cp with -r flag (recursive) but without -p (preserve ACLs)
+# This avoids permission issues
+echo "Copying all account data (this may take a while)..."
+gsutil -m cp -r ${SOURCE_BUCKET}/* ${DEST_BUCKET}/ 2>&1 | tee migration.log
 
 # Calculate duration
 END_TIME=$(date +%s)
 DURATION=$((END_TIME - START_TIME))
 
+# Check for errors
+ERROR_COUNT=$(grep -c "CommandException" migration.log 2>/dev/null || echo "0")
+if [ "$ERROR_COUNT" -gt "0" ]; then
+    echo ""
+    echo "⚠️  WARNING: ${ERROR_COUNT} errors occurred during migration"
+    echo "Check migration.log for details"
+else
+    echo ""
+    echo "✅ Migration completed without errors"
+fi
+
 # Verify migration
 echo ""
 echo "Verifying migration..."
-DEST_COUNT=$(gsutil ls -r ${DEST_BUCKET}/** | wc -l)
-echo "✅ Migrated ${DEST_COUNT} objects to production bucket"
+DEST_COUNT=$(gsutil ls -r ${DEST_BUCKET}/** 2>/dev/null | wc -l || echo "0")
+echo "📊 Total objects in production bucket: ${DEST_COUNT}"
 
 # List migrated accounts
 echo ""
 echo "Migrated accounts:"
 echo "------------------"
-gsutil ls ${DEST_BUCKET}/accounts/ | grep -E '/accounts/[^/]+/$' | sed 's|.*/accounts/||' | sed 's|/$||' | sort
+gsutil ls ${DEST_BUCKET}/accounts/ 2>/dev/null | grep -E '/accounts/[^/]+/$' | sed 's|.*/accounts/||' | sed 's|/$||' | sort || echo "No accounts found"
 
 echo ""
 echo "==================================================="
-echo "✅ Migration completed successfully!"
+if [ "$ERROR_COUNT" -eq "0" ]; then
+    echo "✅ Migration completed successfully!"
+else
+    echo "⚠️  Migration completed with ${ERROR_COUNT} errors"
+fi
 echo "==================================================="
 echo "Duration: ${DURATION} seconds"
 echo ""
 echo "Next steps:"
-echo "1. Deploy the voice agent with STORAGE_PROVIDER=gcp"
-echo "2. Set ENV_TYPE=production in your deployment"
-echo "3. The voice agent will now use production bucket: ${DEST_BUCKET}"
+echo "1. Review migration.log if there were any errors"
+echo "2. Deploy the voice agent with STORAGE_PROVIDER=gcp"
+echo "3. Set ENV_TYPE=production in your deployment"
+echo "4. The voice agent will now use production bucket: ${DEST_BUCKET}"
 echo ""
 echo "⚠️  IMPORTANT: This was a one-time migration."
 echo "Future account updates should be made directly to the production bucket."
+
+# Cleanup log file if no errors
+if [ "$ERROR_COUNT" -eq "0" ] && [ -f "migration.log" ]; then
+    rm migration.log
+fi

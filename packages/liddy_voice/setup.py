@@ -3,14 +3,15 @@
 Setup configuration for liddy_voice package
 """
 
-from setuptools import setup, find_packages
+from setuptools import setup
 
 setup(
     name="liddy_voice",
     version="0.1.0",
     description="Voice assistant components for Liddy AI",
     author="Liddy AI",
-    packages=find_packages(),
+    packages=["liddy_voice", "liddy_voice.conversation"],
+    package_dir={"liddy_voice": "."},
     python_requires=">=3.12",
     install_requires=[
         "liddy",  # Core package dependency
@@ -30,4 +31,3 @@ setup(
         ],
     },
 )
-EOF < /dev/null
