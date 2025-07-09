@@ -186,7 +186,6 @@ ASSEMBLYAI_API_KEY=your-key
 # Storage
 STORAGE_TYPE=local  # or 'gcs'
 GCS_BUCKET=your-bucket
-GOOGLE_APPLICATION_CREDENTIALS=path/to/service-account.json
 ```
 
 ### Settings Access

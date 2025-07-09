@@ -8,9 +8,6 @@ import sys
 import os
 sys.path.append('/Users/collinbrown/Dropbox/Development/Lily/code/catalog-maintenance')
 
-# Set environment variables
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = '/Users/collinbrown/Dropbox/Development/Lily/code/catalog-maintenance/auth/laure-430512-218943a78475.json'
-
 from packages.liddy_intelligence.ingestion.scripts.ingest_catalog import main as ingest_main
 
 

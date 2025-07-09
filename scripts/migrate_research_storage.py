@@ -178,12 +178,7 @@ def main():
     # Validate arguments
     if args.cleanup and not args.execute:
         parser.error("--cleanup requires --execute flag")
-    
-    # Ensure Google Cloud credentials are set
-    settings = get_settings()
-    if not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(settings.GOOGLE_APPLICATION_CREDENTIALS)
-    
+        
     migrator = ResearchStorageMigrator(args.bucket)
     
     if args.account:
