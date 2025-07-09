@@ -33,6 +33,7 @@ from liddy_intelligence.research.interview_synthesis_research import get_intervi
 from liddy_intelligence.research.linearity_analysis_research import get_linearity_analysis_researcher
 from liddy_intelligence.research.product_catalog_research import get_product_catalog_researcher
 from liddy_intelligence.research.research_integration import get_research_integration_processor
+from liddy_intelligence.research.industry_terminology_researcher import IndustryTerminologyResearcher
 
 # Workflow management - import WorkflowState directly
 from liddy_intelligence.workflow.workflow_state_manager import get_workflow_manager
@@ -59,6 +60,7 @@ class EnhancedBrandResearcher:
             "voice_messaging": get_voice_messaging_researcher(brand_domain=self.brand_domain),
             "interview_synthesis": get_interview_synthesis_researcher(brand_domain=self.brand_domain),
             "linearity_analysis": get_linearity_analysis_researcher(brand_domain=self.brand_domain),
+            "industry_terminology": IndustryTerminologyResearcher(brand_domain=self.brand_domain),
             "product_catalog": get_product_catalog_researcher(brand_domain=self.brand_domain),
             "research_integration": get_research_integration_processor(brand_domain=self.brand_domain)
         }

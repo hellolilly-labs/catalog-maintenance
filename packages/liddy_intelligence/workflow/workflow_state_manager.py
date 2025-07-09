@@ -39,6 +39,8 @@ class WorkflowState(Enum):
     INTERVIEW_SYNTHESIS_COMPLETE = "interview_synthesis_complete"
     LINEARITY_ANALYSIS_IN_PROGRESS = "linearity_analysis_in_progress"
     LINEARITY_ANALYSIS_COMPLETE = "linearity_analysis_complete"
+    INDUSTRY_TERMINOLOGY_IN_PROGRESS = "industry_terminology_in_progress"
+    INDUSTRY_TERMINOLOGY_COMPLETE = "industry_terminology_complete"
     PRODUCT_CATALOG_IN_PROGRESS = "product_catalog_in_progress"
     PRODUCT_CATALOG_COMPLETE = "product_catalog_complete"
     RESEARCH_INTEGRATION_IN_PROGRESS = "research_integration_in_progress"
@@ -468,6 +470,18 @@ class WorkflowStateManager:
                 "states": {
                     "in_progress": WorkflowState.LINEARITY_ANALYSIS_IN_PROGRESS,
                     "complete": WorkflowState.LINEARITY_ANALYSIS_COMPLETE
+                },
+                "optional": False
+            },
+            "industry_terminology": {
+                "name": "Industry Terminology Research",
+                "cache_duration_days": 60,  # 2 months
+                "research_time_minutes": "2-3",
+                "quality_threshold": 7.5,
+                "description": "Industry-specific terminology for price tiers, slang, and technical terms",
+                "states": {
+                    "in_progress": WorkflowState.INDUSTRY_TERMINOLOGY_IN_PROGRESS,
+                    "complete": WorkflowState.INDUSTRY_TERMINOLOGY_COMPLETE
                 },
                 "optional": False
             },

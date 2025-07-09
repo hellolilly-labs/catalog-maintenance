@@ -20,16 +20,23 @@ def get_google_credentials() -> Optional[Credentials]:
     """
     Get Google Cloud credentials in a way that works across all environments.
     
-    Order of precedence:
-    1. GOOGLE_APPLICATION_CREDENTIALS environment variable (if set)
-    2. gcloud application default credentials
-    3. Cloud Run/GCE metadata service
+    Priority order:
+    1. gcloud application default credentials (for local development)
+    2. Cloud Run/GCE metadata service (for production)
     
     Returns:
         Google credentials object or None if authentication fails
     """
+    
+    # Always ignore GOOGLE_APPLICATION_CREDENTIALS - we use gcloud auth
+    if 'GOOGLE_APPLICATION_CREDENTIALS' in os.environ:
+        del os.environ['GOOGLE_APPLICATION_CREDENTIALS']
+    
     try:
         # Let google-auth library handle the detection
+        # It will now check in this order:
+        # 1. gcloud application default credentials
+        # 2. GCE/Cloud Run metadata service
         credentials, project = default()
         
         if credentials:
@@ -53,15 +60,11 @@ def setup_google_auth():
     This function checks the environment and provides helpful logging
     about which authentication method is being used.
     """
-    # Check if we have GOOGLE_APPLICATION_CREDENTIALS
-    if os.getenv('GOOGLE_APPLICATION_CREDENTIALS'):
-        logger.info(f"Using service account key from GOOGLE_APPLICATION_CREDENTIALS: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}")
-    
     # Check if we're running on Cloud Run
-    elif os.getenv('K_SERVICE'):  # Cloud Run sets this
+    if os.getenv('K_SERVICE'):  # Cloud Run sets this
         logger.info("Running on Cloud Run - using metadata service for authentication")
     
-    # Check if we have gcloud config
+    # Check if we have gcloud config (preferred for local development)
     elif os.path.exists(os.path.expanduser('~/.config/gcloud/application_default_credentials.json')):
         logger.info("Using gcloud application default credentials")
     

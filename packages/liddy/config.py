@@ -34,7 +34,6 @@ class Settings(BaseSettings):
     
     # Google Cloud
     google_cloud_project: Optional[str] = Field(None, env='GOOGLE_CLOUD_PROJECT')
-    google_application_credentials: Optional[str] = Field(None, env='GOOGLE_APPLICATION_CREDENTIALS')
     
     # Storage
     storage_type: str = Field('local', env='STORAGE_TYPE')  # 'local' or 'gcs'

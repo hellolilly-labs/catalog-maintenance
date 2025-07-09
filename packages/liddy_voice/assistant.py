@@ -44,6 +44,7 @@ from liddy.account_manager import get_account_manager, AccountManager
 from liddy_voice.voice_search_wrapper import VoiceSearchService as SearchService
 from livekit.rtc import RemoteParticipant
 from liddy_voice.account_prompt_manager import get_account_prompt_manager, AccountPromptManager
+from liddy_voice.product_manager import ProductManager
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,8 @@ class Assistant(Agent):
         
         # Try to get cached PromptManager if available
         self._account_prompt_manager: AccountPromptManager = get_account_prompt_manager(account=account)
+        
+        self._product_manager: ProductManager = None
         
         # # Only preload if not already cached (new instance)
         # if account and not hasattr(self._account_prompt_manager, '_already_preloaded'):
@@ -96,8 +99,7 @@ class Assistant(Agent):
         # Phase 3: Agent initialization
         agent_init_start = time.time()
         super().__init__(
-            # instructions=self._prompt_manager.build_system_instruction_prompt(account=account), 
-            instructions="", 
+            instructions=self._account_prompt_manager.build_system_instruction_prompt(), 
             chat_ctx=chat_ctx
         )
         agent_init_time = time.time() - agent_init_start
@@ -562,7 +564,14 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
         except Exception as e:
             logger.error(f"Error in comprehensive prewarming: {e}")
 
-    async def _load_products_for_account(self, account: str) -> None:
+    async def get_product_manager(self) -> ProductManager:
+        if not self._product_manager:
+            # self._product_manager = await self._load_products_for_account()
+            from liddy_voice.product_manager import get_product_manager
+            self._product_manager = await get_product_manager(account=self._account)
+        return self._product_manager
+
+    async def _load_products_for_account(self) -> None:
         """
         Load product catalog for this Assistant's account (KISS approach).
         
@@ -592,8 +601,8 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
             
             # Phase 3: Product loading timing
             load_start = time.time()
-            self.product_manager = await load_product_catalog_for_assistant(account)
-            products = await self.product_manager.get_product_objects()
+            self._product_manager = await load_product_catalog_for_assistant(account=self._account)
+            products = await self._product_manager.get_product_objects()
             load_time = time.time() - load_start
             
             # Phase 4: Memory after loading measurement  
@@ -606,7 +615,7 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
             
             # Store timing metadata for monitoring
             self._product_load_timing = {
-                "account": account,
+                "account": self._account,
                 "product_count": len(products),
                 "timing": {
                     "init_time": init_time,
@@ -631,7 +640,7 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
             total_time = time.time() - total_start
             
             # Enhanced logging with performance metrics
-            logger.info(f"🚀 Assistant product loading complete for {account}: "
+            logger.info(f"🚀 Assistant product loading complete for {self._account}: "
                        f"{len(products)} products loaded in {total_time:.3f}s "
                        f"(init: {init_time:.3f}s, load: {load_time:.3f}s) "
                        f"| Memory: {memory_delta:.1f}MB | "
@@ -639,25 +648,25 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
             
             # Performance validation and warnings
             if total_time > 2.0:
-                logger.warning(f"⚠️ Product loading exceeded 2s target: {total_time:.3f}s for {account}")
+                logger.warning(f"⚠️ Product loading exceeded 2s target: {total_time:.3f}s for {self._account}")
             
             if memory_delta > 10.0:
-                logger.warning(f"⚠️ Product catalog memory exceeded 10MB target: {memory_delta:.1f}MB for {account}")
+                logger.warning(f"⚠️ Product catalog memory exceeded 10MB target: {memory_delta:.1f}MB for {self._account}")
             
             if len(products) == 0:
-                logger.warning(f"⚠️ No products loaded for account {account}")
+                logger.warning(f"⚠️ No products loaded for account {self._account}")
             
         except asyncio.CancelledError:
-            logger.debug(f"Product loading cancelled for {account}")
+            logger.debug(f"Product loading cancelled for {self._account}")
             self._products_loaded = False
             raise  # Re-raise to properly handle cancellation
         except Exception as e:
-            logger.error(f"Error loading products for Assistant account {account}: {e}")
+            logger.error(f"Error loading products for Assistant account {self._account}: {e}")
             self._products_loaded = False
             
             # Store error timing for debugging
             self._product_load_timing = {
-                "account": account,
+                "account": self._account,
                 "error": str(e),
                 "timing": {
                     "total_time": time.time() - total_start,
@@ -1178,6 +1187,8 @@ Parameter Schema and Description:
                     
                     await self.update_chat_ctx(chat_ctx=chat_ctx)
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             logger.error(f"Error updating user state prompt: {e}")
 
 
@@ -1537,17 +1548,17 @@ Parameter Schema and Description:
         self,
         context: RunContext[UserState],
         query: str,
-        top_k: str | int = "var",
+        top_k: str | int = "auto",
         # message_to_user: str,
     ):
 
         """Use this to search for products that the user may be interested in. Include as much depth and detail in the query as possible to get the best results. Generally, the only way for you to know about individual products is through this tool call, so feel free to liberally call this tool call.
         
-        ALWAYS say something to the user in parallel to calling this function to let them know you are looking for products (using whatever language is appropriate for the context of the conversation).
+        ALWAYS speak to the user in the same turn as the tool call.
         
         Args:
             query: The query to use for the search. Be as descriptive and detailed as possible based on the context of the entire conversation. For example, the query "mountain bike" is not very descriptive, but "mid-range non-electric mountain bike with electronic shifting for downhill flowy trails for advanced rider" is much more descriptive. The more descriptive the query, the better the results will be. You can also use this to search for specific products by name or ID, but be sure to include as much context as possible to help narrow down the results.
-            top_k: The number of products to return. Defaults to "var" which means the number of products to return is determined by quality of the results. If you want to return a specific number of products, you can set this to an integer. For example, if the product search is not returning back satisfactory results, you can set this to 10 to get more results.
+            top_k: The number of products to return. Defaults to "auto" which means the number of products to return is determined by quality of the results. If you want to return a specific number of products, you can set this to an integer. For example, if the product search is not returning back satisfactory results, you can set this to 10 to get more results.
         """
         # Track overall timing
         overall_start = time.time()
@@ -1589,7 +1600,7 @@ Parameter Schema and Description:
         
             # Get products using ProductManager (should be cached after initial load)
             get_products_start = time.time()
-            products = await self.product_manager.get_products()
+            products = await (await self.get_product_manager()).get_products()
             products_results: List[Product] = []
             timing_breakdown['get_products'] = time.time() - get_products_start
             
@@ -1653,7 +1664,7 @@ Parameter Schema and Description:
                 if rag_results and not isinstance(rag_results, dict) or not rag_results.get("error"):
                     for result in rag_results.get("results"):
                         if result.get('id'):
-                            product = await self.product_manager.find_product_by_id(product_id=result.get('id'))
+                            product = await (await self.get_product_manager()).find_product_by_id(product_id=result.get('id'))
                             if product:
                                 products_results.append(product)
                                 continue
@@ -1755,16 +1766,14 @@ Parameter Schema and Description:
         try:
             logger.info(f"🔍 display_product started: {product_id}")
             
-            from .product_manager import find_product_by_id, get_products_for_account
-            
             # Time product lookup
             product_lookup_start = time.time()
-            product = await find_product_by_id(self._account, product_id)
+            product = await (await self.get_product_manager()).find_product_by_id(product_id=product_id)
             timing_breakdown['product_lookup'] = time.time() - product_lookup_start
             products = []
             
             if not product:
-                products = await get_products_for_account(self._account)
+                products = await (await self.get_product_manager()).get_products()
                 products_names_urls_ids = [(p.name, p.productUrl, p.id) for p in products]
                 raise ToolError(f"The product ID's provided are not in the product catalog. Please provide valid product ID's. Use the `product_search` function to find a valid product ID. If at all possible, don't ask the user for the product ID, instead use the `product_search` function to find it silently and use that.\n\nValid product ID's: {json.dumps(products_names_urls_ids)}")
             
@@ -1834,8 +1843,7 @@ Parameter Schema and Description:
                 most_recent_history = history[0]
                 if most_recent_history.url:
                     product_url = most_recent_history.url
-                    from .product_manager import find_product_by_url
-                    current_product = await find_product_by_url(user_state.account, product_url)
+                    current_product = await (await self.get_product_manager()).find_product_by_url(product_url=product_url)
                 timing_breakdown['history_product_lookup'] = time.time() - history_product_start
             
             # Time waiting for speech to finish
@@ -1905,6 +1913,8 @@ Parameter Schema and Description:
             logger.error(f"ConnectionError in display_product: {e}")
             # Ignore for now
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             if isinstance(e, RpcError) or e.message == "Response timeout":
                 logger.error(f"RpcError in display_product: {e}")
                 # Ignore for now

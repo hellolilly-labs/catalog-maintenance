@@ -35,6 +35,7 @@ class StepType(Enum):
     VOICE_MESSAGING = "voice_messaging"
     INTERVIEW_INTEGRATION = "interview_integration"
     INTERVIEW_SYNTHESIS = "interview_synthesis"
+    INDUSTRY_TERMINOLOGY = "industry_terminology"
     LINEARITY_ANALYSIS = "linearity_analysis"
     PRODUCT_CATALOG = "product_catalog"
     RESEARCH_INTEGRATION = "research_integration"

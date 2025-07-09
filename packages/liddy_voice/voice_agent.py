@@ -115,7 +115,6 @@ def load_environment_variables():
         'ELEVENLABS_API_KEY',
         'OPENAI_API_KEY',
         'GOOGLE_API_KEY',
-        'GOOGLE_APPLICATION_CREDENTIALS',
         'GROQ_API_KEY',
         'LIVEKIT_API_KEY',
         'LIVEKIT_API_SECRET',
@@ -359,7 +358,6 @@ async def setup_agent(user_state: UserState):
         proc_userdata = {}
     
     # Configure STT
-    # credentials_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     credentials_file = None
     
     # Check if we have prewarmed STT models
@@ -1178,7 +1176,6 @@ async def test_voice_search(account: str = "specialized.com", query: str = "top 
 #     user_state = UserState(user_id=user_id, account=account)
     
 #     # Get credentials for TTS/STT
-#     credentials_file = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", None)
 #     elevenlabs_api_key = os.getenv("ELEVEN_API_KEY")
     
 #     # Create minimal session
@@ -1540,15 +1537,19 @@ if __name__ == "__main__":
             logger.info("✅ Account caching complete")
             exit()
     
-    # Pre-cache account configurations before starting the app
-    logger.info("🚀 Pre-caching account configurations before app startup...")
-    try:
-        # This MUST complete before workers start
-        asyncio.run(precache_account_configs())
-        logger.info("✅ Redis cache is warm - starting app")
-    except Exception as e:
-        logger.error(f"⚠️ Failed to pre-cache configs: {e}")
-        logger.warning("Continuing without pre-cached configs - prewarm may be slower")
+    # if the argv is download-files, then skip the precache_account_configs
+    if len(sys.argv) > 1 and sys.argv[1] == "download-files":
+        logger.info("🚀 Skipping account precache - download-files mode")
+    else:
+        # Pre-cache account configurations before starting the app
+        logger.info("🚀 Pre-caching account configurations before app startup...")
+        try:
+            # This MUST complete before workers start
+            asyncio.run(precache_account_configs())
+            logger.info("✅ Redis cache is warm - starting app")
+        except Exception as e:
+            logger.error(f"⚠️ Failed to pre-cache configs: {e}")
+            logger.warning("Continuing without pre-cached configs - prewarm may be slower")
     
     # Run the application
     run_app(

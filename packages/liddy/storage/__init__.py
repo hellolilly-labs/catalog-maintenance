@@ -125,6 +125,11 @@ class GCPAccountStorageProvider(AccountStorageProvider):
         from google.cloud import storage
         from ..auth_utils import setup_google_auth, get_google_credentials
         
+        # IMPORTANT: Remove GOOGLE_APPLICATION_CREDENTIALS before any GCS operations
+        # We use gcloud auth exclusively
+        if 'GOOGLE_APPLICATION_CREDENTIALS' in os.environ:
+            del os.environ['GOOGLE_APPLICATION_CREDENTIALS']
+        
         # Set up authentication
         auth_success = setup_google_auth()
         if not auth_success:

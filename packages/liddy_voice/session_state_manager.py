@@ -44,12 +44,12 @@ class SessionStateManager:
     @classmethod
     def get_user_recent_history(cls, user_id: str) -> List[UrlTracking]:
         """Get user history from Redis"""
-        return get_user_recent_history(user_id)
+        return UserManager.get_user_recent_history(user_id)
 
     @classmethod
     async def get_user_recent_products(cls, user_id: str, account:str, limit: int=25) -> List[Tuple[float, Product]]:
         """Get user product history from Redis"""
-        history = get_user_recent_history(user_id)
+        history = UserManager.get_user_recent_history(user_id)
         
         if not history or len(history) == 0:
             return []
