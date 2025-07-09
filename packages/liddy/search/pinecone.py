@@ -969,7 +969,6 @@ class PineconeRAG(BaseRAG):
                     filters=None,
                     namespace=self.namespace,
                     top_k=1,  # Minimal results
-                    rerank=False,
                     include_metadata=False,  # No metadata needed
                     include_text=False  # No text needed
                 )
@@ -982,7 +981,6 @@ class PineconeRAG(BaseRAG):
                     filters=None,
                     namespace=self.namespace,
                     top_k=1,  # Minimal results
-                    rerank=False,
                     include_metadata=False,  # No metadata needed
                     include_text=False  # No text needed
                 )
