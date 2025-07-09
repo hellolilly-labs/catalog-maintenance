@@ -84,18 +84,18 @@ class WebSearchDataSource(DataSource):
                     query_string = query.get("query", "")
                     max_results = query.get("max_results", 3)
                     include_domains = query.get("include_domains", None)
-                    search_results = await web_search.search(query_string, max_results=max_results, include_domains=include_domains)
+                    search_response = await web_search.search(query_string, max_results=max_results, include_domains=include_domains)
                 else:
                     query_string = str(query)
                     max_results = 3
-                    search_results = await web_search.search(query_string)
+                    search_response = await web_search.search(query_string)
                 
-                if search_results["results"]:
+                if search_response.results:
                     successful_searches += 1
                     
                     # Process results (limited by max_results)
-                    for result_idx, result in enumerate(search_results["results"][:max_results]):
-                        # Convert SearchResult object to dictionary
+                    for result_idx, result in enumerate(search_response.results[:max_results]):
+                        # Result is already a SearchResult object
                         result_dict = {
                             "title": result.title,
                             "url": result.url,
@@ -107,8 +107,8 @@ class WebSearchDataSource(DataSource):
                         
                         # Add search context to result
                         result_dict["source_query"] = query if isinstance(query, str) else query_string
-                        result_dict["answer"] = search_results.get("answer", "")
-                        result_dict["follow_up_questions"] = search_results.get("follow_up_questions", [])
+                        result_dict["answer"] = search_response.answer  # Get answer from SearchResponse
+                        result_dict["follow_up_questions"] = []  # Not available in current implementation
                         result_dict["source_type"] = context.researcher_name
                         result_dict["query_index"] = query_idx
                         result_dict["result_index"] = result_idx
@@ -130,24 +130,25 @@ class WebSearchDataSource(DataSource):
                         }
                         detailed_sources.append(source_record)
                 
-                elif search_results.get("answer"):
+                elif search_response.answer:
+                    # Tavily provided an answer but no individual results
                     successful_searches += 1
                     all_results.append({
-                        "title": search_results.get("answer", ""),
+                        "title": "Tavily Answer",
                         "url": "",
-                        "content": search_results.get("answer", ""),
-                        "snippet": search_results.get("answer", ""),
-                        "answer": search_results.get("answer", ""),
-                        "follow_up_questions": search_results.get("follow_up_questions", []),
+                        "content": search_response.answer,
+                        "snippet": search_response.answer,
+                        "answer": search_response.answer,
+                        "follow_up_questions": [],
                         "score": 1.0,
                         "published_date": None,
                         "source_query": query_string,
                     })
                     detailed_sources.append({
-                        "source_id": f"query_{query_idx}_result_{result_idx}",
-                        "title": search_results.get("answer", ""),
+                        "source_id": f"query_{query_idx}_answer",
+                        "title": "Tavily Answer",
                         "url": "",
-                        "snippet": search_results.get("answer", ""),
+                        "snippet": search_response.answer,
                         "search_query": query_string,
                     })
 

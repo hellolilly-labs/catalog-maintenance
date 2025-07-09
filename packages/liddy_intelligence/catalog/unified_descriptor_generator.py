@@ -38,6 +38,7 @@ class DescriptorConfig:
     descriptor_length: Tuple[int, int] = (100, 200)  # min, max words
     max_search_terms: int = 30
     max_selling_points: int = 5
+    auto_run_terminology_research: bool = True  # Auto-run terminology research if missing
 
 
 class UnifiedDescriptorGenerator:
@@ -83,6 +84,9 @@ class UnifiedDescriptorGenerator:
             Tuple of (enhanced_products, filter_labels)
         """
         logger.info(f"📝 Processing descriptors for {self.brand_domain}")
+        
+        # Check for terminology research before proceeding
+        await self._check_terminology_research(auto_run=self.config.auto_run_terminology_research)
         
         # Load product catalog research if enabled
         if self.config.use_research and not self.product_catalog_intelligence:
@@ -173,7 +177,8 @@ class UnifiedDescriptorGenerator:
         """Generate descriptor based on configured mode"""
         
         # Use Product.to_markdown for better formatted product data
-        product_info = Product.to_markdown(product, depth=0, obfuscatePricing=True)
+        # Include actual prices (not obfuscated) for better price-based search
+        product_info = Product.to_markdown(product, depth=0, obfuscatePricing=False)
         
         # Build mode-specific prompt using Langfuse versioning
         prompt_key = f"liddy/catalog/descriptor/rag_generation"
@@ -740,6 +745,63 @@ JUSTIFICATION: [brief explanation]"""
         )
     
 
+    
+    async def _check_terminology_research(self, auto_run: bool = True) -> None:
+        """Check if terminology research exists and run it if missing
+        
+        Args:
+            auto_run: If True, automatically run the researcher if missing
+        """
+        try:
+            research_path = f"research/industry_terminology/research.md"
+            research_exists = await self.storage.file_exists(research_path)
+            
+            if not research_exists:
+                if auto_run:
+                    logger.info(
+                        f"📚 No industry terminology research found. Running it now for {self.brand_domain}..."
+                    )
+                    # Import and run the terminology researcher
+                    from liddy_intelligence.research.industry_terminology_researcher import IndustryTerminologyResearcher
+                    
+                    researcher = IndustryTerminologyResearcher(
+                        brand_domain=self.brand_domain,
+                        force_refresh=False
+                    )
+                    
+                    try:
+                        await researcher.conduct_research()
+                        logger.info(f"✅ Industry terminology research completed successfully")
+                    except Exception as e:
+                        logger.error(f"Failed to run terminology research: {e}")
+                        logger.warning(
+                            f"⚠️  You can manually run: python run/research_industry_terminology.py {self.brand_domain}"
+                        )
+                else:
+                    logger.warning(
+                        f"⚠️  No industry terminology research found for {self.brand_domain}. "
+                        f"This research improves price categorization and search. "
+                        f"Run: python run/research_industry_terminology.py {self.brand_domain}"
+                    )
+            else:
+                # Check age of research
+                metadata = await self.storage.get_file_metadata(research_path)
+                if metadata and 'updated' in metadata:
+                    from datetime import datetime, timezone
+                    updated = datetime.fromisoformat(metadata['updated'].replace('Z', '+00:00'))
+                    age_days = (datetime.now(timezone.utc) - updated).days
+                    if age_days > 30:
+                        logger.warning(
+                            f"⚠️  Industry terminology research is {age_days} days old. "
+                            f"Consider refreshing: python run/research_industry_terminology.py {self.brand_domain} --force"
+                        )
+                    else:
+                        logger.info(f"✅ Found industry terminology research ({age_days} days old)")
+                else:
+                    logger.info(f"✅ Found industry terminology research")
+                    
+        except Exception as e:
+            logger.debug(f"Could not check terminology research: {e}")
     
     async def _load_product_catalog_intelligence(self) -> str:
         """Load product catalog intelligence from ProductCatalogResearcher"""

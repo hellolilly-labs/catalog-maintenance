@@ -415,15 +415,33 @@ class SearchService:
         filters = {}
         query_lower = query.lower()
         
-        # Price extraction
+        # Enhanced price extraction
         price_patterns = [
+            # Maximum price patterns
             (r'under \$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'max'),
             (r'below \$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'max'),
             (r'less than \$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'max'),
+            (r'up to \$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'max'),
+            (r'max(?:imum)? \$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'max'),
+            (r'no more than \$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'max'),
+            (r'\$?(\d+(?:,\d{3})*(?:\.\d{2})?) or less', 'max'),
+            # Minimum price patterns
             (r'over \$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'min'),
             (r'above \$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'min'),
             (r'more than \$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'min'),
-            (r'\$?(\d+(?:,\d{3})*(?:\.\d{2})?) ?- ?\$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'range')
+            (r'at least \$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'min'),
+            (r'min(?:imum)? \$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'min'),
+            (r'starting at \$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'min'),
+            (r'\$?(\d+(?:,\d{3})*(?:\.\d{2})?) or more', 'min'),
+            # Range patterns
+            (r'\$?(\d+(?:,\d{3})*(?:\.\d{2})?) ?(?:to|-) ?\$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'range'),
+            (r'between \$?(\d+(?:,\d{3})*(?:\.\d{2})?) and \$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'range'),
+            (r'from \$?(\d+(?:,\d{3})*(?:\.\d{2})?) to \$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'range'),
+            # Exact/around price patterns
+            (r'around \$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'around'),
+            (r'about \$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'around'),
+            (r'approximately \$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'around'),
+            (r'~\$?(\d+(?:,\d{3})*(?:\.\d{2})?)', 'around'),
         ]
         
         for pattern, price_type in price_patterns:
@@ -435,9 +453,56 @@ class SearchService:
                     filters['price'] = {'$gte': min_price, '$lte': max_price}
                 elif price_type == 'max':
                     filters['price'] = {'$lte': float(match.group(1).replace(',', ''))}
-                else:  # min
+                elif price_type == 'min':
                     filters['price'] = {'$gte': float(match.group(1).replace(',', ''))}
+                elif price_type == 'around':
+                    # For "around" prices, use a 20% margin
+                    target_price = float(match.group(1).replace(',', ''))
+                    filters['price'] = {'$gte': target_price * 0.8, '$lte': target_price * 1.2}
                 break
+        
+        # Relative price terms (no specific number mentioned)
+        # TODO: These hardcoded values should be dynamic based on catalog price distribution
+        # See price_descriptor_updater.py for dynamic categorization implementation
+        if 'price' not in filters:
+            relative_price_terms = {
+                # Budget/affordable terms
+                'affordable': {'$lte': 500},
+                'budget': {'$lte': 300},
+                'cheap': {'$lte': 200},
+                'inexpensive': {'$lte': 400},
+                'economical': {'$lte': 500},
+                'value': {'$lte': 600},
+                'entry-level': {'$lte': 700},
+                'entry level': {'$lte': 700},
+                # Premium/expensive terms
+                'expensive': {'$gte': 1500},
+                'premium': {'$gte': 1000},
+                'luxury': {'$gte': 2000},
+                'high-end': {'$gte': 1500},
+                'high end': {'$gte': 1500},
+                'top-tier': {'$gte': 2000},
+                'top tier': {'$gte': 2000},
+                'top of the line': {'$gte': 2000},
+                'flagship': {'$gte': 1800},
+                'best-in-class': {'$gte': 1800},
+                'best in class': {'$gte': 1800},
+                'elite': {'$gte': 2000},
+                'professional': {'$gte': 1200},
+                'expert-level': {'$gte': 1500},
+                'expert level': {'$gte': 1500},
+                'finest': {'$gte': 2000},
+                # Mid-range terms
+                'mid-range': {'$gte': 500, '$lte': 1500},
+                'mid range': {'$gte': 500, '$lte': 1500},
+                'moderate': {'$gte': 400, '$lte': 1200},
+                'reasonable': {'$gte': 300, '$lte': 1000},
+            }
+            
+            for term, price_filter in relative_price_terms.items():
+                if term in query_lower:
+                    filters['price'] = price_filter
+                    break
         
         # Category extraction based on account
         brand_config = account_manager.get_brand_config()

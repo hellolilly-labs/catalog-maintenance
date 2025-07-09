@@ -6,6 +6,7 @@ from datetime import datetime
 class DescriptorMetadata:
     def __init__(self,
                  generated_at: str | None = None,
+                 price_updated_at: str | None = None,
                  model: str | None = None,
                  quality_score: float | None = None,
                  quality_score_reasoning: str | None = None,
@@ -13,6 +14,7 @@ class DescriptorMetadata:
                  mode: str | None = None,
                  uses_research: bool | None = None):
         self.generated_at = generated_at if generated_at else datetime.now().isoformat()
+        self.price_updated_at = price_updated_at if price_updated_at else None
         self.model = model
         self.quality_score = quality_score
         self.quality_score_reasoning = quality_score_reasoning
@@ -23,6 +25,7 @@ class DescriptorMetadata:
     def to_dict(self) -> dict:
         return {
             "generated_at": self.generated_at,
+            "price_updated_at": self.price_updated_at,
             "model": self.model,
             "quality_score": self.quality_score,
             "quality_score_reasoning": self.quality_score_reasoning,
@@ -115,7 +118,7 @@ class Product:
         self.deleted = deleted
         self.imageAnalysis = imageAnalysis if imageAnalysis is not None else []
         self.descriptor = descriptor
-        self.descriptor_metadata = descriptor_metadata if descriptor_metadata is not None else DescriptorMetadata()
+        self.descriptor_metadata = DescriptorMetadata(**descriptor_metadata) if descriptor_metadata is not None else DescriptorMetadata()
         self.search_keywords = search_keywords if search_keywords is not None else []
         self.key_selling_points = key_selling_points if key_selling_points is not None else []
         self.voice_summary = voice_summary if voice_summary is not None else ''

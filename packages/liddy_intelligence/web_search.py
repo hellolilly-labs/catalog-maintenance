@@ -35,6 +35,13 @@ class SearchResult:
     content: str
     score: float
     published_date: Optional[str] = None
+    
+@dataclass
+class SearchResponse:
+    """Complete search response including answer"""
+    results: List[SearchResult]
+    answer: Optional[str] = None
+    query: str = ""
 
 @dataclass
 class CrawlResult:
@@ -72,7 +79,7 @@ class WebSearchProvider(ABC):
     """Abstract base class for web search providers"""
     
     @abstractmethod
-    async def search(self, query: str, **kwargs) -> List[SearchResult]:
+    async def search(self, query: str, **kwargs) -> SearchResponse:
         pass
     
     async def crawl_site(self, base_url: str, instructions: str = "") -> Optional[CrawlResult]:
@@ -142,7 +149,7 @@ class TavilySearchProvider(WebSearchProvider):
         self.client = TavilyClient(api_key=api_key)
         self.redis_client = get_redis_client()  # TODO: Re-enable redis when needed
     
-    async def search(self, query: str, **kwargs) -> List[SearchResult]:
+    async def search(self, query: str, **kwargs) -> SearchResponse:
         """Search using official Tavily library with Redis caching"""
         try:
             # Prepare search parameters for the official library
@@ -168,12 +175,17 @@ class TavilySearchProvider(WebSearchProvider):
             # Try to get from cache first
             if self.redis_client:
                 try:
-                    cached_results = self.redis_client.get(cache_key)
-                    if cached_results:
-                        cached_results = _deserialize_search_results(cached_results)
-                        if cached_results and len(cached_results) > 0:
+                    cached_data = self.redis_client.get(cache_key)
+                    if cached_data:
+                        # Deserialize the complete response
+                        cached_response = json.loads(cached_data)
+                        if cached_response and cached_response.get("results"):
                             logger.info(f"🔄 Cache HIT for query: {query[:50]}...")
-                            return cached_results
+                            return SearchResponse(
+                                results=[SearchResult(**r) for r in cached_response["results"]],
+                                answer=cached_response.get("answer"),
+                                query=query
+                            )
                 except Exception as e:
                     logger.warning(f"Redis cache read failed: {e}")
             
@@ -191,21 +203,28 @@ class TavilySearchProvider(WebSearchProvider):
             )
             
             results = self._parse_search_results(data)
+            answer = data.get("answer")  # Extract the Tavily answer
             
-            # Cache the results if Redis is available
+            response = SearchResponse(results=results, answer=answer, query=query)
+            
+            # Cache the complete response if Redis is available
             if self.redis_client and results:
                 try:
-                    cached_data = _serialize_search_results(results)
-                    self.redis_client.setex(cache_key, SEARCH_CACHE_TTL, cached_data)
-                    logger.debug(f"💾 Cached {len(results)} results for 2 days")
+                    # Serialize the complete response
+                    cache_data = {
+                        "results": [asdict(r) for r in results],
+                        "answer": answer
+                    }
+                    self.redis_client.setex(cache_key, SEARCH_CACHE_TTL, json.dumps(cache_data))
+                    logger.debug(f"💾 Cached {len(results)} results with answer for 2 days")
                 except Exception as e:
                     logger.warning(f"Redis cache write failed: {e}")
             
-            return results
+            return response
                         
         except Exception as e:
             logger.error(f"Error in Tavily search: {e}")
-            return []
+            return SearchResponse(results=[], answer=None, query=query)
     
     async def crawl_site(self, base_url: str, instructions: str = "") -> Optional[CrawlResult]:
         """Crawl a website using official Tavily library"""
@@ -405,7 +424,7 @@ class GoogleSearchProvider(WebSearchProvider):
         self.search_engine_id = search_engine_id
         self.base_url = "https://www.googleapis.com/customsearch/v1"
     
-    async def search(self, query: str, **kwargs) -> List[SearchResult]:
+    async def search(self, query: str, **kwargs) -> SearchResponse:
         """Search using Google Custom Search API"""
         max_results = kwargs.get('max_results', 10)
         try:
@@ -434,14 +453,15 @@ class GoogleSearchProvider(WebSearchProvider):
                                 score=1.0  # Google doesn't provide scores
                             ))
                         
-                        return results
+                        # Google doesn't provide a synthesized answer
+                        return SearchResponse(results=results, answer=None, query=query)
                     else:
                         logger.error(f"Google search failed: {response.status}")
-                        return []
+                        return SearchResponse(results=[], answer=None, query=query)
                         
         except Exception as e:
             logger.error(f"Error in Google search: {e}")
-            return []
+            return SearchResponse(results=[], answer=None, query=query)
 
 
 class BrandWebSearchEngine:
@@ -496,16 +516,17 @@ class BrandWebSearchEngine:
         provider = self.providers[0]
         
         try:
-            results = await provider.search(query, max_results=max_results, include_domains=include_domains)
+            response = await provider.search(query, max_results=max_results, include_domains=include_domains)
             return {
                 "query": query,
-                "total_results": len(results),
-                "results": results,
+                "total_results": len(response.results),
+                "results": response.results,
+                "answer": response.answer,
                 "provider_used": provider.__class__.__name__
             }
         except Exception as e:
             logger.error(f"Error in search for '{query}': {e}")
-            return {"results": [], "error": str(e)}
+            return {"results": [], "answer": None, "error": str(e)}
     
     async def search_brand_info(self, brand_domain: str) -> Dict[str, Any]:
         """
@@ -538,11 +559,20 @@ class BrandWebSearchEngine:
         
         for query in search_queries:
             try:
-                results = await provider.search(query, max_results=6)  # More results per query
-                for result in results:
-                    result["query"] = query
-                    result["query_type"] = self._classify_query_type(query)
-                    all_results.append(result)
+                response = await provider.search(query, max_results=6)  # More results per query
+                for result in response.results:
+                    # Create a dict representation of the result
+                    result_dict = {
+                        "title": result.title,
+                        "url": result.url,
+                        "content": result.content,
+                        "score": result.score,
+                        "published_date": result.published_date,
+                        "query": query,
+                        "query_type": self._classify_query_type(query),
+                        "answer": response.answer  # Include the synthesized answer
+                    }
+                    all_results.append(result_dict)
                 
                 # Small delay between queries to be respectful
                 await asyncio.sleep(0.5)

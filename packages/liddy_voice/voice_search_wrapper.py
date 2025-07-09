@@ -360,6 +360,8 @@ Return ONLY the enhanced search query with no explanation."""
                     filtered_results = results[:3]
                 agent_instructions = f"Found {len(filtered_results)} relevant products. Present these options and be ready to provide more details if needed."
         
+            # for now, just return all results
+            filtered_results = [r for r, s in zip(results, scores)]
         else:
             # No scores available - fall back to pattern-based approach
             filtered_results = []
