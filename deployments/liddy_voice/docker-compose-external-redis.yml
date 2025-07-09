@@ -1,18 +1,7 @@
-services:
-  # Redis service for local testing
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-    command: redis-server --appendonly yes
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+# Docker Compose configuration using external Redis
+# This version connects to Redis running on the host machine
 
+services:
   voice-agent:
     build:
       context: ../..
@@ -22,9 +11,6 @@ services:
       - ../../.env  # Use the root .env file
     ports:
       - "8081:8081"
-    depends_on:
-      redis:
-        condition: service_healthy
     environment:
       # Core settings
       - ENV_TYPE=development  # Change to production when ready
@@ -63,14 +49,13 @@ services:
       # development → liddy-account-documents-dev
       # production → liddy-account-documents
       
-      # Redis configuration - override localhost to use Docker service
-      - REDIS_HOST=redis  # Points to the redis service defined above
+      # Redis configuration - use host's Redis
+      - REDIS_HOST=host.docker.internal  # Special Docker hostname for host access
       - REDIS_PORT=6379
       
       # Python optimizations
       - PYTHONFAULTHANDLER=1
       - PYTHONUNBUFFERED=1
-      
       
     volumes:
       # Primary method: Mount GCP credentials from gcloud auth
@@ -79,9 +64,6 @@ services:
       - voice-cache:/home/appuser/.cache
       # Alternative: If using service account key, uncomment below:
       # - ./service-account-key.json:/tmp/gcp-key.json:ro
-    # environment:
-      # For service account key method, uncomment:
-      # - GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-key.json
     
     # Health check
     healthcheck:
@@ -92,5 +74,4 @@ services:
       start_period: 40s
 
 volumes:
-  redis-data:
   voice-cache:

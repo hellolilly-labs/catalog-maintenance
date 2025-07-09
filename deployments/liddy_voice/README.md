@@ -78,7 +78,7 @@ Key environment variables configured in the deployment:
 - `LIVEKIT_URL`: LiveKit server URL
 - `REDIS_HOST`: Redis server for caching
 - `MODEL_NAME`: Primary LLM model
-- `PROMPTS_BUCKET`: GCS bucket for prompt files
+- `ACCOUNTS_BUCKET`: GCS bucket for accounts files
 - Various API keys stored in Secret Manager
 
 ## Monitoring

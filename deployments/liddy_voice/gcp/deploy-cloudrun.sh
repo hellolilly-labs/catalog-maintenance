@@ -2,7 +2,11 @@
 set -e
 
 # Load environment variables from config file if it exists
-if [ -f "../../config/.env.gcp" ]; then
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+if [ -f "$SCRIPT_DIR/.env.gcp" ]; then
+  source "$SCRIPT_DIR/.env.gcp"
+  echo "Loaded configuration from $SCRIPT_DIR/.env.gcp"
+elif [ -f "../../config/.env.gcp" ]; then
   source ../../config/.env.gcp
   echo "Loaded configuration from config/.env.gcp"
 elif [ -f "config/.env.gcp" ]; then
@@ -168,6 +172,7 @@ fi
 
 # Create non-sensitive environment variables string
 ENV_VARS="ENV_TYPE=gcp,\
+GOOGLE_CLOUD_PROJECT=${PROJECT_ID},\
 REDIS_HOST=${REDIS_HOST},\
 REDIS_PORT=${REDIS_PORT},\
 REDIS_PREFIX=${REDIS_PREFIX},\
@@ -196,7 +201,10 @@ GOOGLE_MAX_RETRIES=3,\
 GROQ_MAX_RETRIES=3,\
 HTTP_TIMEOUT=30,\
 REDIS_SOCKET_KEEPALIVE=1,\
-REDIS_CONNECTION_POOL_SIZE=20"
+REDIS_CONNECTION_POOL_SIZE=20,\
+LANGFUSE_HOST=https://us.cloud.langfuse.com,\
+PINECONE_INDEX_NAME=specialized-llama-2048,\
+PINECONE_ENVIRONMENT=gcp-starter"
 
 echo "Deploying to Cloud Run with WebSocket support..."
 gcloud run deploy ${SERVICE_NAME} \
@@ -213,7 +221,13 @@ LIVEKIT_API_KEY=LIVEKIT_API_KEY:latest,\
 LIVEKIT_API_SECRET=LIVEKIT_API_SECRET:latest,\
 GROQ_API_KEY=GROQ_API_KEY:latest,\
 DEEPGRAM_API_KEY=DEEPGRAM_API_KEY:latest,\
-ADMIN_KEY=ADMIN_KEY:latest" \
+ADMIN_KEY=ADMIN_KEY:latest,\
+LANGFUSE_PUBLIC_KEY=LANGFUSE_PUBLIC_KEY:latest,\
+LANGFUSE_SECRET_KEY=LANGFUSE_SECRET_KEY:latest,\
+ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest,\
+ASSEMBLYAI_API_KEY=ASSEMBLYAI_API_KEY:latest,\
+PINECONE_API_KEY=PINECONE_API_KEY:latest,\
+TAVILY_API_KEY=TAVILY_API_KEY:latest" \
   --vpc-connector=${VPC_CONNECTOR_NAME} \
   --vpc-egress=private-ranges-only \
   --cpu=4 \

@@ -46,7 +46,6 @@ if [ $? -eq 0 ]; then
     echo "     --env-file deployments/liddy_voice/test.env \\"
     echo "     -v ~/.config/gcloud:/home/appuser/.config/gcloud:ro \\"
     echo "     -v /path/to/service-account.json:/tmp/gcp-key.json:ro \\"
-    echo "     -e GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-key.json \\"
     echo "     -p 8081:8081 \\"
     echo "     voice-agent-test:local"
     echo ""
