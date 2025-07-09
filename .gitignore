@@ -1,1 +1,93 @@
+# Environment and secrets
 .env
+env.txt
+environment.txt
+
+# Authentication and credentials
+auth/
+*.json
+*.key
+*.pem
+
+# API keys and sensitive config
+.env.*
+!.env.example
+!environment.example.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific
+tmp/
+.scratchpad/
+accounts/*/
+!accounts/README.md
+
+# Logs
+*.log
+logs/
+
+# Cache
+.cache/
+.pytest_cache/
+
+# Test outputs
+voice_search_results/
+test_results/
+coverage/
+.coverage
+htmlcov/
+
+# Local data
+local/
+data/
+conversation_storage/
+
+# Monorepo specific
+packages/*/dist/
+packages/*/.pytest_cache/
+packages/*/coverage/
