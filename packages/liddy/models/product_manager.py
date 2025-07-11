@@ -113,12 +113,10 @@ class ProductManager:
         Returns:
             Product object if found, None otherwise
         """
-        from .product import Product
-        
-        products_data = await self.get_products()
-        for product_data in products_data:
-            if str(product_data.get('id', '')) == str(product_id):
-                return Product.from_metadata(product_data)
+        products = await self.get_products()
+        for product in products:
+            if str(product.id) == str(product_id):
+                return product
         return None
     
     async def find_product_by_url(self, product_url: str):
@@ -131,15 +129,67 @@ class ProductManager:
         Returns:
             Product object if found, None otherwise
         """
-        from .product import Product
-        
         # Get the base URL
         base_url = product_url.split('?')[0]
         
-        products_data = await self.get_products()
-        for product_data in products_data:
-            if product_data.get('productUrl', '') == base_url:
-                return Product.from_metadata(product_data)
+        products = await self.get_products()
+        for product in products:
+            if product.productUrl == base_url:
+                return product
+        return None
+    
+    async def find_product_from_url_smart(self, url: str, fallback_to_url_lookup: bool = False) -> Optional[Product]:
+        """
+        Smart product extraction using URL patterns from account config.
+        
+        First attempts to extract product ID from URL using regex patterns,
+        then optionally falls back to URL lookup.
+        
+        Args:
+            url: The product URL to extract from
+            fallback_to_url_lookup: If True and ID extraction fails, fallback to find_product_by_url
+            
+        Returns:
+            Product if found, None otherwise
+        """
+        import re
+        from liddy.account_config_loader import get_account_config_loader
+        
+        # Get account config for URL pattern
+        account_config_loader = get_account_config_loader()
+        config_data = await account_config_loader.get_account_config(account=self.account)
+        
+        # Default generic pattern - extracts product_id from last URL segment
+        # Examples:
+        # - https://www.specialized.com/us/en/diverge-comp-e5/p/4223497?color=5381902-4223497
+        # - https://www.brand.com/category/product-name/12345
+        # - https://example.com/products/some-item/98765?variant=abc
+        default_pattern = r"^https?://[^/]+(?:/[^/?]*)*?/(?P<product_id>\d+)(?:\?.*)?$"
+        product_url_pattern = config_data.get("product_url_pattern", default_pattern) if config_data else default_pattern
+        
+        # Try regex extraction first
+        match = re.match(product_url_pattern, url)
+        if match:
+            # Extract product_id from named group or first group
+            product_id = None
+            if 'product_id' in match.groupdict():
+                product_id = match.group('product_id')
+            elif match.groups():
+                product_id = match.group(1)
+            
+            if product_id:
+                logger.debug(f"Extracted product ID '{product_id}' from URL using pattern")
+                product = await self.find_product_by_id(product_id)
+                if product:
+                    return product
+                else:
+                    logger.debug(f"Product ID '{product_id}' not found in catalog")
+        
+        # Fallback to URL lookup if requested
+        if fallback_to_url_lookup:
+            logger.debug(f"Falling back to URL lookup for: {url}")
+            return await self.find_product_by_url(url)
+        
         return None
     
     async def get_product_objects(self):
@@ -149,11 +199,8 @@ class ProductManager:
         Returns:
             List of Product objects
         """
-        from .product import Product
-        
-        products_data = await self.get_products()
-        return products_data
-        # return [Product.from_metadata(metadata=item) for item in products_data]
+        products = await self.get_products()
+        return products
     
     async def get_memory_info(self) -> Dict[str, Any]:
         """
@@ -246,9 +293,15 @@ class ProductManager:
         """Load products from GCP storage"""
         try:
             product_dicts = await self.storage_provider.get_product_catalog(self.account)
-            return [Product.from_dict(product=item) for item in product_dicts]
+            if product_dicts is None:
+                logger.debug(f"Storage provider returned None for {self.account}")
+                return None
+            logger.debug(f"Storage provider returned {len(product_dicts)} products for {self.account}")
+            products = [Product.from_dict(product=item) for item in product_dicts]
+            logger.debug(f"Successfully converted {len(products)} products to Product objects")
+            return products
         except Exception as e:
-            logger.debug(f"GCP storage load failed for {self.account}: {e}")
+            logger.error(f"GCP storage load failed for {self.account}: {e}", exc_info=True)
             return None
     
     async def _load_from_local_files(self) -> Optional[List[Product]]:
@@ -262,7 +315,7 @@ class ProductManager:
                 with open(fallback_path, 'r') as f:
                     data = json.load(f)
                     if isinstance(data, list):
-                        return data
+                        return [Product.from_dict(product=item) for item in data]
             
             # Try global file as last resort
             global_path = "data/products.json"
@@ -270,7 +323,7 @@ class ProductManager:
                 with open(global_path, 'r') as f:
                     data = json.load(f)
                     if isinstance(data, list):
-                        return data
+                        return [Product.from_dict(product=item) for item in data]
             
             return None
             
@@ -522,6 +575,25 @@ async def find_product_by_url(account: str, product_url: str):
     """
     manager = await get_product_manager(account)
     return await manager.find_product_by_url(product_url)
+
+
+async def find_product_from_url_smart(account: str, url: str, fallback_to_url_lookup: bool = False) -> Optional[Product]:
+    """
+    Smart product extraction using URL patterns from account config.
+    
+    First attempts to extract product ID from URL using regex patterns,
+    then optionally falls back to URL lookup.
+    
+    Args:
+        account: Account domain
+        url: The product URL to extract from
+        fallback_to_url_lookup: If True and ID extraction fails, fallback to find_product_by_url
+        
+    Returns:
+        Product if found, None otherwise
+    """
+    manager = await get_product_manager(account)
+    return await manager.find_product_from_url_smart(url, fallback_to_url_lookup)
 
 
 async def get_products_for_account(account: str):

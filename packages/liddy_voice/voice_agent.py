@@ -2,12 +2,9 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime
 import time
 
-import aiofiles
 from dotenv import load_dotenv
-from typing import List
 
 from livekit.agents import (
     stt,
@@ -30,57 +27,23 @@ from livekit.plugins import (
     google,
     silero, 
     elevenlabs, 
-    noise_cancellation,
-    openai
+    noise_cancellation
 )
 from google.cloud import texttospeech
-from livekit.plugins.turn_detector.english import EnglishModel
-# from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from liddy_voice.llm_service import LlmService
-from liddy_voice.session_state_manager import SessionStateManager, ConversationResumptionState
 from liddy_voice.assistant import Assistant
 from liddy.model import UserState
 from liddy_voice.user_manager import UserManager
 from liddy_voice.account_manager import ElevenLabsTtsProviderSettings
 from liddy import AccountManager, get_account_manager
+from liddy_voice.session_state_manager import SessionStateManager
+from liddy.models.product import Product
+from liddy.models.product_manager import ProductManager
+from liddy.account_config_cache import AccountConfigCache
+from liddy.account_config_loader import get_account_config_loader
 
-# Configure logging first, before any functions try to use it
-def setup_logging():
-    """Configure logging to prevent duplicate log messages"""
-    # Clear all existing handlers from the root logger
-    root_logger = logging.getLogger()
-    for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
-    
-    # Configure the formatter we want to use
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    
-    # Add a single handler to the root logger
-    handler = logging.StreamHandler()
-    handler.setFormatter(formatter)
-    root_logger.addHandler(handler)
-    root_logger.setLevel(logging.INFO)
-    
-    # Disable propagation for the LiveKit loggers to avoid duplicate logs
-    for logger_name in ['livekit', 'livekit.agents', 'livekit.plugins']:
-        logger = logging.getLogger(logger_name)
-        logger.propagate = False
-        # Clear any existing handlers
-        for h in logger.handlers[:]:
-            logger.removeHandler(h)
-        # Add our standard handler
-        logger.addHandler(handler)
-    
-    # Get our application logger
-    logger = logging.getLogger(__name__)
-    logger.debug("Logging configured")
-    
-    return logger
-
-# Initialize logging
-logger = setup_logging()
-
-logger.info(f"===== Voice Agent Process: {__name__} =====")
+# Get logger for this module
+logger = logging.getLogger(__name__)
 
 
 # Load environment variables with stricter fallback mechanism
@@ -187,6 +150,18 @@ def prewarm(proc: JobProcess):
         
         tasks.append(prewarm_vad())
         
+        async def prewarm_account_config_loader():
+            try:
+                account_config_loader_start = time.time()
+                account_config_loader = get_account_config_loader()
+                logger.info(f"✅ Account config loader loaded in {time.time() - account_config_loader_start:.3f}s")
+                return ("account_config_loader", account_config_loader)
+            except Exception as e:
+                logger.error(f"Failed to load account config loader: {e}")
+                return ("account_config_loader", None)
+        
+        tasks.append(prewarm_account_config_loader())
+        
         # # 2. Prewarm TTS voices (if using cloud providers)
         # async def prewarm_tts():
         #     try:
@@ -229,42 +204,8 @@ def prewarm(proc: JobProcess):
         
         # tasks.append(prewarm_stt())
         
-        # 4. Prewarm select accounts (only if not in Redis)
-        async def prewarm_accounts():
-            try:
-                accounts_start = time.time()
-                from liddy.account_config_cache import AccountConfigCache
-                from liddy.account_config_loader import get_account_config_loader
-                account_config_loader = get_account_config_loader()
-                
-                # Only prewarm accounts that aren't in Redis
-                priority_accounts = await account_config_loader.get_accounts()
-                accounts_to_prewarm = []
-                
-                for account in priority_accounts:
-                    # Check Redis first
-                    cached = await account_config_loader.get_account_config(account)
-                    accounts_to_prewarm.append(account)
-                
-                if not accounts_to_prewarm:
-                    logger.info("✅ All priority accounts already in Redis cache")
-                    return ("accounts", len(priority_accounts))
-                
-                # Prewarm only missing accounts
-                account_tasks = []
-                for account in accounts_to_prewarm:
-                    account_tasks.append(_prewarm_single_account(account))
-                
-                results = await asyncio.gather(*account_tasks, return_exceptions=True)
-                
-                successes = sum(1 for r in results if not isinstance(r, Exception))
-                logger.info(f"✅ Prewarmed {successes}/{len(accounts_to_prewarm)} missing accounts in {time.time() - accounts_start:.3f}s")
-                return ("accounts", successes + (len(priority_accounts) - len(accounts_to_prewarm)))
-            except Exception as e:
-                logger.error(f"Failed to prewarm accounts: {e}")
-                return ("accounts", 0)
-        
-        tasks.append(prewarm_accounts())
+        # Account prewarming removed - using Redis for all account configs
+        # Accounts are loaded via `load-data` command before starting the agent
         
         # # 5. Prewarm LLM connections
         # async def prewarm_llm():
@@ -300,29 +241,6 @@ def prewarm(proc: JobProcess):
         # Log summary
         prewarmed_components = [r[0] for r in results if isinstance(r, tuple) and r[1] is not None]
         logger.info(f"✅ Prewarmed components: {', '.join(prewarmed_components)}")
-                    
-    async def _prewarm_single_account(account: str):
-        """Prewarm a single account's managers"""
-        try:
-            account_start = time.time()
-            
-            # Load AccountManager
-            account_manager: AccountManager = await get_account_manager(account)
-            await account_manager._load_account_config()
-            
-            # Load PromptManager
-            from liddy_voice.account_prompt_manager import get_account_prompt_manager, AccountPromptManager
-            account_prompt_manager: AccountPromptManager = get_account_prompt_manager(account=account)
-            
-            # Preload the account config to avoid async issues later
-            await account_prompt_manager.load_account_config_async()
-            
-            logger.debug(f"Prewarmed {account} in {time.time() - account_start:.3f}s")
-            return True
-            
-        except Exception as e:
-            logger.warning(f"Failed to prewarm {account}: {e}")
-            raise e
     
     # Run the async prewarm function with timeout protection
     try:
@@ -347,7 +265,7 @@ async def request_fnc(ctx: JobProcess):
 # MAIN ENTRYPOINT
 # ==============================
 
-async def setup_agent(user_state: UserState):
+async def setup_agent(account: str, room_name: str):
     """Configure and return the voice agent"""
     # Try to get prewarmed components from the current process
     try:
@@ -408,7 +326,7 @@ async def setup_agent(user_state: UserState):
             
     try:
         # Get TTS settings from account manager
-        account_manager: AccountManager = await get_account_manager(user_state.account)
+        account_manager: AccountManager = await get_account_manager(account)
         # Check if get_tts_settings is async
         tts_settings = await account_manager.get_tts_settings()
         tts_models = []
@@ -425,7 +343,8 @@ async def setup_agent(user_state: UserState):
                     model=provider.voice_model,
                     api_key=elevenlabs_api_key,
                     # auto_mode=True,
-                    chunk_length_schedule=[80, 120, 200],
+                    # chunk_length_schedule=[80, 120, 200],  # Smaller initial chunks for faster first byte
+                    chunk_length_schedule=[50, 100, 150],  # Smaller initial chunks for faster first byte
                     voice_settings=elevenlabs.VoiceSettings(
                         stability=provider.voice_stability, 
                         similarity_boost=provider.voice_similarity_boost, 
@@ -485,9 +404,9 @@ async def setup_agent(user_state: UserState):
     
     # Configure LLM
     primary_model_name = os.getenv("MODEL_NAME", "gemini-2.0-flash-001")
-    primary_llm_model = LlmService.fetch_model_service_from_model(primary_model_name, account=user_state.account, user=user_state.user_id, model_use="voice_assistant", parallel_tool_calls=True)
+    primary_llm_model = LlmService.fetch_model_service_from_model(primary_model_name, account=account, session_id=room_name, model_use="voice_assistant", parallel_tool_calls=True)
     fallback_model_name = os.getenv("FALLBACK_MODEL_NAME", "gpt-4.1-mini")
-    fallback_model = LlmService.fetch_model_service_from_model(fallback_model_name, account=user_state.account, user=user_state.user_id, model_use="voice_assistant", parallel_tool_calls=True)
+    fallback_model = LlmService.fetch_model_service_from_model(fallback_model_name, account=account, session_id=room_name, model_use="voice_assistant", parallel_tool_calls=True)
     
     
     llm_model = llm.FallbackAdapter([
@@ -506,7 +425,7 @@ async def setup_agent(user_state: UserState):
     
     # Create the agent session
     session = AgentSession[UserState](
-        userdata=user_state,
+        # userdata=user_state,
         user_away_timeout=30.0,
         stt=stt_model,
         llm=llm_model,
@@ -520,120 +439,190 @@ async def setup_agent(user_state: UserState):
     return session
 
 
-async def setup_user_state(ctx, agent: Assistant):
-    """Set up user state and personalization"""
-    # user_id = ctx.room.name
-    user_id = agent.get_user_id()
+# async def setup_user_state(ctx, agent: Assistant):
+#     """Set up user state and personalization"""
+#     # user_id = ctx.room.name
+#     user_id = agent.get_user_id()
     
-    # Update user state to record this voice interaction
-    user_state = agent.session.userdata or UserManager.get_user_state(user_id)
-    if user_state is None:
-        user_state = UserState(user_id=user_id)
-    agent.session.userdata = user_state
+#     # Update user state to record this voice interaction
+#     user_state = agent.session.userdata or UserManager.get_user_state(user_id)
+#     if user_state is None:
+#         user_state = UserState(user_id=user_id)
+#     agent.session.userdata = user_state
 
-    user_state.interaction_start_time = time.time()    
-    user_state.last_interaction_time = time.time()
-    user_state.voice_session_id = ctx.room.name
-    user_state.conversation_exit_state = None
-    # # now clear the user_state transcript
-    # SessionStateManager.clear_conversation_resumption(user_id)
+#     user_state.interaction_start_time = time.time()    
+#     user_state.last_interaction_time = time.time()
+#     user_state.voice_session_id = ctx.room.name
+#     user_state.conversation_exit_state = None
+#     # # now clear the user_state transcript
+#     # SessionStateManager.clear_conversation_resumption(user_id)
 
-    # Handle SIP calls specially
-    if participant.kind == 3:  # "SIP"
-        current_date_time_string = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        phone_number = participant.attributes.get("sip.phoneNumber")
-        # Extract just the digits from the phone number
-        phone_digits = ''.join(filter(str.isdigit, phone_number))
-        # Ensure logs directory exists
-        os.makedirs(f"logs/{phone_digits}", exist_ok=True)
+#     # Handle SIP calls specially
+#     if participant.kind == 3:  # "SIP"
+#         current_date_time_string = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+#         phone_number = participant.attributes.get("sip.phoneNumber")
+#         # Extract just the digits from the phone number
+#         phone_digits = ''.join(filter(str.isdigit, phone_number))
+#         user_id = phone_digits
+#         call_id = participant.attributes.get("sip.callID")
         
-        log_file_name = f"logs/{phone_digits}/{current_date_time_string}.txt"
-        user_id = phone_digits
+#     await agent._update_user_state_prompt()
         
-        call_id = participant.attributes.get("sip.callID")
-        # Write the call id to the log file
-        async with aiofiles.open(log_file_name, "w") as file:
-            await file.write(f"Call ID: {call_id}\nPhone Number: {phone_number}\nDate and Time: {current_date_time_string}\nType: Interview\n\n")
-    else:
-        # Ensure logs directory exists
-        os.makedirs("logs", exist_ok=True)
-        log_file_name = f"logs/{user_id}.txt"
-        
-    await agent._update_user_state_prompt()
-        
-    return user_id, log_file_name
+#     return user_id
 
 async def entrypoint(ctx: JobContext):
-    """Main entrypoint for the Spence voice agent with optimized user response time"""
-    start_total = time.monotonic()  # total timer
-    timing_breakdown = {}  # Store detailed timing breakdown
+    """Main entrypoint for the voice agent with optimized greeting delivery
+    
+    Key optimization: All heavy initialization happens BEFORE room connection,
+    so greeting can be delivered immediately when participant joins.
+    """
+    start_total = time.monotonic()
+    timing_breakdown = {}
     global participant, agent
     
-    # 1. Room Connection
-    logger.info(f"🚀 Starting entrypoint for Room: {ctx.room.name}")
-    start_connect = time.monotonic()
-    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-    timing_breakdown['room_connect'] = time.monotonic() - start_connect
-    logger.info(f"✅ Connected to room in {timing_breakdown['room_connect']:.3f}s")
+    # Extract account from room name pattern: "{account}_{uuid}"
+    account = ctx.room.name.split("_")[0]
+    logger.info(f"🚀 Starting voice agent for account: {account}")
     
-    # PHASE 1: Fast path - minimal agent setup for immediate response
-    phase1_start = time.monotonic()
+    # ============================================================
+    # PRE-CONNECTION SETUP - Do all heavy lifting before connecting
+    # ============================================================
     
-    # 2. Configure room options
+    # 1. Account manager setup
+    account_mgr_start = time.monotonic()
+    account_manager = await get_account_manager(account)
+    timing_breakdown['account_manager'] = time.monotonic() - account_mgr_start
+    
+    # 2. Pre-fetch greeting early to minimize latency
+    greeting_fetch_start = time.monotonic()
+    welcome_message = await account_manager.get_default_greeting()
+    timing_breakdown['greeting_prefetch'] = time.monotonic() - greeting_fetch_start
+    logger.info(f"📝 Pre-fetched greeting: {welcome_message[:50]}...")
+    
+    # 3. Create agent session with all models
+    session_start = time.monotonic()
+    session = await setup_agent(account=account, room_name=ctx.room.name)
+    timing_breakdown['session_setup'] = time.monotonic() - session_start
+    
+    # 4. Initialize Assistant
+    primary_model_name = os.getenv("MODEL_NAME", "openai/gpt-4o-mini")
+    assistant_start = time.monotonic()
+    agent = Assistant(ctx=ctx, primary_model=primary_model_name, account=account_manager.account)
+    timing_breakdown['assistant_init'] = time.monotonic() - assistant_start
+    
+    # 5. Configure room options
     options_start = time.monotonic()
     use_noise_cancellation = os.getenv("USE_NOISE_CANCELLATION", "false").lower() == "true"
     room_input_options = RoomInputOptions(
         close_on_disconnect=False,
         noise_cancellation=noise_cancellation.BVC() if use_noise_cancellation else None
     )
-    # if use_noise_cancellation:
-    #     room_input_options = RoomInputOptions(
-    #         close_on_disconnect=False,
-    #         noise_cancellation=noise_cancellation.BVC()
-    #     )
-    # else:
-    #     room_input_options = RoomInputOptions(
-    #         close_on_disconnect=False,
-    #     )
     timing_breakdown['room_options'] = time.monotonic() - options_start
     
-    primary_model_name = os.getenv("MODEL_NAME", "openai/gpt-4o-mini")
+    # 6. Start session with agent
+    session_start_time = time.monotonic()
+    await session.start(
+        room=ctx.room,
+        agent=agent,
+        room_input_options=room_input_options
+    )
+    timing_breakdown['session_start'] = time.monotonic() - session_start_time
     
-    # 3. Wait for participant
-    logger.info("⏳ Waiting for first participant...")
+    # ============================================================
+    # ROOM CONNECTION - Connect and wait for participant
+    # ============================================================
+    
+    # 7. Connect to room
+    start_connect = time.monotonic()
+    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+    timing_breakdown['room_connect'] = time.monotonic() - start_connect
+    logger.info(f"✅ Connected to room in {timing_breakdown['room_connect']:.3f}s")
+    
+    # 8. Wait for participant to join
+    logger.info("⏳ Waiting for participant...")
     start_wait = time.monotonic()
     participant = await ctx.wait_for_participant()
     timing_breakdown['wait_participant'] = time.monotonic() - start_wait
-    logger.info(f"✅ First participant connected in {timing_breakdown['wait_participant']:.3f}s")
+    logger.info(f"✅ Participant joined in {timing_breakdown['wait_participant']:.3f}s")
     
-    # 4. User state retrieval
+    # ============================================================
+    # POST-CONNECTION - Deliver greeting and complete setup
+    # ============================================================
+    
+    # 9. Set up user state
     user_state_start = time.monotonic()
-    user_state = UserManager.get_user_state(participant.identity)
+    metadata_str = participant.metadata
+    user_id = participant.identity
+    if metadata_str:
+        metadata = json.loads(metadata_str)
+        
+        try:
+            user_id = metadata.get("userId") if metadata.get("userId") else metadata.get("user_id") if metadata.get("user_id") else participant.identity
+        except Exception as e:
+            logger.error(f"Error parsing metadata: {e}")
+            user_id = participant.identity
+    user_state = UserManager.get_user_state(user_id)
     if user_state is None:
-        user_state = UserState(user_id=participant.identity)
+        user_state = UserState(user_id=user_id)
+    user_state.account = account_manager.account
+    session.userdata = user_state
+    agent.set_user_id(user_id=user_id)
     timing_breakdown['user_state_retrieval'] = time.monotonic() - user_state_start
     
-    # 5. Parse metadata and get account
-    metadata_start = time.monotonic()
-    metadata = json.loads(participant.metadata) if participant.metadata else {}
-    account = None
-    if metadata:
-        if "account" in metadata:
-            account = metadata["account"]
-    timing_breakdown['metadata_parse'] = time.monotonic() - metadata_start
-
-    # 6. Account manager setup
-    account_mgr_start = time.monotonic()
-    account_manager = await get_account_manager(account)
-    user_state.account = account_manager.account
-    timing_breakdown['account_manager'] = time.monotonic() - account_mgr_start
+    # 10. Deliver greeting immediately (non-blocking)
+    greeting_start = time.monotonic()
+    logger.info(f"🎙️ Delivering greeting: {welcome_message}")
     
-    # 7. Agent session setup
-    session_start = time.monotonic()
-    session = await setup_agent(user_state)
-    timing_breakdown['session_setup'] = time.monotonic() - session_start
+    # async def deliver_greeting():
+    tts_start = time.monotonic()
+    timing_breakdown['time_to_first_utterance'] = time.monotonic() - start_total
+    # await session.say(text=welcome_message, allow_interruptions=False)
     
-    # 8. Metrics setup
+    speech_instructions = f"Greet the user with something like: {welcome_message}"
+    
+    # if the user is currently looking at a product, then add the product to the speech instructions
+    try:
+        user_history = SessionStateManager.get_user_recent_history(user_id=user_id)
+        if user_history and len(user_history) > 0:
+            most_recent_history = user_history[0]
+            
+            # Use centralized smart product extraction
+            product = None
+            if most_recent_history.url:
+                current_url = most_recent_history.url.split("?")[0]
+                current_title = most_recent_history.title if most_recent_history.title else current_url
+                
+                # Get product using smart extraction (no fallback to URL lookup for performance)
+                product_manager: ProductManager = await agent.get_product_manager()
+                product = await product_manager.find_product_from_url_smart(most_recent_history.url, fallback_to_url_lookup=False)
+                
+                if product and isinstance(product, Product):
+                    speech_instructions += f"\n\nAs a reference, the user is currently looking at the following product. However, be sure to welcome the user and ask them how you can help them!\n\n{Product.to_markdown(product=product, depth=0, obfuscatePricing=True)}\n\n"
+                else:
+                    speech_instructions += f"\n\nAs a reference, the user is currently looking at the following page. However, be sure to welcome the user and ask them how you can help them!\n\n[{current_title}]({current_url})\n\n"
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        logger.error(f"Error getting user history: {e}")
+    
+    await session.generate_reply(
+        instructions=speech_instructions
+    )
+    tts_time = time.monotonic() - tts_start
+    timing_breakdown['tts_generation'] = tts_time
+    timing_breakdown['greeting_delivery'] = time.monotonic() - greeting_start
+    logger.info(f"⚡ Time to first utterance: {timing_breakdown['time_to_first_utterance']:.3f}s (TTS: {tts_time:.3f}s)")
+    
+    # # greeting_task = asyncio.create_task(deliver_greeting())
+    # await deliver_greeting()
+    
+    # 11. Start deferred prewarming in background
+    async def start_deferred_prewarming():
+        if hasattr(agent, 'start_deferred_prewarming'):
+            await agent.start_deferred_prewarming()
+    deferred_prewarming_task = asyncio.create_task(start_deferred_prewarming())
+    
+    # 12. Set up metrics collection
     metrics_setup_start = time.monotonic()
     usage_collector = metrics.UsageCollector()
     # current_speech_metrics: List[metrics.AgentMetrics] = []
@@ -668,16 +657,9 @@ async def entrypoint(ctx: JobContext):
     # At shutdown, generate and log the summary from the usage collector
     ctx.add_shutdown_callback(log_usage)
     
-    # Note: Assistant cleanup callback will be added after agent is created
     timing_breakdown['metrics_setup'] = time.monotonic() - metrics_setup_start
 
-    # 9. Assistant instantiation
-    assistant_start = time.monotonic()
-    agent = Assistant(ctx=ctx, primary_model=primary_model_name, account=account_manager.account)
-    timing_breakdown['assistant_init'] = time.monotonic() - assistant_start
-    logger.info(f"✅ Assistant created in {timing_breakdown['assistant_init']:.3f}s")
-    
-    # Also add assistant cleanup to shutdown (AFTER agent is created)
+    # 13. Add cleanup callback
     async def cleanup_assistant():
         try:
             await agent.cleanup()
@@ -686,20 +668,7 @@ async def entrypoint(ctx: JobContext):
     
     ctx.add_shutdown_callback(cleanup_assistant)
     
-    # 10. Session start
-    session_start_time = time.monotonic()
-    await session.start(
-        room=ctx.room,
-        agent=agent,
-        room_input_options=room_input_options
-    )
-    timing_breakdown['session_start'] = time.monotonic() - session_start_time
-    
-    # Phase 1 complete
-    timing_breakdown['phase1_total'] = time.monotonic() - phase1_start
-    logger.info(f"✅ Phase 1 completed in {timing_breakdown['phase1_total']:.3f}s")
-    
-    # 11. Background audio setup (if enabled)
+    # 14. Background audio setup (if enabled)
     bg_audio_start = time.monotonic()
     use_background_audio = os.getenv("USE_BACKGROUND_AUDIO", "false").lower() == "true"
     if use_background_audio:
@@ -715,7 +684,7 @@ async def entrypoint(ctx: JobContext):
         await background_audio.start(room=ctx.room, agent_session=session)
     timing_breakdown['background_audio'] = time.monotonic() - bg_audio_start
 
-    # 12. Event handlers setup
+    # 15. Set up event handlers
     handlers_start = time.monotonic()
     def handle_agent_state_changed(ev):
         asyncio.create_task(agent.on_agent_state_changed(ev))
@@ -748,20 +717,22 @@ async def entrypoint(ctx: JobContext):
     ctx.room.on("participant_attributes_changed", handle_participant_attributes_changed)
     timing_breakdown['event_handlers'] = time.monotonic() - handlers_start
     
-    # 13. User ID setup
+    # 16. Complete user setup
     user_id_start = time.monotonic()
     logger.debug(f"Starting voice assistant for participant {participant.identity}")
     user_id = participant.identity
     agent.set_user_id(user_id)
+    await agent._update_user_state_prompt()
     timing_breakdown['user_id_setup'] = time.monotonic() - user_id_start
+
+    # TODO: Add conversation resumption (see ROADMAP/CONVERSATION_RESUMPTION_STRATEGY.md)
+    # # Check if there's a recent conversation to resume
+    # resumption_data: ConversationResumptionState = SessionStateManager.get_conversation_resumption(user_state=user_state)
+    # is_resumable = resumption_data is not None and resumption_data.is_resumable
+    # resumption_message = None
+    # has_previous_conversation = resumption_data is not None
     
-    # Check if there's a recent conversation to resume
-    resumption_data: ConversationResumptionState = SessionStateManager.get_conversation_resumption(user_state=user_state)
-    is_resumable = resumption_data is not None and resumption_data.is_resumable
-    resumption_message = None
-    has_previous_conversation = resumption_data is not None
-    
-    time_since_last_conversation = None
+    # time_since_last_conversation = None
     
     # TODO: See ROADMAP/CONVERSATION_RESUMPTION_STRATEGY.md for more details
     # # if conversation is resumable, then attempt to apply the previous conversation transcript to the chat_ctx
@@ -863,47 +834,43 @@ async def entrypoint(ctx: JobContext):
     #         # print time to first response
     #         # await session.say(text=welcome_message, allow_interruptions=True)
     #         session.say(text=welcome_message, allow_interruptions=True)
-
-    # 14. Greeting setup and delivery
-    greeting_start = time.monotonic()
-    welcome_message = await account_manager.get_default_greeting()
-    logger.info(f"🎙️ Using default greeting: {welcome_message}")
-    # Say welcome immediately - this happens in parallel with setup below
-    await session.say(text=welcome_message, allow_interruptions=False)
-    timing_breakdown['greeting'] = time.monotonic() - greeting_start
-    timing_breakdown['time_to_first_word'] = time.monotonic() - start_total
-    logger.info(f"⚡ Time to first word: {timing_breakdown['time_to_first_word']:.3f}s")
     
-    # PHASE 2: Full setup happens in parallel with welcome message
-    phase2_start = time.monotonic()
-    await _complete_agent_setup(
-        ctx=ctx, agent=agent, participant=participant
-    )
-    timing_breakdown['phase2_total'] = time.monotonic() - phase2_start
+    # ============================================================
+    # FINALIZATION - Wait for async tasks and log timing
+    # ============================================================
     
-    # # Start deferred prewarming now that greeting is sent
-    # # IMPORTANT: Don't await this - let it run in background so we don't block
-    # if hasattr(agent, 'start_deferred_prewarming'):
-    #     # asyncio.create_task(agent.start_deferred_prewarming())
-    #     await agent.start_deferred_prewarming()
+    # Wait for greeting delivery to complete for accurate timing
+    if 'greeting_task' in locals() and not greeting_task.done():
+        await greeting_task
+    
+    # Wait for deferred prewarming to complete
+    if 'deferred_prewarming_task' in locals() and not deferred_prewarming_task.done():
+        await deferred_prewarming_task
         
-    # Calculate total time
+    # Calculate total initialization time
     timing_breakdown['total_time'] = time.monotonic() - start_total
     
     # Log comprehensive timing summary
     logger.info(f"\n🎯 ENTRYPOINT TIMING SUMMARY 🎯\n"
                 f"{'='*50}\n"
-                f"Time to first word:     {timing_breakdown['time_to_first_word']:.3f}s\n"
+                f"Time to first utterance:     {timing_breakdown.get('time_to_first_utterance', 0):.3f}s\n"
                 f"Total initialization:   {timing_breakdown['total_time']:.3f}s\n"
                 f"{'='*50}\n"
-                f"PHASE 1 Breakdown ({timing_breakdown['phase1_total']:.3f}s):\n"
-                f"  Room connect:         {timing_breakdown['room_connect']:.3f}s\n"
-                f"  Wait participant:     {timing_breakdown['wait_participant']:.3f}s\n"
+                f"PRE-CONNECTION SETUP:\n"
                 f"  Account manager:      {timing_breakdown['account_manager']:.3f}s\n"
+                f"  Greeting prefetch:    {timing_breakdown.get('greeting_prefetch', 0):.3f}s\n"
                 f"  Session setup:        {timing_breakdown['session_setup']:.3f}s\n"
                 f"  Assistant init:       {timing_breakdown['assistant_init']:.3f}s\n"
+                f"  Room options:         {timing_breakdown['room_options']:.3f}s\n"
                 f"  Session start:        {timing_breakdown['session_start']:.3f}s\n"
-                f"PHASE 2:                {timing_breakdown['phase2_total']:.3f}s\n"
+                f"\nROOM CONNECTION:\n"
+                f"  Room connect:         {timing_breakdown['room_connect']:.3f}s\n"
+                f"  Wait participant:     {timing_breakdown['wait_participant']:.3f}s\n"
+                f"\nPOST-CONNECTION:\n"
+                f"  User state setup:     {timing_breakdown['user_state_retrieval']:.3f}s\n"
+                f"  Event handlers:       {timing_breakdown['event_handlers']:.3f}s\n"
+                f"  User ID setup:        {timing_breakdown['user_id_setup']:.3f}s\n"
+                f"  TTS generation:       {timing_breakdown.get('tts_generation', 0):.3f}s\n"
                 f"{'='*50}")
     
     # Identify slowest components
@@ -912,111 +879,103 @@ async def entrypoint(ctx: JobContext):
     logger.info(f"🐌 Slowest components: {', '.join(slowest)}")
     
     # Performance warnings
-    if timing_breakdown['time_to_first_word'] > 2.0:
-        logger.warning(f"⚠️ Time to first word exceeded 2s target: {timing_breakdown['time_to_first_word']:.3f}s")
+    if timing_breakdown['time_to_first_utterance'] > 2.0:
+        logger.warning(f"⚠️ Time to first utterance exceeded 2s target: {timing_breakdown['time_to_first_utterance']:.3f}s")
     if timing_breakdown['total_time'] > 5.0:
         logger.warning(f"⚠️ Total initialization exceeded 5s target: {timing_breakdown['total_time']:.3f}s")
     logger.info(f"🎯 Total initialization: {timing_breakdown['total_time']:.3f}s")
-    # # Stay connected until session ends
-    # await ctx.wait_until_disconnected()
 
-async def _complete_agent_setup(ctx, agent, participant):
-    """Complete the full agent setup in the background while initial greeting plays"""
-    try:
-        # # 1. Set up the agent with core components 
-        # agent, llm_model, initial_ctx = await setup_agent(ctx)
+# async def _complete_agent_setup(ctx, agent, participant):
+#     """Complete the full agent setup in the background while initial greeting plays"""
+#     try:
+#         # # 1. Set up the agent with core components 
+#         # agent, llm_model, initial_ctx = await setup_agent(ctx)
         
-        # 2. Set up user state and get user_id
-        # This already includes basic SIP handling
-        user_id, log_file_name = await setup_user_state(ctx, agent)
+#         # 2. Set up user state and get user_id
+#         # This already includes basic SIP handling
+#         user_id = await setup_user_state(ctx, agent)
         
-        # Enhanced SIP handling from the original function
-        if participant.kind == 3:  # "SIP"
-            current_date_time_string = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            phone_number = participant.attributes.get("sip.phoneNumber")
-            # Extract just the digits from the phone number
-            phone_digits = ''.join(filter(str.isdigit, phone_number))
-            # Ensure logs directory exists
-            os.makedirs(f"logs/{phone_digits}", exist_ok=True)
+#         # Enhanced SIP handling from the original function
+#         if participant.kind == 3:  # "SIP"
+#             current_date_time_string = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+#             phone_number = participant.attributes.get("sip.phoneNumber")
+#             # Extract just the digits from the phone number
+#             phone_digits = ''.join(filter(str.isdigit, phone_number))
+#             # Ensure logs directory exists
+#             user_id = phone_digits
+#             ctx.proc.userdata["user_id"] = user_id  # Make sure this is updated
             
-            log_file_name = f"logs/{phone_digits}/{current_date_time_string}.txt"
-            user_id = phone_digits
-            ctx.proc.userdata["user_id"] = user_id  # Make sure this is updated
+#             call_id = participant.attributes.get("sip.callID")
+        
+#         # # 3. Set up analyzers (conversation, sentiment)
+#         # conversation_persistor, conversation_analyzer, sentiment_analyzer = setup_analyzers(
+#         #     ctx=ctx, agent=agent, user_id=user_id, log_file_name=log_file_name, conversation_analysis_model=analysis_model_name, sentiment_analysis_model=analysis_model_name
+#         # )
+        
+#         # # 4. Handle conversation history from persistor
+#         # messages = conversation_persistor.get_conversation()
+        
+#         # # 5. Handle resumption data specially
+#         # if resumption_data:
+#         #     # Clear resumption data since we're using it
+#         #     SessionStateManager.clear_conversation_resumption(user_id)
             
-            call_id = participant.attributes.get("sip.callID")
-            # Write the call id to the log file
-            async with aiofiles.open(log_file_name, "w") as file:
-                await file.write(f"Call ID: {call_id}\nPhone Number: {phone_number}\nDate and Time: {current_date_time_string}\nType: Interview\n\n")
-        
-        # # 3. Set up analyzers (conversation, sentiment)
-        # conversation_persistor, conversation_analyzer, sentiment_analyzer = setup_analyzers(
-        #     ctx=ctx, agent=agent, user_id=user_id, log_file_name=log_file_name, conversation_analysis_model=analysis_model_name, sentiment_analysis_model=analysis_model_name
-        # )
-        
-        # # 4. Handle conversation history from persistor
-        # messages = conversation_persistor.get_conversation()
-        
-        # # 5. Handle resumption data specially
-        # if resumption_data:
-        #     # Clear resumption data since we're using it
-        #     SessionStateManager.clear_conversation_resumption(user_id)
-            
-        #     # If we have resumption data and no recent conversation, inject the resumption context
-        #     if not messages:
-        #         # Add a system message about the resumed conversation
-        #         recent_topics = ", ".join(resumption_data.get('topics', []))
-        #         if recent_topics:
-        #             resumption_context = f"This is a continuation of a previous conversation about {recent_topics}."
-        #             messages.append(ChatMessage("system", resumption_context))
+#         #     # If we have resumption data and no recent conversation, inject the resumption context
+#         #     if not messages:
+#         #         # Add a system message about the resumed conversation
+#         #         recent_topics = ", ".join(resumption_data.get('topics', []))
+#         #         if recent_topics:
+#         #             resumption_context = f"This is a continuation of a previous conversation about {recent_topics}."
+#         #             messages.append(ChatMessage("system", resumption_context))
                     
-        #     # Pass conversation filters to the analyzer if available
-        #     if "topics" in resumption_data or "bike_type" in resumption_data or "price_range" in resumption_data:
-        #         conversation_filters = {
-        #             "product_categories": resumption_data.get('topics', []),
-        #             "bike_type": resumption_data.get('bike_type', []),
-        #             "price_range": resumption_data.get('price_range', '')
-        #         }
-        #         SessionStateManager.update_user_state(user_id, {
-        #             "conversation_filters": conversation_filters
-        #         })
+#         #     # Pass conversation filters to the analyzer if available
+#         #     if "topics" in resumption_data or "bike_type" in resumption_data or "price_range" in resumption_data:
+#         #         conversation_filters = {
+#         #             "product_categories": resumption_data.get('topics', []),
+#         #             "bike_type": resumption_data.get('bike_type', []),
+#         #             "price_range": resumption_data.get('price_range', '')
+#         #         }
+#         #         SessionStateManager.update_user_state(user_id, {
+#         #             "conversation_filters": conversation_filters
+#         #         })
                 
-        #     # Add resumption context to the system prompt
-        #     personalized_prompt = initial_ctx.messages[0].content
-        #     personalized_prompt += "\n\nThis is a continuation of a previous conversation. "
+#         #     # Add resumption context to the system prompt
+#         #     personalized_prompt = initial_ctx.messages[0].content
+#         #     personalized_prompt += "\n\nThis is a continuation of a previous conversation. "
             
-        #     if resumption_data.get('topics'):
-        #         topics_str = ", ".join(resumption_data.get('topics', []))
-        #         personalized_prompt += f"The user previously discussed: {topics_str}."
+#         #     if resumption_data.get('topics'):
+#         #         topics_str = ", ".join(resumption_data.get('topics', []))
+#         #         personalized_prompt += f"The user previously discussed: {topics_str}."
                 
-        #     # Update the system message
-        #     initial_ctx.messages[0].content = personalized_prompt
+#         #     # Update the system message
+#         #     initial_ctx.messages[0].content = personalized_prompt
         
-        # # 6. Set up the complete context with history
-        # full_context = llm.ChatContext().append(
-        #     role="system",
-        #     text=initial_ctx.messages[0].content
-        # )
+#         # # 6. Set up the complete context with history
+#         # full_context = llm.ChatContext().append(
+#         #     role="system",
+#         #     text=initial_ctx.messages[0].content
+#         # )
         
-        # # Add conversation history
-        # if messages:
-        #     for message in messages:
-        #         full_context.messages.append(message)
+#         # # Add conversation history
+#         # if messages:
+#         #     for message in messages:
+#         #         full_context.messages.append(message)
                 
-        # # # 7. Update the initial agent with all the enhanced capabilities
-        # # async with _chat_ctx_lock:
-        # #     # Replace the simple context with the full, personalized one
-        # #     initial_agent.chat_ctx = full_context
-        # #     initial_agent.fnc_ctx = agent.fnc_ctx
+#         # # # 7. Update the initial agent with all the enhanced capabilities
+#         # # async with _chat_ctx_lock:
+#         # #     # Replace the simple context with the full, personalized one
+#         # #     initial_agent.chat_ctx = full_context
+#         # #     initial_agent.fnc_ctx = agent.fnc_ctx
             
-        # #     # Add RAG callback (should be preserved from setup_agent, but ensure it's set)
-        # #     initial_agent._opts.before_llm_cb = _enrich_system_prompt_with_rag
+#         # #     # Add RAG callback (should be preserved from setup_agent, but ensure it's set)
+#         # #     initial_agent._opts.before_llm_cb = _enrich_system_prompt_with_rag
             
-        logger.debug(f"Agent setup completed for {user_id}")
+#         logger.debug(f"Agent setup completed for {user_id}")
         
-    except Exception as e:
-        logger.error(f"Error in complete agent setup: {e}")
-        logger.exception(e)
-        # Even with error, agent will continue with basic functionality
+#     except Exception as e:
+#         logger.error(f"Error in complete agent setup: {e}")
+#         logger.exception(e)
+#         # Even with error, agent will continue with basic functionality
 
 
 # ==============================
@@ -1238,13 +1197,6 @@ async def test_voice_search(account: str = "specialized.com", query: str = "top 
 #                 try:
 #                     metadata = json.loads(participant.metadata)
 #                     new_account = metadata.get("account", account)
-#                     if new_account != account:
-#                         account = new_account
-#                         agent._account = account
-#                         # Trigger account-specific loading
-#                         await agent._load_products_for_account(account)
-#                 except:
-#                     pass
             
 #             # Update user state
 #             user_state.user_id = user_id
@@ -1445,8 +1397,6 @@ async def precache_account_configs(force_refresh=False):
     cache_start = time.time()
     
     try:
-        from liddy.account_config_cache import AccountConfigCache
-        from liddy.account_config_loader import get_account_config_loader
         account_config_loader = get_account_config_loader()
         # from liddy.storage import get_account_storage_provider
         # storage = get_account_storage_provider()
@@ -1528,28 +1478,235 @@ if __name__ == "__main__":
     import sys
     
     if len(sys.argv) > 1:
-        if sys.argv[1] == "test":
+        if sys.argv[1] == "help":
+            print("""
+Liddy Voice Agent - Command Line Options
+
+Usage: python voice_agent.py [command] [options]
+
+Commands:
+  help                    Show this help message
+  test [account]          Test voice search (default: specialized.com)
+  cache-accounts          Pre-cache all account configurations in Redis (deprecated - use load-data)
+  load-data [accounts]    Load products, account configs, and STT word boost terms into Redis (comma-separated or from env)
+  load-products [accounts] Alias for load-data (kept for backwards compatibility)
+  download-files          Download required files (skips account pre-caching)
+  
+Without command:         Start the voice agent server
+
+Environment Variables:
+  USE_REDIS_PRODUCTS      Enable Redis product storage (true/false, default: true)
+  REDIS_URL               Redis connection URL
+  VOICE_ACCOUNTS          Comma-separated list of accounts
+  LIVEKIT_URL             LiveKit server URL
+  LIVEKIT_API_KEY         LiveKit API key
+  LIVEKIT_API_SECRET      LiveKit API secret
+
+Examples:
+  python voice_agent.py load-data specialized.com
+  python voice_agent.py load-data "specialized.com,trek.com,giant-bicycles.com"
+  python voice_agent.py load-data  # Uses VOICE_ACCOUNTS env var or loads all accounts
+  python voice_agent.py test specialized.com
+""")
+            exit()
+        elif sys.argv[1] == "test":
             asyncio.run(test_voice_search(account=sys.argv[2] if len(sys.argv) > 2 else "specialized.com"))
             exit()
         elif sys.argv[1] == "cache-accounts":
-            # Just cache accounts and exit - useful for maintenance
-            asyncio.run(precache_account_configs())
-            logger.info("✅ Account caching complete")
-            exit()
+            # Deprecated - redirect to load-data
+            logger.warning("⚠️  cache-accounts is deprecated. Using load-data instead...")
+            sys.argv[1] = "load-data"  # Redirect to load-data command
+            # Fall through to load-data handler
+        
+        if sys.argv[1] == "load-data" or sys.argv[1] == "load-products":  # Support legacy command
+            # Load both products and accounts into Redis
+            async def load_data():
+                """Load products and account configs for specified accounts into Redis"""
+                # Parse accounts - either from args or environment
+                accounts = None
+                if len(sys.argv) > 2:
+                    # Support comma-separated accounts
+                    accounts = [a.strip() for a in sys.argv[2].split(',') if a.strip()]
+                
+                all_success = True
+                
+                # Load products
+                logger.info("📦 Loading products into Redis...")
+                from liddy.models.redis_product_loader import RedisProductLoader
+                
+                product_loader = RedisProductLoader()
+                try:
+                    await product_loader.connect()
+                    
+                    # Use load_all_accounts which handles multiple accounts
+                    product_results = await product_loader.load_all_accounts(accounts)
+                    
+                    # Verify loading for each account
+                    for account in product_results:
+                        if product_results[account] > 0:
+                            verified = await product_loader.verify_loading(account)
+                            if not verified:
+                                logger.error(f"❌ Product verification failed for {account}")
+                                all_success = False
+                        else:
+                            all_success = False
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error loading products: {e}")
+                    all_success = False
+                finally:
+                    await product_loader.disconnect()
+                
+                # Load account configs
+                logger.info("🔧 Loading account configurations into Redis...")
+                try:
+                    account_loader = get_account_config_loader()
+                    cache = AccountConfigCache()
+                    
+                    # Get accounts to load (use same list as products)
+                    if not accounts:
+                        accounts = await account_loader.get_accounts()
+                    
+                    config_successes = 0
+                    for account in accounts:
+                        try:
+                            # Load from GCS and cache to Redis
+                            config = await account_loader.get_account_config(account)
+                            if config:
+                                await cache.set_config_async(account, config)
+                                config_successes += 1
+                                logger.debug(f"✅ Cached config for {account}")
+                            else:
+                                logger.warning(f"⚠️ No config found for {account}")
+                        except Exception as e:
+                            logger.error(f"❌ Failed to cache config for {account}: {e}")
+                            all_success = False
+                    
+                    logger.info(f"✅ Cached {config_successes}/{len(accounts)} account configs")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error loading account configs: {e}")
+                    all_success = False
+                
+                # Load STT word boost terms
+                logger.info("🎤 Loading STT word boost terms into Redis...")
+                redis_client = None
+                try:
+                    from liddy.storage import get_account_storage_provider
+                    import redis.asyncio as redis
+                    
+                    storage_manager = get_account_storage_provider()
+                    
+                    # Get Redis client
+                    redis_host = os.getenv('REDIS_HOST', 'localhost')
+                    redis_port = os.getenv('REDIS_PORT', '6379')
+                    redis_password = os.getenv('REDIS_PASSWORD', '')
+                    
+                    if redis_password:
+                        redis_url = f"redis://:{redis_password}@{redis_host}:{redis_port}"
+                    else:
+                        redis_url = f"redis://{redis_host}:{redis_port}"
+                    
+                    redis_client = await redis.from_url(
+                        redis_url,
+                        encoding="utf-8",
+                        decode_responses=True,
+                        socket_connect_timeout=5,
+                        socket_timeout=5
+                    )
+                    
+                    word_boost_successes = 0
+                    for account in accounts:
+                        try:
+                            # Try optimized file first
+                            word_boost_data = None
+                            pronunciation_guide = {}
+                            
+                            try:
+                                content = await storage_manager.read_file(
+                                    account=account,
+                                    file_path="stt_word_boost.json"
+                                )
+                                data = json.loads(content)
+                                word_boost_data = data.get('word_boost', [])
+                                
+                                # Also try to load pronunciation guide
+                                try:
+                                    vocab_content = await storage_manager.read_file(
+                                        account=account,
+                                        file_path="stt_vocabulary.json"
+                                    )
+                                    vocab_data = json.loads(vocab_content)
+                                    pronunciation_guide = vocab_data.get('pronunciation_guide', {})
+                                except:
+                                    pass
+                                    
+                            except:
+                                # Fallback to product catalog research
+                                try:
+                                    research_content = await storage_manager.read_file(
+                                        account=account,
+                                        file_path="research/product_catalog/research.md"
+                                    )
+                                    # Extract word boost section using same logic as Assistant
+                                    part_e_start = research_content.find("## Part E: STT Word Boost Vocabulary")
+                                    if part_e_start != -1:
+                                        part_e_end = research_content.find("\n## ", part_e_start + 1)
+                                        if part_e_end == -1:
+                                            part_e_end = len(research_content)
+                                        word_boost_section = research_content[part_e_start:part_e_end]
+                                        
+                                        # Try to parse JSON
+                                        import re
+                                        json_match = re.search(r'```json\s*({[^}]+})\s*```', word_boost_section, re.DOTALL)
+                                        if json_match:
+                                            data = json.loads(json_match.group(1))
+                                            word_boost_data = data.get('word_boost', [])
+                                except:
+                                    pass
+                            
+                            if word_boost_data:
+                                # Store in Redis
+                                word_boost_key = f"stt_word_boost:{account}"
+                                await redis_client.set(word_boost_key, json.dumps({
+                                    'word_boost': word_boost_data,
+                                    'pronunciation_guide': pronunciation_guide,
+                                    'loaded_at': time.time()
+                                }))
+                                word_boost_successes += 1
+                                logger.debug(f"✅ Cached {len(word_boost_data)} word boost terms for {account}")
+                            else:
+                                logger.debug(f"⚠️ No word boost terms found for {account}")
+                                
+                        except Exception as e:
+                            logger.error(f"❌ Failed to cache word boost for {account}: {e}")
+                            all_success = False
+                    
+                    logger.info(f"✅ Cached word boost terms for {word_boost_successes}/{len(accounts)} accounts")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error loading word boost terms: {e}")
+                    all_success = False
+                finally:
+                    # Ensure Redis connection is properly closed
+                    if redis_client:
+                        try:
+                            await redis_client.aclose()
+                        except Exception as e:
+                            logger.warning(f"Error closing Redis client: {e}")
+                
+                return all_success
+            
+            # Run load_data with proper event loop handling
+            success = asyncio.run(load_data())
+            exit(0 if success else 1)
     
-    # if the argv is download-files, then skip the precache_account_configs
-    if len(sys.argv) > 1 and sys.argv[1] == "download-files":
-        logger.info("🚀 Skipping account precache - download-files mode")
+    # Account pre-caching is now handled by the load-data command
+    # Run `python voice_agent.py load-data` before starting the agent to ensure Redis has all data
+    if len(sys.argv) > 1 and sys.argv[1] in ["download-files", "load-data", "load-products"]:
+        logger.info("🚀 Skipping automatic account precache - handled by command")
     else:
-        # Pre-cache account configurations before starting the app
-        logger.info("🚀 Pre-caching account configurations before app startup...")
-        try:
-            # This MUST complete before workers start
-            asyncio.run(precache_account_configs())
-            logger.info("✅ Redis cache is warm - starting app")
-        except Exception as e:
-            logger.error(f"⚠️ Failed to pre-cache configs: {e}")
-            logger.warning("Continuing without pre-cached configs - prewarm may be slower")
+        logger.info("💡 Tip: Run `python voice_agent.py load-data` to pre-load all products and accounts into Redis")
     
     # Run the application
     run_app(

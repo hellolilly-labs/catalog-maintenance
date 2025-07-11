@@ -334,7 +334,8 @@ class SessionStateManager:
                     
                     # Fetch product if not cached or stale
                     if not product:
-                        product = await product_manager.find_product_by_url(current_url)
+                        # Use smart extraction with fallback to URL lookup
+                        product = await product_manager.find_product_from_url_smart(current_url, fallback_to_url_lookup=True)
                         # Update cache if we found a product
                         if product and isinstance(product, Product):
                             user_state.current_product = product
@@ -343,7 +344,9 @@ class SessionStateManager:
                             logger.info(f"🔄 Updated cached product for user {user_state.user_id}: {product.name}")
                     
                     if product and isinstance(product, Product):
-                        current_page_message += f"## Current Product\n\n{Product.to_markdown(product=product, depth=2, obfuscatePricing=True)}\n"
+                        current_page_message += f"## Current Product\n\n"
+                        current_page_message += f"*Note: The user is viewing this product - you already have its details below*\n\n"
+                        current_page_message += f"{Product.to_markdown(product=product, depth=2, obfuscatePricing=True)}\n"
                 
 
             # Add browsing history if requested
