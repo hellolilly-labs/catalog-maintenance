@@ -43,9 +43,9 @@ class SessionStateManager:
     _ephemeral_states = {}
     
     @classmethod
-    def get_user_recent_history(cls, user_id: str) -> List[UrlTracking]:
+    def get_user_recent_history(cls, user_id: str, limit: int = 10) -> List[UrlTracking]:
         """Get user history from Redis"""
-        return UserManager.get_user_recent_history(user_id)
+        return UserManager.get_user_recent_history(user_id, limit)
 
     @classmethod
     async def get_user_recent_products(cls, user_id: str, product_manager:ProductManager, limit: int=15) -> List[Tuple[float, Product]]:
