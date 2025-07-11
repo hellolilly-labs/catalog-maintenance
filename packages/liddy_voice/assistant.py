@@ -44,7 +44,7 @@ from liddy.account_manager import get_account_manager, AccountManager
 from liddy_voice.voice_search_wrapper import VoiceSearchService as SearchService
 from livekit.rtc import RemoteParticipant
 from liddy_voice.account_prompt_manager import get_account_prompt_manager, AccountPromptManager
-from liddy_voice.product_manager import ProductManager
+from liddy.models.product_manager import ProductManager
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,10 @@ class Assistant(Agent):
         # Try to get cached PromptManager if available
         self._account_prompt_manager: AccountPromptManager = get_account_prompt_manager(account=account)
         
+        # Ensure account config is loaded to avoid sync/async issues later
+        if hasattr(self._account_prompt_manager, 'load_account_config_async'):
+            asyncio.create_task(self._account_prompt_manager.load_account_config_async())
+        
         self._product_manager: ProductManager = None
         
         # # Only preload if not already cached (new instance)
@@ -74,9 +78,6 @@ class Assistant(Agent):
         # Phase 2: Product loading setup (KISS approach)
         product_setup_start = time.time()
         self._instructions_loaded = False
-        self._products_loaded = False
-        self._product_load_task = None
-        self._product_load_timing = None  # Will store detailed timing after loading
         self._search_prewarm_task = None  # For prewarming search instance
         self._word_boost_terms = []  # STT word boost terms
         self._pronunciation_guide = {}  # TTS pronunciation guide
@@ -88,11 +89,6 @@ class Assistant(Agent):
         # Defer prewarming until after greeting is sent
         self._prewarming_started = False
         self._search_prewarmed = False  # Track if search has been prewarmed
-        
-        if account:
-            # Only load the most critical items during init
-            # Everything else will be loaded after greeting via start_deferred_prewarming()
-            pass
         
         product_setup_time = time.time() - product_setup_start
         
@@ -109,7 +105,7 @@ class Assistant(Agent):
         self._ctx = ctx
         self._primary_model = primary_model
         self._user_id = user_id
-        self._session_id = f"{int(time.time())}_{user_id}" if user_id else None
+        self._session_id = ctx.room.name
         self._current_context = None
         self._usage_collector = metrics.UsageCollector()
         self._account = account
@@ -122,14 +118,11 @@ class Assistant(Agent):
         self._fast_llm = None
         self._fast_llm_prompt = None
         self.async_cerebras_client = None
-        self.cerebras_client = None
+        # self.cerebras_client = None
         llm_setup_time = time.time() - llm_setup_start
         
         # Phase 6: Background task setup
         bg_task_start = time.time()
-        
-        # Comprehensive prewarming is now deferred until after greeting
-        # Call start_deferred_prewarming() after session.say(greeting)
         
         self.inactivity_task: asyncio.Task | None = None
         self._closing_task: asyncio.Task[None] | None = None
@@ -211,30 +204,30 @@ class Assistant(Agent):
             ],
         )
         
-        # Initialize Cerebras clients
-        self.async_cerebras_client = AsyncCerebras(
-            api_key=os.environ.get("CEREBRAS_API_KEY")
-        )
-        self.cerebras_client = Cerebras(
-            api_key=os.environ.get("CEREBRAS_API_KEY")
-        )
-        logger.info(f"✅ LLM clients initialized in {time.time() - llm_init_start:.3f}s")
+        # Initialize Cerebras clients (only if API key is available)
+        cerebras_api_key = os.environ.get("CEREBRAS_API_KEY")
+        if cerebras_api_key:
+            self.async_cerebras_client = AsyncCerebras(
+                api_key=cerebras_api_key,
+                warm_tcp_connection=False
+            )
+            logger.info(f"✅ LLM clients initialized in {time.time() - llm_init_start:.3f}s")
+        else:
+            self.async_cerebras_client = None
+            logger.info(f"⚠️ Cerebras API key not found - Cerebras client not initialized")
         
-        # Start product loading in background
-        self._product_load_task = asyncio.create_task(self._load_products_for_account(self._account))
-        self._background_tasks.append(self._product_load_task)
+        # # Prewarm the search instance
+        # self._search_prewarm_task = asyncio.create_task(self._prewarm_search_instance(self._account))
+        # self._background_tasks.append(self._search_prewarm_task)
         
-        # Prewarm the search instance
-        self._search_prewarm_task = asyncio.create_task(self._prewarm_search_instance(self._account))
-        self._background_tasks.append(self._search_prewarm_task)
-        
-        # Load STT word boost terms
-        self._word_boost_task = asyncio.create_task(self._load_word_boost_terms(self._account))
-        self._background_tasks.append(self._word_boost_task)
+        # # Load STT word boost terms
+        # self._word_boost_task = asyncio.create_task(self._load_word_boost_terms())
+        # self._background_tasks.append(self._word_boost_task)
         
         # Start comprehensive prewarming
-        prewarm_task = asyncio.create_task(self._prewarm_all_systems())
-        self._background_tasks.append(prewarm_task)
+        prewarm_llm_task = asyncio.create_task(self._prewarm_llm())
+        # prewarm_task = asyncio.create_task(self._prewarm_all_systems())
+        self._background_tasks.append(prewarm_llm_task)
         
         logger.info(f"✅ Deferred prewarming tasks started for {self._account}")
 
@@ -248,7 +241,7 @@ class Assistant(Agent):
         metrics = {
             "account": self._account,
             "startup": self._startup_timing,
-            "product_loading": self._product_load_timing,
+            "product_loading": self._get_product_loading_metrics(),
             "prewarming": {
                 "overall": getattr(self, '_overall_prewarm_timing', None),
                 "search": getattr(self, '_search_prewarm_timing', None),
@@ -256,11 +249,7 @@ class Assistant(Agent):
                 "llm": {"status": "completed" if hasattr(self, 'instructions') else "skipped"}
             },
             "status": {
-                "products_loaded": self._products_loaded,
                 "startup_completed": hasattr(self, '_startup_timing'),
-                "product_task_status": "completed" if self._products_loaded else (
-                    "running" if self._product_load_task and not self._product_load_task.done() else "pending"
-                ),
                 "all_systems_prewarmed": hasattr(self, '_overall_prewarm_timing')
             },
             "targets": {
@@ -271,14 +260,6 @@ class Assistant(Agent):
                 "meets_startup_target": (
                     self._startup_timing.get("performance", {}).get("meets_target", False) 
                     if hasattr(self, '_startup_timing') else False
-                ),
-                "meets_product_target": (
-                    self._product_load_timing.get("timing", {}).get("total_time", 0) < 2.0
-                    if self._product_load_timing else False
-                ),
-                "meets_memory_target": (
-                    self._product_load_timing.get("memory", {}).get("delta_mb", 0) < 10.0
-                    if self._product_load_timing else False
                 ),
                 "meets_search_prewarm_target": (
                     getattr(self, '_search_prewarm_timing', {}).get("prewarm_time", 0) < 3.0
@@ -296,21 +277,13 @@ class Assistant(Agent):
         Returns:
             Formatted string with performance metrics and target compliance
         """
-        # Ensure products are loaded to get complete metrics
-        await self.ensure_products_loaded()
-        
         metrics = self.get_performance_metrics()
         
         # Extract key metrics
         startup = metrics.get("startup", {}).get("timing", {})
-        product = metrics.get("product_loading", {}).get("timing", {}) if metrics.get("product_loading") else {}
-        memory = metrics.get("product_loading", {}).get("memory", {}) if metrics.get("product_loading") else {}
         targets = metrics.get("targets", {})
         
         startup_time = startup.get("total_startup", 0)
-        product_time = product.get("total_time", 0)
-        memory_mb = memory.get("delta_mb", 0)
-        product_count = metrics.get("product_loading", {}).get("product_count", 0) if metrics.get("product_loading") else 0
         
         # Format summary
         summary = f"""
@@ -322,12 +295,6 @@ Startup Performance:
      - Prompt Init: {startup.get('prompt_init', 0):.3f}s
      - Agent Init: {startup.get('agent_init', 0):.3f}s  
      - LLM Setup: {startup.get('llm_setup', 0):.3f}s
-
-Product Loading Performance:
-  ⏱️  Loading Time: {product_time:.3f}s {'✅' if targets.get('meets_product_target') else '⚠️'} (target: <2s)
-  📦 Products: {product_count} loaded
-  💾 Memory Usage: {memory_mb:.1f}MB {'✅' if targets.get('meets_memory_target') else '⚠️'} (target: <10MB)
-  📈 Efficiency: {memory.get('load_efficiency', 0):.1f} products/MB
 
 Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_target'), targets.get('meets_product_target'), targets.get('meets_memory_target')]) else '⚠️ Some targets exceeded'}
 """
@@ -361,7 +328,7 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
                 content=["ping"]
             ))
             response = await LlmService.chat_wrapper(
-                llm_service=self._llm,
+                llm_service=self.session.llm,
                 chat_ctx=chat_ctx_copy,
             )
             logger.info(f"✅ LLM prewarmed in {time.time() - start_time:.3f}s")
@@ -371,6 +338,8 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
             logger.info(f"✅ Main LLM prewarmed in {elapsed:.3f}s - cached {len(self.instructions)} chars of system prompt") 
                 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             logger.error(f"Error prewarming main LLM: {e}")
             
     async def _prewarm_search_instance(self, account: str) -> None:
@@ -528,8 +497,7 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
             prewarm_tasks = [
                 ("llm", self._prewarm_llm()),
                 # Search is already prewarming via self._search_prewarm_task
-                ("account_manager", self._prewarm_account_manager(self._account)),
-                # Products are already loading via self._product_load_task
+                # ("account_manager", self._prewarm_account_manager(self._account)),
             ]
             
             # Run all prewarm tasks in parallel
@@ -555,8 +523,7 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
                 "components": {
                     "llm": hasattr(self, '_llm_prewarm_timing'),
                     "search": hasattr(self, '_search_prewarm_timing'), 
-                    "account_manager": hasattr(self, '_account_manager_prewarm_timing'),
-                    "products": self._products_loaded
+                    "account_manager": hasattr(self, '_account_manager_prewarm_timing')
                 },
                 "timestamp": time.time()
             }
@@ -566,118 +533,20 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
 
     async def get_product_manager(self) -> ProductManager:
         if not self._product_manager:
-            # self._product_manager = await self._load_products_for_account()
-            from liddy_voice.product_manager import get_product_manager
-            self._product_manager = await get_product_manager(account=self._account)
+            # Check if we should use Redis
+            if os.getenv('USE_REDIS_PRODUCTS', 'true').lower() == 'true':
+                from liddy.models.redis_product_manager import get_redis_product_manager
+                self._product_manager = await get_redis_product_manager(account=self._account)
+                logger.info(f"Using Redis-backed ProductManager for {self._account}")
+            else:
+                # Original in-memory approach
+                from liddy.models.product_manager import get_product_manager
+                self._product_manager = await get_product_manager(account=self._account)
         return self._product_manager
 
-    async def _load_products_for_account(self) -> None:
+    async def _load_word_boost_terms(self) -> None:
         """
-        Load product catalog for this Assistant's account (KISS approach).
-        
-        Voice agents serve one account at a time, so we load only what we need:
-        - Single account catalog loading
-        - Direct memory access after loading  
-        - No Redis complexity - perfect for stateful applications
-        
-        Args:
-            account: Account domain for this voice agent
-        """
-        # Get process for memory monitoring
-        process = psutil.Process(os.getpid())
-        
-        try:
-            # Phase 1: Initialization timing
-            total_start = time.time()
-            init_start = time.time()
-            
-            from liddy.models.product import Product
-            from .product_manager import load_product_catalog_for_assistant
-            
-            init_time = time.time() - init_start
-            
-            # Phase 2: Memory baseline measurement
-            memory_start = process.memory_info().rss / 1024 / 1024  # MB
-            
-            # Phase 3: Product loading timing
-            load_start = time.time()
-            self._product_manager = await load_product_catalog_for_assistant(account=self._account)
-            products = await self._product_manager.get_product_objects()
-            load_time = time.time() - load_start
-            
-            # Phase 4: Memory after loading measurement  
-            memory_end = process.memory_info().rss / 1024 / 1024  # MB
-            memory_delta = memory_end - memory_start
-            
-            # Phase 5: Finalization
-            finalize_start = time.time()
-            self._products_loaded = True
-            
-            # Store timing metadata for monitoring
-            self._product_load_timing = {
-                "account": self._account,
-                "product_count": len(products),
-                "timing": {
-                    "init_time": init_time,
-                    "load_time": load_time,
-                    "total_time": time.time() - total_start,
-                    "finalize_time": time.time() - finalize_start
-                },
-                "memory": {
-                    "baseline_mb": memory_start,
-                    "final_mb": memory_end,
-                    "delta_mb": memory_delta,
-                    "products_mb": memory_delta  # Approximate product catalog memory
-                },
-                "performance": {
-                    "products_per_second": len(products) / load_time if load_time > 0 else 0,
-                    "mb_per_second": memory_delta / load_time if load_time > 0 else 0,
-                    "load_efficiency": len(products) / memory_delta if memory_delta > 0 else 0
-                },
-                "timestamp": time.time()
-            }
-            
-            total_time = time.time() - total_start
-            
-            # Enhanced logging with performance metrics
-            logger.info(f"🚀 Assistant product loading complete for {self._account}: "
-                       f"{len(products)} products loaded in {total_time:.3f}s "
-                       f"(init: {init_time:.3f}s, load: {load_time:.3f}s) "
-                       f"| Memory: {memory_delta:.1f}MB | "
-                       f"Efficiency: {len(products) / memory_delta if memory_delta > 0 else 0:.1f} products/MB")
-            
-            # Performance validation and warnings
-            if total_time > 2.0:
-                logger.warning(f"⚠️ Product loading exceeded 2s target: {total_time:.3f}s for {self._account}")
-            
-            if memory_delta > 10.0:
-                logger.warning(f"⚠️ Product catalog memory exceeded 10MB target: {memory_delta:.1f}MB for {self._account}")
-            
-            if len(products) == 0:
-                logger.warning(f"⚠️ No products loaded for account {self._account}")
-            
-        except asyncio.CancelledError:
-            logger.debug(f"Product loading cancelled for {self._account}")
-            self._products_loaded = False
-            raise  # Re-raise to properly handle cancellation
-        except Exception as e:
-            logger.error(f"Error loading products for Assistant account {self._account}: {e}")
-            self._products_loaded = False
-            
-            # Store error timing for debugging
-            self._product_load_timing = {
-                "account": self._account,
-                "error": str(e),
-                "timing": {
-                    "total_time": time.time() - total_start,
-                    "failed_at": "product_loading"
-                },
-                "timestamp": time.time()
-            }
-
-    async def _load_word_boost_terms(self, account: str) -> None:
-        """
-        Load STT word boost terms from optimized vocabulary file.
+        Load STT word boost terms from Redis cache or storage.
         
         This loads pre-extracted word_boost terms to improve speech recognition
         accuracy for brand-specific terminology.
@@ -687,16 +556,55 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
         """
         try:
             start_time = time.time()
-            logger.info(f"🎤 Loading STT word boost terms for {account}...")
+            logger.info(f"🎤 Loading STT word boost terms for {self._account}...")
             
-            # Try to load from storage
+            # Try Redis first
+            if os.getenv('USE_REDIS_PRODUCTS', 'true').lower() == 'true':
+                try:
+                    import redis.asyncio as redis
+                    
+                    # Get Redis client
+                    redis_host = os.getenv('REDIS_HOST', 'localhost')
+                    redis_port = os.getenv('REDIS_PORT', '6379')
+                    redis_password = os.getenv('REDIS_PASSWORD', '')
+                    
+                    if redis_password:
+                        redis_url = f"redis://:{redis_password}@{redis_host}:{redis_port}"
+                    else:
+                        redis_url = f"redis://{redis_host}:{redis_port}"
+                    
+                    redis_client = await redis.from_url(
+                        redis_url,
+                        encoding="utf-8",
+                        decode_responses=True,
+                        socket_connect_timeout=2,
+                        socket_timeout=2
+                    )
+                    
+                    # Try to get from Redis
+                    word_boost_key = f"stt_word_boost:{self._account}"
+                    cached_data = await redis_client.get(word_boost_key)
+                    
+                    if cached_data:
+                        data = json.loads(cached_data)
+                        self._word_boost_terms = data.get('word_boost', [])
+                        self._pronunciation_guide = data.get('pronunciation_guide', {})
+                        await redis_client.aclose()
+                        logger.info(f"✅ Loaded {len(self._word_boost_terms)} word boost terms from Redis in {time.time() - start_time:.3f}s")
+                        return
+                    
+                    await redis_client.aclose()
+                except Exception as e:
+                    logger.debug(f"Could not load from Redis, falling back to storage: {e}")
+            
+            # Fallback to storage
             from liddy.storage import get_account_storage_provider
             storage_manager = get_account_storage_provider()
             
             # Try optimized file first
             try:
                 word_boost_content = await storage_manager.read_file(
-                    account=account,
+                    account=self._account,
                     file_path="stt_word_boost.json"
                 )
                 word_boost_data = json.loads(word_boost_content)
@@ -705,14 +613,14 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
                 # Also try to load pronunciation guide
                 try:
                     vocab_content = await storage_manager.read_file(
-                        account=account,
+                        account=self._account,
                         file_path="stt_vocabulary.json"
                     )
                     vocab_data = json.loads(vocab_content)
                     self._pronunciation_guide = vocab_data.get('pronunciation_guide', {})
-                    logger.info(f"✅ Loaded {len(self._word_boost_terms)} word boost terms and {len(self._pronunciation_guide)} pronunciations in {time.time() - start_time:.3f}s")
+                    logger.info(f"✅ Loaded {len(self._word_boost_terms)} word boost terms and {len(self._pronunciation_guide)} pronunciations from storage in {time.time() - start_time:.3f}s")
                 except:
-                    logger.info(f"✅ Loaded {len(self._word_boost_terms)} optimized word boost terms in {time.time() - start_time:.3f}s")
+                    logger.info(f"✅ Loaded {len(self._word_boost_terms)} optimized word boost terms from storage in {time.time() - start_time:.3f}s")
                 
                 return
             except Exception as e:
@@ -721,7 +629,7 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
             # Fallback to product catalog research
             try:
                 research_content = await storage_manager.read_file(
-                    account=account,
+                    account=self._account,
                     file_path="research/product_catalog/research.md"
                 )
             except Exception as e:
@@ -750,11 +658,11 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
                 logger.info(f"✅ Extracted {len(self._word_boost_terms)} basic word boost terms in {time.time() - start_time:.3f}s")
             
         except asyncio.CancelledError:
-            logger.debug(f"Word boost loading cancelled for {account}")
+            logger.debug(f"Word boost loading cancelled for {self._account}")
             self._word_boost_terms = []
             raise  # Re-raise to properly handle cancellation  
-        except Exception as e:
-            logger.error(f"Error loading word boost terms for {account}: {e}")
+        except Exception as e:  
+            logger.error(f"Error loading word boost terms for {self._account}: {e}")
             self._word_boost_terms = []
     
     def _extract_word_boost_section(self, content: str) -> str:
@@ -814,34 +722,7 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
             List of word boost terms
         """
         return self._word_boost_terms.copy() if self._word_boost_terms else []
-
-    async def ensure_products_loaded(self) -> bool:
-        """
-        Ensure products are loaded before using product-related functions.
-        
-        This method can be called by product search functions to ensure
-        the product catalog is ready.
-        
-        Returns:
-            True if products are loaded or loading completed successfully
-        """
-        if self._products_loaded:
-            return True
-            
-        if self._product_load_task and not self._product_load_task.done():
-            try:
-                # Wait for product loading to complete
-                await asyncio.wait_for(self._product_load_task, timeout=30.0)
-                return self._products_loaded
-            except asyncio.TimeoutError:
-                logger.warning(f"Product loading timeout for account {self._account}")
-                return False
-            except Exception as e:
-                logger.error(f"Error waiting for product loading: {e}")
-                return False
-        
-        return self._products_loaded
-
+    
     async def cleanup(self) -> None:
         """
         Clean up background tasks when shutting down.
@@ -1051,6 +932,70 @@ Parameter Schema and Description:
             logger.error(f"Error in _process_intent_detection: {e}")
 
     @observe(name="llm_node", as_type="generation")
+    async def llm_node_TEST(
+        self,
+        chat_ctx: llm.ChatContext,
+        tools: list[FunctionTool],
+        model_settings: ModelSettings,
+    ) -> AsyncIterable[llm.ChatChunk]:
+        """
+        Intercepts the LLM stream and logs:
+        - [LLM BOTH] when text + function_call appeared anywhere in this turn
+        - [LLM TEXT] for pure-text chunks
+        - [TOOL CALL] for pure-function-call chunks
+        """
+        # State for this response turn
+        seen_text: str | None = None
+        seen_fn: tuple[str, str] | None = None  # (name, args)
+        both_logged = False
+        
+        received_chunks: list[llm.ChatChunk | str] = []
+
+        async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+            # Extract from ChatChunk or raw str
+            content = None
+            fn_call = None
+
+            if isinstance(chunk, llm.ChatChunk):
+                received_chunks.append(chunk)
+                content = getattr(chunk.delta, "content", None)
+                fn: llm.FunctionToolCall = chunk.delta.tool_calls[0] if chunk.delta and chunk.delta.tool_calls else None
+                if fn and fn.name:
+                    fn_call = (fn.name, fn.arguments or "")
+            else:
+                # raw string
+                content = chunk
+                if len(received_chunks) > 0:
+                    received_chunks.append(chunk)
+
+            # Record what we've seen
+            if content:
+                seen_text = content
+            if fn_call:
+                seen_fn = fn_call
+
+            # If we now have both and haven't logged it yet, do so once
+            if not both_logged and seen_text and seen_fn:
+                name, args = seen_fn
+                logger.info(
+                    "[LLM BOTH] text=%r | TOOL CALL name=%r args=%r",
+                    seen_text,
+                    name,
+                    args
+                )
+                both_logged = True
+            else:
+                # If we haven't hit BOTH, log individual events
+                if content and not fn_call:
+                    logger.info("[LLM TEXT] %r", content)
+                if fn_call and not content:
+                    name, args = fn_call
+                    logger.info("[TOOL CALL] name=%r args=%r", name, args)
+
+            # Pass the chunk along so downstream still executes
+            yield chunk
+
+    @observe(name="llm_node", as_type="generation")
     async def llm_node(
         self,
         chat_ctx: llm.ChatContext,
@@ -1162,11 +1107,11 @@ Parameter Schema and Description:
         #     model_settings
         # )
 
+    
     async def _update_user_state_prompt(self) -> None:
         try:
-            user_id = self._user_id
-            if user_id:
-                user_state_message = await SessionStateManager.build_user_state_message(user_id=user_id, include_current_page=True, user_state=self.session.userdata, include_product_history=True)
+            if self.session.userdata:
+                user_state_message = await SessionStateManager.build_user_state_message(user_state=self.session.userdata, product_manager=await self.get_product_manager(), include_current_page=True, include_product_history=True)
                 if user_state_message:
                     chat_ctx = self.chat_ctx.copy()
                     new_items = []
@@ -1547,97 +1492,107 @@ Parameter Schema and Description:
     async def product_search(
         self,
         context: RunContext[UserState],
-        query: str,
+        query: Optional[str] = None,
+        product_id: Optional[str] = None,
+        acknowledgement_message: str = "Let me search for that",
         top_k: str | int = "auto",
-        # message_to_user: str,
+        search_competitor_products: bool = False,
     ):
 
-        """Use this to search for products that the user may be interested in. Include as much depth and detail in the query as possible to get the best results. Generally, the only way for you to know about individual products is through this tool call, so feel free to liberally call this tool call.
+        """Search for products in our catalog or competitor products on the web.
         
-        ALWAYS speak to the user in the same turn as the tool call.
+        This tool can be used in three ways:
+        1. Search by query: Provide a search query to find products
+        2. Lookup by ID: Provide a product_id to get a specific product
+        3. Competitor search: Set search_competitor_products=True to search the web for competitor products
         
         Args:
-            query: The query to use for the search. Be as descriptive and detailed as possible based on the context of the entire conversation. For example, the query "mountain bike" is not very descriptive, but "mid-range non-electric mountain bike with electronic shifting for downhill flowy trails for advanced rider" is much more descriptive. The more descriptive the query, the better the results will be. You can also use this to search for specific products by name or ID, but be sure to include as much context as possible to help narrow down the results.
+            query: The query to use for the search. Be as descriptive and detailed as possible based on the context of the entire conversation. For example, the query "mountain bike" is not very descriptive, but "mid-range non-electric mountain bike with electronic shifting for downhill flowy trails for advanced rider" is much more descriptive. The more descriptive the query, the better the results will be. You can also use this to search for specific products by name or ID, but be sure to include as much context as possible to help narrow down the results. (optional if product_id is provided)
+            product_id: Specific product ID to lookup directly (optional if query is provided)
             top_k: The number of products to return. Defaults to "auto" which means the number of products to return is determined by quality of the results. If you want to return a specific number of products, you can set this to an integer. For example, if the product search is not returning back satisfactory results, you can set this to 10 to get more results.
+            acknowledgement_message: A brief, natural-language phrase the agent should say immediately while performing this search. This should be a message that is relevant to the query and the user.
+            search_competitor_products: If True, search the web for competitor products instead of our catalog. IMPORTANT: Only use this when explicitly asked to compare with competitors or find products from other brands. Be very explicit with the user that you are searching for competitor products when this is True.
         """
         # Track overall timing
         overall_start = time.time()
         timing_breakdown = {}
         
-        logger.info(f"🔍 Product search called with query: {query}, top_k: {top_k}")
+        logger.info(f"🔍 Product search called with query: {query}, product_id: {product_id}, top_k: {top_k}, competitor: {search_competitor_products}")
         
         try:
-            # async def _say_message_to_user():
-            #     handle = context.session.current_speech
-            #     if handle and not handle.done():
-            #         await handle.wait_for_playout()
-            #     chat_ctx = self.chat_ctx.copy(exclude_instructions=True, exclude_function_call=True, tools=[])
-            #     last_user_message = next((msg for msg in reversed(chat_ctx.items) if msg.role == "user"), None)
-            #     await context.session.generate_reply(instructions="Affirm the user's query and let them know you are lookingfor products", 
-            #                                          user_input=last_user_message.content[0] if last_user_message else None,
-            #                                          allow_interruptions=True)
-            # say_message_to_user_task = asyncio.create_task(_say_message_to_user())
-            # # if not context.speech_handle or context.speech_handle.done():
-            # #     logger.info(f"🔍 Agent is not currently saying anything, saying message_to_user")
-            # #     await self.session.say(text=message_to_user, allow_interruptions=False)
-            # # else:
-            # #     logger.info(f"🔍 Agent is currently saying something, skipping message_to_user")
-            # #     # # if the agent is currently saying something, then we need to wait for it to finish
-            # #     # await context.current_speech.wait_for_playout()
-            
             # Input validation
             validation_start = time.time()
-            if not query:
-                raise ToolError("`query` is required")
+            if not query and not product_id:
+                raise ToolError("Either `query` or `product_id` is required")
+            if query and product_id:
+                raise ToolError("Provide either `query` or `product_id`, not both")
+            if search_competitor_products and product_id:
+                raise ToolError("Cannot search for competitor products by ID")
             timing_breakdown['validation'] = time.time() - validation_start
+            
+            # Say acknowledgement message
+            async def _say_message_to_user():
+                handle = context.session.current_speech
+                if handle and not handle.done():
+                    await handle.wait_for_playout()
+                await context.session.say(text=acknowledgement_message, allow_interruptions=True)
+            say_message_to_user_task = asyncio.create_task(_say_message_to_user())
         
-            # Ensure products are loaded before searching (KISS approach)
-            products_load_start = time.time()
-            products_ready = await self.ensure_products_loaded()
-            if not products_ready:
-                logger.warning(f"Products not loaded for account {self._account}, falling back to legacy loading")
-            timing_breakdown['ensure_products'] = time.time() - products_load_start
-        
-            # Get products using ProductManager (should be cached after initial load)
-            get_products_start = time.time()
-            products = await (await self.get_product_manager()).get_products()
+            # Handle different search modes
             products_results: List[Product] = []
-            timing_breakdown['get_products'] = time.time() - get_products_start
             
-            # Log if getting products is slow (shouldn't be if cached properly)
-            if timing_breakdown['get_products'] > 0.1:
-                logger.warning(f"⚠️ Getting products took {timing_breakdown['get_products']:.3f}s - cache may not be working")
-            
-            # Get account manager and RAG details
-            account_mgr_start = time.time()
-            account_manager: AccountManager = await get_account_manager(self._account)
-            index_name, embedding_model = account_manager.get_rag_details()
-            timing_breakdown['account_manager'] = time.time() - account_mgr_start
-            
-            # Choose search approach based on catalog size
-            search_start = time.time()
-            # if len(products) < 100:
-            if not index_name:
-                # For small catalogs: Use LLM-based search with standardized status updates
-                logger.info(f"🔍 Using LLM-based search for {self._account} (no RAG index)")
-                products_results = await self.perform_search_with_status(
-                    search_fn=lambda q, **params: SearchService.search_products_llm(
-                        q,
-                        products=params.get("products", []),
-                        user_state=self.session.userdata
-                    ),
-                    query=query,
-                    search_params={
-                        "products": products,
-                        "account": self._account,
-                        "enhancer_params": {
-                            "chat_ctx": self.chat_ctx,
-                            # "product_knowledge": self._account_prompt_manager.product_search_knowledge
-                        }
-                    }
+            # Mode 1: Lookup by product ID
+            if product_id:
+                lookup_start = time.time()
+                product_manager = await self.get_product_manager()
+                product = await product_manager.find_product_by_id(product_id)
+                if product:
+                    products_results = [product]
+                    logger.info(f"✅ Found product by ID: {product.name}")
+                else:
+                    raise ToolError(f"Product with ID {product_id} not found")
+                timing_breakdown['product_lookup'] = time.time() - lookup_start
+                
+            # Mode 2: Search competitor products on the web
+            elif search_competitor_products:
+                web_search_start = time.time()
+                logger.info(f"🌐 Searching web for competitor products: {query}")
+                
+                # Use web search to find competitor products
+                from liddy_voice.tools.web_search import search_web
+                web_results = await search_web(
+                    query=f"{query} product specifications price",
+                    num_results=min(int(top_k) if isinstance(top_k, int) else 5, 10)
                 )
-                timing_breakdown['search_type'] = 'llm'
+                
+                # Convert web results to product-like format
+                for result in web_results:
+                    # Create a pseudo-product from web results
+                    products_results.append({
+                        "name": result.get("title", "Unknown Product"),
+                        "description": result.get("content", ""),
+                        "url": result.get("url", ""),
+                        "price": "See website for pricing",
+                        "source": "Web Search",
+                        "is_competitor": True
+                    })
+                
+                timing_breakdown['web_search'] = time.time() - web_search_start
+                logger.info(f"🌐 Found {len(products_results)} competitor products")
+                
+            # Mode 3: Normal catalog search
             else:
+                # Get account manager and RAG details
+                account_mgr_start = time.time()
+                account_manager: AccountManager = await get_account_manager(self._account)
+                index_name, embedding_model = account_manager.get_rag_details()
+                timing_breakdown['account_manager'] = time.time() - account_mgr_start
+                
+                # Choose search approach based on catalog size
+                search_start = time.time()
+                if not index_name:
+                    raise ToolError("No RAG index found for account")
+                else:
                 # For large catalogs: Use RAG search with standardized status updates
                 logger.info(f"🔍 Using RAG search for {self._account} with index: {index_name}")
                 rag_results = await self.perform_search_with_status(
@@ -1655,14 +1610,16 @@ Parameter Schema and Description:
                             "chat_ctx": self.chat_ctx,
                             # "product_knowledge": self._account_prompt_manager.product_search_knowledge
                         }
-                    }
+                    },
+                    status_delay=100.0
                 )
                 timing_breakdown['search_type'] = 'rag'
                 
                 # Process RAG results into product objects
                 process_start = time.time()
-                if rag_results and not isinstance(rag_results, dict) or not rag_results.get("error"):
-                    for result in rag_results.get("results"):
+                if rag_results and isinstance(rag_results, dict) and not rag_results.get("error"):
+                    logger.debug(f"Processing {len(rag_results.get('results', []))} RAG results")
+                    for result in rag_results.get("results", []):
                         if result.get('id'):
                             product = await (await self.get_product_manager()).find_product_by_id(product_id=result.get('id'))
                             if product:
@@ -1676,34 +1633,66 @@ Parameter Schema and Description:
             
             # Format results as markdown
             format_start = time.time()
-            markdown_results = ""
-            if 'rag_results' in locals() and rag_results and rag_results.get("agent_instructions"):
-                markdown_results += f"**INSTRUCTIONS**: {rag_results.get('agent_instructions')}\n\n"
-            markdown_results += f"**CRITICAL**: Be sure to call the `display_product` tool call to display the product that you talk about. You can use the product ID from the results above to do this.\n\n"
-
-            markdown_results = "# Products (in descending order):\n\nRemember that you are an AI sales agent speaking to a human, so be sure to use natural language to respond and not just a list of products. For example, never say the product URL unless the user specifically asks for it.\n\n"
             
-            # Use a more concise format for search results to reduce LLM processing time
-            for i, result in enumerate(products_results):
-                # Only include essential info for decision making
-                markdown_results += f"## {i+1}. {result.name}\n"
-                markdown_results += f"- **ID**: {result.id}\n"
-                if result.originalPrice:
-                    markdown_results += f"- **Price**: ${result.originalPrice}\n"
-                elif result.salePrice:
-                    markdown_results += f"- **Sale Price**: ${result.salePrice}\n"
+            # Different formatting for competitor products
+            if search_competitor_products:
+                markdown_results = "# Competitor Products Found:\n\n"
+                markdown_results += "**NOTE**: These are products from other brands found on the web. "
+                markdown_results += "Be explicit with the user that these are competitor products.\n\n"
                 
-                # Add brief description if available
-                if hasattr(result, 'description') and result.description:
-                    # Truncate long descriptions
-                    desc = result.description[:200] + "..." if len(result.description) > 200 else result.description
-                    markdown_results += f"- **Description**: {desc}\n"
+                for i, result in enumerate(products_results):
+                    markdown_results += f"## {i+1}. {result['name']}\n"
+                    if result.get('description'):
+                        markdown_results += f"- **Description**: {result['description']}\n"
+                    if result.get('url'):
+                        markdown_results += f"- **Website**: {result['url']}\n"
+                    markdown_results += f"- **Source**: {result.get('source', 'Web Search')}\n"
+                    markdown_results += "\n"
+            else:
+                # Regular product formatting
+                markdown_results = ""
+                if 'rag_results' in locals() and rag_results and rag_results.get("agent_instructions"):
+                    markdown_results += f"**INSTRUCTIONS**: {rag_results.get('agent_instructions')}\n\n"
                 
-                # Add key highlights if available
-                if hasattr(result, 'keySellingPoints') and result.keySellingPoints:
-                    markdown_results += f"- **Key Features**: {', '.join(result.keySellingPoints[:3])}\n"
+                if not product_id:  # Only show this for search results, not direct lookups
+                    markdown_results += f"**CRITICAL**: Be sure to call the `display_product` tool call to display the product that you talk about. You can use the product ID from the results above to do this.\n\n"
+
+                markdown_results += "# Products (in descending order):\n\nRemember that you are an AI sales agent speaking to a human, so be sure to use natural language to respond and not just a list of products. For example, never say the product URL unless the user specifically asks for it.\n\n"
                 
-                markdown_results += "\n"
+                # Use a more concise format for search results to reduce LLM processing time
+                for i, result in enumerate(products_results):
+                    # Handle both Product objects and dicts
+                    if isinstance(result, dict):
+                        name = result.get('name', 'Unknown Product')
+                        product_id = result.get('id', '')
+                        price = result.get('originalPrice') or result.get('salePrice') or result.get('price')
+                        description = result.get('description', '')
+                        key_features = result.get('keySellingPoints', [])
+                    else:
+                        name = result.name
+                        product_id = result.id
+                        price = result.originalPrice or result.salePrice
+                        description = getattr(result, 'description', '')
+                        key_features = getattr(result, 'keySellingPoints', [])
+                    
+                    # Format the product info
+                    markdown_results += f"## {i+1}. {name}\n"
+                    if product_id:
+                        markdown_results += f"- **ID**: {product_id}\n"
+                    if price:
+                        markdown_results += f"- **Price**: ${price}\n"
+                    
+                    # Add brief description if available
+                    if description:
+                        # Truncate long descriptions
+                        desc = description[:200] + "..." if len(description) > 200 else description
+                        markdown_results += f"- **Description**: {desc}\n"
+                    
+                    # Add key highlights if available
+                    if key_features:
+                        markdown_results += f"- **Key Features**: {', '.join(key_features[:3])}\n"
+                    
+                    markdown_results += "\n"
             
             timing_breakdown['format_results'] = time.time() - format_start
             
@@ -1800,7 +1789,7 @@ Parameter Schema and Description:
                             variant_type = variant_types[0]
                         else:
                             for vt in variant_types:
-                                if variant_name and variant_name.lower() == vt.lower():
+                                if variant_name and variant_name.lower() == vt.get('name', '').lower():
                                     variant_type = vt
                                     break
 
@@ -1846,10 +1835,11 @@ Parameter Schema and Description:
                     current_product = await (await self.get_product_manager()).find_product_by_url(product_url=product_url)
                 timing_breakdown['history_product_lookup'] = time.time() - history_product_start
             
-            # Time waiting for speech to finish
-            wait_speech_start = time.time()
-            await self.session.current_speech.wait_for_playout()
-            timing_breakdown['wait_for_speech'] = time.time() - wait_speech_start
+            # # Time waiting for speech to finish
+            # if self.session.current_speech and not self.session.current_speech.done():
+            #     wait_speech_start = time.time()
+            #     await self.session.current_speech.wait_for_playout()
+            #     timing_breakdown['wait_for_speech'] = time.time() - wait_speech_start
             
             participant_identity = next(iter(get_job_context().room.remote_participants))
             local_participant = get_job_context().room.local_participant
@@ -1896,7 +1886,7 @@ Parameter Schema and Description:
             total_time = time.time() - start_time
             timing_breakdown['total'] = total_time
             
-            logger.info(f"📊 display_product completed in {total_time:.3f}s | product_id: {product_id} | breakdown: " +
+            logger.info(f"📊 display_product completed in {total_time:.3f}s | product_id: {product_id} | variant: {variant} | breakdown: " +
                        f"product_lookup: {timing_breakdown.get('product_lookup', 0):.3f}s, " +
                        f"build_results: {timing_breakdown.get('build_results', 0):.3f}s, " +
                        f"user_state: {timing_breakdown.get('user_state_lookup', 0):.3f}s, " +
@@ -1904,6 +1894,13 @@ Parameter Schema and Description:
                        f"wait_speech: {timing_breakdown.get('wait_for_speech', 0):.3f}s, " +
                        f"room_update: {timing_breakdown.get('room_update', 0):.3f}s, " +
                        f"rpc: {timing_breakdown.get('rpc_call', 0):.3f}s")
+            
+            # Update current product on user state
+            if user_state and product:
+                user_state.current_product = product
+                user_state.current_product_id = product.id
+                user_state.current_product_timestamp = time.time()
+                logger.info(f"✅ Updated current product for user {user_state.user_id}: {product.name} (ID: {product.id})")
             
             return result
         except ToolError as e:
@@ -1932,7 +1929,7 @@ Parameter Schema and Description:
         reason: str,
     ) -> str:
         """
-        Called when user want to leave the conversation
+        Called when user want to leave the conversation. ALWAYS call this function when the user wants to end the conversation.
         
         Args:
             reason: The reason for ending the conversation. This is optional and can be used to help identify the product. For example, if you are unsure of the exact product_url, you can use the product_name to search for it. This is not required, but it is a good idea to include it if you have it.

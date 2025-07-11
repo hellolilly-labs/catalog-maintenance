@@ -1,8 +1,11 @@
 from dataclasses import dataclass, field
-from typing import Optional, List, Tuple, Dict, Any
+from typing import Optional, List, Tuple, Dict, Any, TYPE_CHECKING
 from datetime import datetime
 import time
 import json
+
+if TYPE_CHECKING:
+    from liddy.models.product import Product
 
 @dataclass
 class UserRoom:
@@ -98,7 +101,9 @@ class UrlTracking:
     
     
     @staticmethod
-    def from_json(json_str: str) -> "UrlTracking":
+    def from_json(json_str: str | dict) -> "UrlTracking":
+        if isinstance(json_str, dict):
+            return UrlTracking.from_dict(json_str)
         json_object = json.loads(json_str)
         return UrlTracking.from_dict(json_object)
     @staticmethod
@@ -402,6 +407,9 @@ class UserState:
     voice_session_id: Optional[str] = None
     interaction_start_time: float = field(default_factory=time.time)
     last_interaction_time: Optional[float] = None
+    current_product: Optional["Product"] = None
+    current_product_id: Optional[str] = None
+    current_product_timestamp: Optional[float] = None
     
     @staticmethod
     def from_json(json_str: str) -> "UserState":
@@ -417,12 +425,16 @@ class UserState:
             sentiment_analysis_dict['user_id'] = data.get("user_id")
         user_state = UserState(
             user_id=data.get("user_id"),
+            account=data.get("account", ""),
             conversation_exit_state=ConversationExitState.from_dict(data.get("conversation_exit_state", {})) if data.get("conversation_exit_state") else None,
             communication_directive=CommunicationDirective.from_dict(data.get("communication_directive", {})) if data.get("communication_directive") else None,
             sentiment_analysis=SentimentAnalysis.from_dict(sentiment_analysis_dict) if sentiment_analysis_dict else None,
             voice_session_id=data.get("voice_session_id"),
             interaction_start_time=data.get("interaction_start_time", time.time()),
-            last_interaction_time=data.get("last_interaction_time")
+            last_interaction_time=data.get("last_interaction_time"),
+            current_product=None,  # Product object not serialized
+            current_product_id=data.get("current_product_id"),
+            current_product_timestamp=data.get("current_product_timestamp")
         )
         return user_state
     
@@ -430,12 +442,15 @@ class UserState:
         # Convert the UserState object to a dictionary
         return {
             "user_id": self.user_id,
+            "account": self.account,
             "conversation_exit_state": self.conversation_exit_state.to_dict() if self.conversation_exit_state else None,
             "communication_directive": self.communication_directive.to_dict() if self.communication_directive else None,
             "sentiment_analysis": self.sentiment_analysis.to_dict() if self.sentiment_analysis else None,
             "voice_session_id": self.voice_session_id,
             "interaction_start_time": self.interaction_start_time,
-            "last_interaction_time": self.last_interaction_time
+            "last_interaction_time": self.last_interaction_time,
+            "current_product_id": self.current_product_id,
+            "current_product_timestamp": self.current_product_timestamp
         }
     
     def to_json(self) -> str:

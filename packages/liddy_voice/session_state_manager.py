@@ -11,6 +11,7 @@ from .markdown_utils import obj_to_markdown
 from liddy_voice.user_manager import UserManager
 from liddy.models.product import Product
 from liddy.model import BasicChatMessage, UrlTracking, UserState, ConversationExitState, ConversationResumptionState
+from liddy.models.product_manager import ProductManager, get_product_manager
 
 
 logger = logging.getLogger("session-state-manager")
@@ -47,23 +48,37 @@ class SessionStateManager:
         return UserManager.get_user_recent_history(user_id)
 
     @classmethod
-    async def get_user_recent_products(cls, user_id: str, account:str, limit: int=25) -> List[Tuple[float, Product]]:
+    async def get_user_recent_products(cls, user_id: str, product_manager:ProductManager, limit: int=15) -> List[Tuple[float, Product]]:
         """Get user product history from Redis"""
+        if not product_manager:
+            raise ValueError("Product manager is required")
+        
         history = UserManager.get_user_recent_history(user_id)
         
         if not history or len(history) == 0:
             return []
-        products = []
+        product_identifiers: List[str] = ["product_id", "productId", "product_identifier", "productIdentifier", "id"]
+        products: List[Product] = []
         for urlTracking in history:
             if urlTracking.url:
-                base_url = urlTracking.url.split("?")[0]
-                product = await Product.find_by_url(product_url=urlTracking.url, account=account)
-                
-                if product and isinstance(product, Product):
-                    # get the details from the products database
-                    product_id = product.id
+                product = None
+                product_details = urlTracking.product_details
+                # see if we have a product id in the urlTracking
+                if product_details:
+                    product_id = None
+                    for identifier in product_identifiers:
+                        product_id = product_details.get(identifier)
+                        if product_id:
+                            break
+                    
                     if product_id:
-                        products.append((urlTracking.timestamp, product))
+                        product = await product_manager.find_product_by_id(product_id)
+                        if product and isinstance(product, Product):
+                            products.append((urlTracking.timestamp, product))
+                            # exit the loop if we have enough products
+                            if len(products) >= limit:
+                                break
+                        
         # sort the products by timestamp descending
         products.sort(key=lambda x: x[0], reverse=True)
         # limit the number of products to the specified limit
@@ -265,7 +280,7 @@ class SessionStateManager:
             return False
 
     @classmethod
-    async def build_user_state_message(cls, user_id: str, user_state:UserState=None, include_current_page: bool=True, include_communication_directive: bool=False, include_resumption:bool=True, include_product_history: bool=True, include_browsing_history:bool=False) -> str:
+    async def build_user_state_message(cls, user_state:UserState, product_manager:ProductManager, include_current_page: bool=True, include_communication_directive: bool=False, include_resumption:bool=True, include_product_history: bool=True, include_browsing_history_depth: int=0) -> str:
         """
         Build a user state message for the agent.
         
@@ -275,32 +290,35 @@ class SessionStateManager:
         Returns:
             str: The user state message
         """
-        if not user_id:
-            return ""
-
-        user_state = user_state or UserManager.get_user_state(user_id)
         if not user_state:
-            user_state: UserState = UserState(user_id=user_id)
+            raise ValueError("User state is required")
         
-        if (include_current_page or include_browsing_history):
-            history = cls.get_user_recent_history(user_id)
+        if not product_manager:
+            raise ValueError("Product manager is required")
+        
+        if (include_current_page or include_browsing_history_depth != 0):
+            # Fetch more history if browsing history is requested
+            limit = 10 if include_browsing_history_depth == -1 else max(1, include_browsing_history_depth + 1)
+            history = cls.get_user_recent_history(user_id=user_state.user_id, limit=limit)
         else:
             history = None
 
         # Add user state to context if available
         user_state_message = ""
         current_page_message = None
-        if history and len(history) > 0 and (include_current_page or include_browsing_history):
+        if history and len(history) > 0 and (include_current_page or include_browsing_history_depth != 0):
             browsing_history_message = None
             most_recent_history = history[0]
             # if there are more than 1 history, then pull the title and url from each one into the browsing history message
-            if include_browsing_history and len(history) > 1:
+            if include_browsing_history_depth != 0 and len(history) > 1:
                 browsing_history_message = "Browsing History (in descending order):\n\n"
-                for url in history:
+                # Determine how many items to include
+                items_to_include = history[1:] if include_browsing_history_depth == -1 else history[1:include_browsing_history_depth+1]
+                for url in items_to_include:
                     if url.title and url.url:
                         # grab the details if they exist
                         details = None
-                        if url.pr:
+                        if url.product_details and isinstance(url.product_details, dict):
                             if 'product' in url.product_details and 'details' in url.product_details['product']:
                                 details = url.product_details['product']['details']
                         browsing_history_message += f"- [{url.title}]({url.url}): {details if details else ''}\n\n"
@@ -316,12 +334,31 @@ class SessionStateManager:
 
                     current_page_message = f"# Current Page\n\nThe user is currently looking at the following page:\n\n[{current_title}]({current_url})\n\n"
 
-                    product = await Product.find_by_url(current_url, account=user_state.account)
+                    # First check if we have a cached product on user state
+                    if user_state.current_product and user_state.current_product_timestamp:
+                        # Check if the cached product is fresh (less than 5 minutes old)
+                        cache_age = time.time() - user_state.current_product_timestamp
+                        if cache_age < 300:  # 5 minutes
+                            product = user_state.current_product
+                            logger.info(f"📦 Using cached product for user {user_state.user_id}: {product.name} (cached {cache_age:.1f}s ago)")
+                        else:
+                            logger.info(f"⏰ Cached product is stale ({cache_age:.1f}s old), re-fetching...")
+                    
+                    # Fetch product if not cached or stale
+                    if not product:
+                        product = await product_manager.find_product_by_url(current_url)
+                        # Update cache if we found a product
+                        if product and isinstance(product, Product):
+                            user_state.current_product = product
+                            user_state.current_product_id = product.id
+                            user_state.current_product_timestamp = time.time()
+                            logger.info(f"🔄 Updated cached product for user {user_state.user_id}: {product.name}")
+                    
                     if product and isinstance(product, Product):
-                        current_page_message += f"## Current Product\n\n{Product.to_markdown(product, depth=2, obfuscatePricing=True)}\n"
+                        current_page_message += f"## Current Product\n\n{Product.to_markdown(product=product, depth=2, obfuscatePricing=True)}\n"
                 
 
-            if include_browsing_history and len(history) > 0:
+            if include_browsing_history_depth != 0 and len(history) > 0:
                 if include_current_page:
                     if len(history) > 1:
                         current_page_message += f"\n\n## Browsing History\n\n"
@@ -344,7 +381,7 @@ class SessionStateManager:
         
         if include_product_history:
             product_history_message = "# Product History\n\nThe user has looked at these products (in the following order):\n\n"
-            product_history = await cls.get_user_recent_products(user_id=user_id, account=user_state.account)
+            product_history = await cls.get_user_recent_products(user_id=user_state.user_id, product_manager=product_manager, limit=5)
             if product_history and len(product_history) > 0:
                 # get a count of each product in the history
                 products_by_count = {}
@@ -359,8 +396,8 @@ class SessionStateManager:
                                 products_by_count[product_id] = 1
                                 products_to_include.append(product)
 
-                # get the top 7 products
-                products_to_include = products_to_include[:7]
+                # get the top 5 products
+                products_to_include = products_to_include[:5]
                 # now add the top products to the message, including the count as additional information
                 for product in products_to_include:
                     count = products_by_count.get(product.id, 1)                 
@@ -379,7 +416,7 @@ class SessionStateManager:
             if user_state.conversation_exit_state:
                 conversation_exit_state = user_state.conversation_exit_state
                 # get the last interaction time and the transcript summary
-                should_resume = conversation_exit_state.use_resumption_message
+                should_resume = conversation_exit_state.resumption_message is not None and len(conversation_exit_state.resumption_message) > 0 and conversation_exit_state.resumption_message.lower() != "false"
 
                 # get the resumption flag
                 last_interaction_time = None
@@ -480,10 +517,10 @@ class SessionStateManager:
                 if product_details:
                     product = product_details.get("product")
                     if product:
-                        # get the details from the products database
-                        existing_product = await Product.find_by_id(product["id"])
-                        if existing_product:
-                            return existing_product
+                        # Return the product from history
+                        # Note: With Redis-backed products, we can't look up without account
+                        # The product in history should be sufficient for URL context
+                        return product
                 
             return most_recent_history
 
