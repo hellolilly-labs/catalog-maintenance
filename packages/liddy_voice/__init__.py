@@ -4,7 +4,7 @@ Liddy Voice Assistant Package
 Real-time voice-enabled AI assistant with brand-aware customer service capabilities.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 # Core exports
 from .voice_search_wrapper import VoiceSearchWrapper, VoiceSearchService

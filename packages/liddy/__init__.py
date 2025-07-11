@@ -8,7 +8,7 @@ Shared functionality for all Liddy services including:
 - Account and product management
 """
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 # Re-export key modules
 from .storage import get_account_storage_provider, AccountStorageProvider
