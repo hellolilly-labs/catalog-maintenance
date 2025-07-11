@@ -220,21 +220,20 @@ class SessionStateManager:
                 current_time = time.time()
                 time_difference = round(current_time - last_interaction_time)
                 # get a rough approximation of the time difference
-                time_difference_approx = "less than a minute"
                 if time_difference > 31536000:
-                    time_difference_approx = f"{time_difference / 31536000} years"
+                    time_difference_approx = f"{time_difference / 31536000:.1f} years"
                 elif time_difference > 2592000:
-                    time_difference_approx = f"{time_difference / 2592000} months"
+                    time_difference_approx = f"{time_difference / 2592000:.1f} months"
                 elif time_difference > 604800:
-                    time_difference_approx = f"{time_difference / 604800} weeks"
+                    time_difference_approx = f"{time_difference / 604800:.1f} weeks"
                 elif time_difference > 86400:
-                    time_difference_approx = f"{time_difference / 86400} days"
+                    time_difference_approx = f"{time_difference / 86400:.1f} days"
                 elif time_difference > 3600:
-                    time_difference_approx = f"{time_difference / 3600} hours"
+                    time_difference_approx = f"{time_difference / 3600:.1f} hours"
                 elif time_difference > 60:
-                    time_difference_approx = f"{time_difference / 60} minutes"
+                    time_difference_approx = f"{time_difference / 60:.0f} minutes"
                 else:
-                    time_difference_approx = f"{time_difference} seconds"
+                    time_difference_approx = "less than a minute"
 
                 # if last conversation was less than CONVERSATION_RESUMPTION_TTL seconds ago, then we can resume
                 if time_difference < CONVERSATION_RESUMPTION_TTL:
@@ -307,26 +306,10 @@ class SessionStateManager:
         user_state_message = ""
         current_page_message = None
         if history and len(history) > 0 and (include_current_page or include_browsing_history_depth != 0):
-            browsing_history_message = None
             most_recent_history = history[0]
-            # if there are more than 1 history, then pull the title and url from each one into the browsing history message
-            if include_browsing_history_depth != 0 and len(history) > 1:
-                browsing_history_message = "Browsing History (in descending order):\n\n"
-                # Determine how many items to include
-                items_to_include = history[1:] if include_browsing_history_depth == -1 else history[1:include_browsing_history_depth+1]
-                for url in items_to_include:
-                    if url.title and url.url:
-                        # grab the details if they exist
-                        details = None
-                        if url.product_details and isinstance(url.product_details, dict):
-                            if 'product' in url.product_details and 'details' in url.product_details['product']:
-                                details = url.product_details['product']['details']
-                        browsing_history_message += f"- [{url.title}]({url.url}): {details if details else ''}\n\n"
             
             if include_current_page and most_recent_history:
                 current_url = None
-                details = None
-
                 product = None
                 if most_recent_history.url:
                     current_url = most_recent_history.url
@@ -339,8 +322,13 @@ class SessionStateManager:
                         # Check if the cached product is fresh (less than 5 minutes old)
                         cache_age = time.time() - user_state.current_product_timestamp
                         if cache_age < 300:  # 5 minutes
-                            product = user_state.current_product
-                            logger.info(f"📦 Using cached product for user {user_state.user_id}: {product.name} (cached {cache_age:.1f}s ago)")
+                            # Validate that the cached product matches the current URL
+                            cached_product_url = getattr(user_state.current_product, 'productUrl', None)
+                            if cached_product_url and current_url and cached_product_url.lower() == current_url.lower():
+                                product = user_state.current_product
+                                logger.info(f"📦 Using cached product for user {user_state.user_id}: {product.name} (cached {cache_age:.1f}s ago)")
+                            else:
+                                logger.info(f"🔄 Cached product URL mismatch, re-fetching...")
                         else:
                             logger.info(f"⏰ Cached product is stale ({cache_age:.1f}s old), re-fetching...")
                     
@@ -358,35 +346,45 @@ class SessionStateManager:
                         current_page_message += f"## Current Product\n\n{Product.to_markdown(product=product, depth=2, obfuscatePricing=True)}\n"
                 
 
+            # Add browsing history if requested
             if include_browsing_history_depth != 0 and len(history) > 0:
-                if include_current_page:
-                    if len(history) > 1:
-                        current_page_message += f"\n\n## Browsing History\n\n"
-                        # append brief browsing history to the current page message
-                        for url in history[1:]:
-                            if url.title and url.url:
-                                current_page_message += f"- [{url.title}]({url.url})\n"
-                        current_page_message += "\n"
+                # Determine which items to include
+                if include_current_page and len(history) > 1:
+                    # Skip the first item (current page) if we're already showing it
+                    history_items = history[1:include_browsing_history_depth+1] if include_browsing_history_depth != -1 else history[1:]
                 else:
-                    # if we are not including the current page, then just use the browsing history message
+                    # Include all items up to the limit
+                    history_items = history[:include_browsing_history_depth] if include_browsing_history_depth != -1 else history
+                
+                if history_items:
+                    if not current_page_message:
+                        current_page_message = ""
                     current_page_message += f"\n\n## Browsing History\n\n"
-                    # append brief browsing history to the current page message
-                    for url in history:
+                    for url in history_items:
                         if url.title and url.url:
-                            current_page_message += f"- [{url.title}]({url.url})\n"
+                            # Add time context if available
+                            time_context = ""
+                            if hasattr(url, 'timestamp') and url.timestamp:
+                                time_diff = time.time() - url.timestamp
+                                if time_diff < 60:
+                                    time_context = " (just now)"
+                                elif time_diff < 3600:
+                                    time_context = f" ({int(time_diff/60)}m ago)"
+                                elif time_diff < 86400:
+                                    time_context = f" ({time_diff/3600:.1f}h ago)"
+                            current_page_message += f"- [{url.title}]({url.url}){time_context}\n"
                     current_page_message += "\n"
 
             if current_page_message:
-                user_state_message = f"\n\n{current_page_message}"
+                user_state_message = current_page_message
         
         if include_product_history:
-            product_history_message = "# Product History\n\nThe user has looked at these products (in the following order):\n\n"
             product_history = await cls.get_user_recent_products(user_id=user_state.user_id, product_manager=product_manager, limit=5)
             if product_history and len(product_history) > 0:
                 # get a count of each product in the history
                 products_by_count = {}
                 products_to_include = []
-                for timestamp, product in product_history:
+                for _, product in product_history:
                     if product and isinstance(product, Product):
                         product_id = product.id
                         if product_id:
@@ -396,15 +394,17 @@ class SessionStateManager:
                                 products_by_count[product_id] = 1
                                 products_to_include.append(product)
 
-                # get the top 5 products
-                products_to_include = products_to_include[:5]
-                # now add the top products to the message, including the count as additional information
-                for product in products_to_include:
-                    count = products_by_count.get(product.id, 1)                 
-                    count_str = f"Number of times viewed: {count}"
-                    # product_history_message += f"{Product.to_markdown(product=product, depth=1, obfuscatePricing=True, additional_info=count_str)}\n"
-                    product_history_message += f"{Product.to_markdown_short(product=product, depth=1, additional_info=count_str)}\n"
-                user_state_message += f"\n\n{product_history_message}\n"
+                # Only add the section if there are products to show
+                if products_to_include:
+                    product_history_message = "# Product History\n\nRecently viewed products:\n\n"
+                    # get the top 5 products
+                    products_to_include = products_to_include[:5]
+                    # now add the top products to the message, including the count as additional information
+                    for product in products_to_include:
+                        count = products_by_count.get(product.id, 1)                 
+                        count_str = f"Viewed {count}x" if count > 1 else ""
+                        product_history_message += f"{Product.to_markdown_short(product=product, depth=1, additional_info=count_str)}\n"
+                    user_state_message += f"\n\n{product_history_message}"
         
         if include_communication_directive:
             communication_directive = user_state.communication_directive
@@ -429,19 +429,20 @@ class SessionStateManager:
                     current_time = time.time()
                     time_difference = current_time - last_interaction_time
                     # get a rough approximation of the time difference
-                    time_difference_approx = "less than a minute"
                     if time_difference > 31536000:
-                        time_difference_approx = f"{time_difference / 31536000} years"
-                    if time_difference > 2592000:
-                        time_difference_approx = f"{time_difference / 2592000} months"
-                    if time_difference > 604800:
-                        time_difference_approx = f"{time_difference / 604800} weeks"
-                    if time_difference_approx > 86400:
-                        time_difference_approx = f"{time_difference / 86400} days"
-                    if time_difference > 3600:
-                        time_difference_approx = f"{time_difference / 3600} hours"
-                    if time_difference > 60:
-                        time_difference_approx = f"{time_difference / 60} minutes"
+                        time_difference_approx = f"{time_difference / 31536000:.1f} years"
+                    elif time_difference > 2592000:
+                        time_difference_approx = f"{time_difference / 2592000:.1f} months"
+                    elif time_difference > 604800:
+                        time_difference_approx = f"{time_difference / 604800:.1f} weeks"
+                    elif time_difference > 86400:
+                        time_difference_approx = f"{time_difference / 86400:.1f} days"
+                    elif time_difference > 3600:
+                        time_difference_approx = f"{time_difference / 3600:.1f} hours"
+                    elif time_difference > 60:
+                        time_difference_approx = f"{time_difference / 60:.0f} minutes"
+                    else:
+                        time_difference_approx = "less than a minute"
 
                     if should_resume:
                         # this should a continuation of the previous conversation
