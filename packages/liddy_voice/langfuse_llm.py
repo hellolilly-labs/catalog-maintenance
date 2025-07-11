@@ -178,6 +178,7 @@ class LangfuseLKOpenAILLM(openai.LLM):
         self,
         *,
         model: str = "gpt-4o",
+        session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         account: Optional[str] = None,
         **kwargs
@@ -201,14 +202,17 @@ class LangfuseLKOpenAILLM(openai.LLM):
         )
         
         # Create privacy-safe user hash
-        if user_id and account:
-            salt = f"observability_{account}"
-            hash_input = f"{user_id}:{account}:{salt}"
-            self.user_hash = f"usr_{hashlib.sha256(hash_input.encode()).hexdigest()[:12]}"
-            self.session_id = f"{int(time.time())}_{user_id}"
+        if session_id:
+            self.session_id = session_id
         else:
-            self.user_hash = None
-            self.session_id = None
+            if user_id and account:
+                salt = f"observability_{account}"
+                hash_input = f"{user_id}:{account}:{salt}"
+                self.user_hash = f"usr_{hashlib.sha256(hash_input.encode()).hexdigest()[:12]}"
+                self.session_id = f"{int(time.time())}_{user_id}"
+            else:
+                self.user_hash = None
+                self.session_id = None
             
         self.account = account
         
@@ -246,6 +250,7 @@ class LangfuseLKGoogleLLM(google.llm.LLM):
         self,
         *,
         model: str = "gemini-2.0-flash-001",
+        session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         account: Optional[str] = None,
         **kwargs
@@ -261,14 +266,17 @@ class LangfuseLKGoogleLLM(google.llm.LLM):
         self.langfuse = get_client()
         
         # Create privacy-safe user hash
-        if user_id and account:
-            salt = f"observability_{account}"
-            hash_input = f"{user_id}:{account}:{salt}"
-            self.user_hash = f"usr_{hashlib.sha256(hash_input.encode()).hexdigest()[:12]}"
-            self.session_id = f"{int(time.time())}_{user_id}"
+        if session_id:
+            self.session_id = session_id
         else:
-            self.user_hash = None
-            self.session_id = None
+            if user_id and account:
+                salt = f"observability_{account}"
+                hash_input = f"{user_id}:{account}:{salt}"
+                self.user_hash = f"usr_{hashlib.sha256(hash_input.encode()).hexdigest()[:12]}"
+                self.session_id = f"{int(time.time())}_{user_id}"
+            else:
+                self.user_hash = None
+                self.session_id = None
             
         self.account = account
         self.model_name = model

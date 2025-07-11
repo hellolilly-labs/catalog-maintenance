@@ -1,7 +1,9 @@
 """
 Account Configuration Cache
 
-Redis-based caching for account configurations with TTL support.
+Redis-based caching for account configurations.
+Account configs are stored permanently in Redis (no expiration) and
+are refreshed via the load-data command when needed.
 """
 
 import json
@@ -118,14 +120,14 @@ class AccountConfigCache:
             logger.warning(f"Error getting cached config for {account}: {e}")
             return None
     
-    async def set_config_async(self, account: str, config: Dict[str, Any], ttl: int = 300):
+    async def set_config_async(self, account: str, config: Dict[str, Any], ttl: int = None):
         """
-        Set account config in cache with TTL asynchronously
+        Set account config in cache permanently (no expiration)
         
         Args:
             account: Account domain name
             config: Configuration dictionary to cache
-            ttl: Time-to-live in seconds (default: 5 minutes)
+            ttl: Deprecated parameter, kept for backwards compatibility
         """
         if not self.redis:
             return
@@ -138,25 +140,24 @@ class AccountConfigCache:
             elif "agent" in config and isinstance(config["agent"], str):
                 raise ValueError(f"Invalid account config for {account}: agent must be a dict")
             
-            # Run synchronous Redis operation in thread pool to avoid blocking
+            # Set without expiration - accounts should persist
             await asyncio.to_thread(
-                self.redis.setex,
+                self.redis.set,
                 cache_key, 
-                ttl, 
                 json.dumps(config)
             )
-            logger.debug(f"Cached config for {account} (TTL: {ttl}s)")
+            logger.debug(f"Cached config for {account} (permanent)")
         except Exception as e:
             logger.warning(f"Error caching config for {account}: {e}")
     
-    def set_config(self, account: str, config: Dict[str, Any], ttl: int = 300):
+    def set_config(self, account: str, config: Dict[str, Any], ttl: int = None):
         """
-        Set account config in cache with TTL (synchronous version for backward compatibility)
+        Set account config in cache permanently (no expiration)
         
         Args:
             account: Account domain name
             config: Configuration dictionary to cache
-            ttl: Time-to-live in seconds (default: 5 minutes)
+            ttl: Deprecated parameter, kept for backwards compatibility
         """
         if not self.redis:
             return
@@ -169,12 +170,12 @@ class AccountConfigCache:
             elif "agent" in config and isinstance(config["agent"], str):
                 raise ValueError(f"Invalid account config for {account}: agent must be a dict")
             
-            self.redis.setex(
+            # Set without expiration - accounts should persist
+            self.redis.set(
                 cache_key, 
-                ttl, 
                 json.dumps(config)
             )
-            logger.debug(f"Cached config for {account} (TTL: {ttl}s)")
+            logger.debug(f"Cached config for {account} (permanent)")
         except Exception as e:
             logger.warning(f"Error caching config for {account}: {e}")
     

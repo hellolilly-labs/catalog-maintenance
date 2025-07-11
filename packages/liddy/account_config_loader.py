@@ -7,9 +7,8 @@ Provides fallback to hardcoded defaults for graceful degradation.
 
 import logging
 from typing import Optional, Dict, Any, List
-from datetime import datetime
 
-from liddy.storage import get_account_storage_provider
+from liddy.storage import get_account_storage_provider, AccountStorageProvider
 from .account_config_cache import AccountConfigCache
 
 logger = logging.getLogger(__name__)
@@ -17,7 +16,7 @@ logger = logging.getLogger(__name__)
 class AccountConfigLoader:
     """Loads account configurations with caching and fallback support"""
     
-    def __init__(self, storage_provider=None, cache=None):
+    def __init__(self, storage_provider: AccountStorageProvider = None, cache: AccountConfigCache = None):
         """
         Initialize the configuration loader
         
@@ -25,13 +24,25 @@ class AccountConfigLoader:
             storage_provider: Account storage provider (auto-detected if None)
             cache: Redis cache instance (auto-created if None)
         """
-        self.storage_provider = storage_provider or get_account_storage_provider()
+        self._storage_provider = storage_provider or None
         self.cache = cache or AccountConfigCache()
+        self.cached_accounts = {}
         self.fallback_configs = {}  # Loaded from hardcoded defaults
+    
+    async def get_storage_provider(self) -> AccountStorageProvider:
+        if self._storage_provider is None:
+            self._storage_provider = get_account_storage_provider()
+        return self._storage_provider
     
     async def get_accounts(self) -> List[str]:
         """Get all accounts from storage provider"""
-        return await self.storage_provider.get_accounts()
+        storage_provider = await self.get_storage_provider()
+        if storage_provider:
+            return await storage_provider.get_accounts()
+        else:
+            # Return empty list if storage provider is skipped
+            logger.warning("Storage provider not available, returning empty accounts list")
+            return []
     
     async def get_account_config(self, account: str) -> Optional[Dict[str, Any]]:
         """
@@ -48,35 +59,46 @@ class AccountConfigLoader:
         Returns:
             Account configuration dictionary or None
         """
-        logger.info(f"Loading configuration for account: {account}")
+        
+        if account in self.cached_accounts:
+            logger.info(f"Using cached config for {account}")
+            return self.cached_accounts[account]
         
         # Try cache first
         try:
+            logger.info(f"Loading configuration for account: {account}")
             cached_config = await self.cache.get_config_async(account)
             if cached_config:
                 logger.info(f"Loaded {account} config from cache")
+                self.cached_accounts[account] = cached_config
                 return cached_config
         except Exception as e:
             logger.warning(f"Cache error for {account}: {e}")
         
         # Try storage provider
-        try:
-            config = await self.storage_provider.get_account_config(account)
-            if config:
-                # Cache the config for future requests
-                try:
-                    await self.cache.set_config_async(account, config)
-                except Exception as e:
-                    logger.warning(f"Failed to cache config for {account}: {e}")
-                
-                logger.info(f"Loaded {account} config from storage")
-                return config
-        except Exception as e:
-            logger.error(f"Storage error for {account}: {e}")
+        storage_provider = await self.get_storage_provider()
+        if storage_provider:
+            try:
+                config = await storage_provider.get_account_config(account)
+                if config:
+                    self.cached_accounts[account] = config
+                    # Cache the config for future requests
+                    try:
+                        await self.cache.set_config_async(account, config)
+                    except Exception as e:
+                        logger.warning(f"Failed to cache config for {account}: {e}")
+                    
+                    logger.info(f"Loaded {account} config from storage")
+                    return config
+            except Exception as e:
+                logger.error(f"Storage error for {account}: {e}")
+        else:
+            logger.debug(f"Storage provider skipped for {account}")
         
         # Fallback to hardcoded config
         if account in self.fallback_configs:
             logger.warning(f"Using fallback config for {account}")
+            self.cached_accounts[account] = self.fallback_configs[account]
             return self.fallback_configs[account]
         
         logger.error(f"No configuration found for account: {account}")
@@ -105,15 +127,20 @@ class AccountConfigLoader:
             Success status
         """
         try:
-            # Save to storage
-            success = await self.storage_provider.save_account_config(account, config)
-            
-            if success:
-                # Invalidate cache so next request loads fresh data
-                await self.cache.invalidate_config_async(account)
-                logger.info(f"Saved and invalidated cache for {account}")
-            
-            return success
+            storage_provider = await self.get_storage_provider()
+            if storage_provider:
+                # Save to storage
+                success = await storage_provider.save_account_config(account, config)
+                
+                if success:
+                    # Invalidate cache so next request loads fresh data
+                    await self.cache.invalidate_config_async(account)
+                    logger.info(f"Saved and invalidated cache for {account}")
+                
+                return success
+            else:
+                logger.warning(f"Storage provider not available, cannot save config for {account}")
+                return False
         except Exception as e:
             logger.error(f"Error saving config for {account}: {e}")
             return False
@@ -184,7 +211,7 @@ class AccountConfigLoader:
         return {
             'cache_available': self.cache.is_available(),
             'fallback_configs': list(self.fallback_configs.keys()),
-            'storage_provider': type(self.storage_provider).__name__
+            'storage_provider': type(self._storage_provider).__name__ if self._storage_provider else 'None'
         }
 
 # Global instance for use throughout the application

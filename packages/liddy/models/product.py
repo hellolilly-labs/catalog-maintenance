@@ -118,7 +118,13 @@ class Product:
         self.deleted = deleted
         self.imageAnalysis = imageAnalysis if imageAnalysis is not None else []
         self.descriptor = descriptor
-        self.descriptor_metadata = DescriptorMetadata(**descriptor_metadata) if descriptor_metadata is not None else DescriptorMetadata()
+        if descriptor_metadata is not None:
+            if isinstance(descriptor_metadata, DescriptorMetadata):
+                self.descriptor_metadata = descriptor_metadata
+            else:
+                self.descriptor_metadata = DescriptorMetadata(**descriptor_metadata)
+        else:
+            self.descriptor_metadata = DescriptorMetadata()
         self.search_keywords = search_keywords if search_keywords is not None else []
         self.key_selling_points = key_selling_points if key_selling_points is not None else []
         self.voice_summary = voice_summary if voice_summary is not None else ''
@@ -168,7 +174,11 @@ class Product:
         for key, value in product.items():
             if key in valid_fields:
                 if key == 'descriptor_metadata' and value is not None:
-                    filtered_dict['descriptor_metadata'] = DescriptorMetadata.from_dict(value)
+                    # Check if it's already a DescriptorMetadata object
+                    if isinstance(value, DescriptorMetadata):
+                        filtered_dict['descriptor_metadata'] = value
+                    else:
+                        filtered_dict['descriptor_metadata'] = DescriptorMetadata.from_dict(value)
                 else:
                     filtered_dict[key] = value
         

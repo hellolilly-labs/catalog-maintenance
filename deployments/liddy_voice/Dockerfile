@@ -85,4 +85,4 @@ ENV PYTHONPATH=/home/appuser/packages:$PYTHONPATH
 EXPOSE 8081
 
 # Default command - can be overridden by docker-compose
-CMD ["sh", "-c", "python packages/liddy_voice/voice_agent.py download-files && python packages/liddy_voice/voice_agent.py start"]
+CMD ["sh", "-c", "python packages/liddy_voice/voice_agent.py download-files; python packages/liddy_voice/voice_agent.py load-data; python packages/liddy_voice/voice_agent.py start"]

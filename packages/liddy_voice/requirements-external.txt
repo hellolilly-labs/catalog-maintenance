@@ -7,17 +7,17 @@ google-generativeai>=0.8.4
 anthropic>=0.8.0
 redis>=5.0.0
 requests>=2.31.0
-livekit-agents==1.1.1
-livekit-plugins-anthropic==1.1.1
-livekit-plugins-assemblyai==1.1.1
-livekit-plugins-deepgram==1.1.1
-livekit-plugins-elevenlabs==1.1.1
-livekit-plugins-google==1.1.1
-livekit-plugins-groq==1.1.1
+livekit-agents==1.1.6
+livekit-plugins-anthropic==1.1.6
+livekit-plugins-assemblyai==1.1.6
+livekit-plugins-deepgram==1.1.6
+livekit-plugins-elevenlabs==1.1.6
+livekit-plugins-google==1.1.6
+livekit-plugins-groq==1.1.6
 livekit-plugins-noise_cancellation==0.2.3
-livekit-plugins-openai==1.1.1
-livekit-plugins-silero==1.1.1
-livekit-plugins-turn-detector==1.1.1
+livekit-plugins-openai==1.1.6
+livekit-plugins-silero==1.1.6
+livekit-plugins-turn-detector==1.1.6
 pinecone>=6.0.2
 psutil>=5.9.0
 PyPDF2>=3.0.1
@@ -28,3 +28,4 @@ faiss-cpu>=1.7.4
 # faiss-gpu>=1.7.4
 
 google-cloud-secret-manager
+langfuse>=3.0.0

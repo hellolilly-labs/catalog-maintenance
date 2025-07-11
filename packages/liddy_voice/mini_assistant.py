@@ -35,6 +35,7 @@ from typing import Optional, AsyncIterable, List
 from liddy_voice.conversation.analyzer import ConversationAnalyzer
 
 from liddy.models.product import Product
+from liddy.models.product_manager import ProductManager
 from liddy_voice.session_state_manager import SessionStateManager
 from liddy_voice.rag_unified import PineconeRAG
 from liddy.model import UserState, BasicChatMessage
@@ -67,6 +68,7 @@ class MiniAssistant(Agent):
         self._usage_collector = metrics.UsageCollector()
         self._account = account
         self.last_stt_message = None
+        self._product_manager: ProductManager = None
         
         # Create privacy-safe user identifier
         self.user_hash = self.create_user_hash(user_id, account) if user_id else None
@@ -129,6 +131,20 @@ class MiniAssistant(Agent):
         hash_input = f"{user_id}:{account}:{salt}"
         full_hash = hashlib.sha256(hash_input.encode()).hexdigest()
         return f"usr_{full_hash[:12]}"
+    
+    async def get_product_manager(self) -> ProductManager:
+        """Get the product manager, using Redis if enabled."""
+        if not self._product_manager:
+            # Check if we should use Redis
+            if os.getenv('USE_REDIS_PRODUCTS', 'true').lower() == 'true':
+                from liddy.models.redis_product_manager import get_redis_product_manager
+                self._product_manager = await get_redis_product_manager(account=self._account)
+                logger.info(f"Using Redis-backed ProductManager for {self._account}")
+            else:
+                # Original in-memory approach
+                from liddy.models.product_manager import get_product_manager
+                self._product_manager = await get_product_manager(account=self._account)
+        return self._product_manager
 
     async def on_exit(self) -> None:
         print("on_exit")
@@ -794,8 +810,8 @@ Parameter Schema and Description:
             if not query:
                 raise ToolError("`query` is required")
         
-            # Get products
-            products = Product.get_products(account=self._account)
+            # Get products through ProductManager
+            products = await (await self.get_product_manager()).get_products()
             products_results = []
             
             account_manager = await get_account_manager(account=self._account)
@@ -886,10 +902,11 @@ Parameter Schema and Description:
         try:
             logger.info(f"display_product: {product_id}")
             
-            product = Product.find_by_id(product_id, account=self._account)
+            product = await (await self.get_product_manager()).find_product_by_id(product_id=product_id)
             
             if not product:
-                products_names_urls_ids = [(p.name, p.productUrl, p.id) for p in Product.get_products(account=self._account)]
+                products = await (await self.get_product_manager()).get_products()
+                products_names_urls_ids = [(p.name, p.productUrl, p.id) for p in products]
                 raise ToolError(f"The product ID's provided are not in the product catalog. Please provide valid product ID's. Use the `product_search` function to find a valid product ID. If at all possible, don't ask the user for the product ID, instead use the `product_search` function to find it silently and use that.\n\nValid product ID's: {json.dumps(products_names_urls_ids)}")
             
             print(f"Product URL: {product.productUrl}")

@@ -1,7 +1,7 @@
 """
-Redis Client Module
+User Manager Module
 
-Provides utility functions for interacting with Redis.
+Provides utility functions for managing user state in Redis.
 """
 
 import logging
@@ -10,84 +10,17 @@ import json
 import time
 from typing import Dict, Optional, Any, List
 
-# Import Redis library
-import redis
-from liddy.model import UserState
+# Import shared Redis client
+from liddy.redis_client import get_redis_client
+from liddy.model import UserState, UrlTracking
 
-# Configure logging first, before any functions try to use it
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Configure logging
 logger = logging.getLogger(__name__)
 
-
-# Load Redis configuration from environment variables with fallbacks
-REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
-REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
-REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
-REDIS_DB = int(os.getenv('REDIS_DB', 0))
+# Configuration from environment variables
 REDIS_PREFIX = os.getenv('REDIS_PREFIX', '')
-# REDIS_PREFIX = 'user_state:'
 REDIS_TTL = int(os.getenv('REDIS_TTL', 3600))  # 1 hour default TTL
 MEMORY_CACHE_TTL = int(os.getenv('MEMORY_CACHE_TTL', 600))  # 10 minute default TTL
-
-# Cloud provider-specific Redis configuration
-def setup_redis_connection():
-    """Setup Redis connection based on environment variables for different cloud providers"""
-    # Check for GCP Memorystore environment variables
-    if os.getenv('REDIS_HOST'):
-        return  # Already configured
-    
-    # GCP VPC connector with private IP
-    if os.getenv('MEMORYSTORE_REDIS_ENDPOINT'):
-        endpoint = os.getenv('MEMORYSTORE_REDIS_ENDPOINT')
-        if ':' in endpoint:
-            host, port = endpoint.split(':')
-            os.environ['REDIS_HOST'] = host
-            os.environ['REDIS_PORT'] = port
-        else:
-            os.environ['REDIS_HOST'] = endpoint
-            
-    # AWS ElastiCache
-    elif os.getenv('ELASTICACHE_ENDPOINT'):
-        os.environ['REDIS_HOST'] = os.getenv('ELASTICACHE_ENDPOINT')
-        
-    # Azure Cache for Redis
-    elif os.getenv('AZURE_REDIS_HOST'):
-        os.environ['REDIS_HOST'] = os.getenv('AZURE_REDIS_HOST')
-        os.environ['REDIS_PASSWORD'] = os.getenv('AZURE_REDIS_KEY')
-
-
-# Initialize Redis connection (with connection pooling)
-redis_client = None
-
-def get_redis_client() -> Optional[redis.Redis]:
-    # Call this function during startup
-    setup_redis_connection()
-    global redis_client
-    if redis_client:
-        return redis_client
-    try:
-        logger.info(f"Connecting to Redis at {REDIS_HOST}:{REDIS_PORT}")
-        # Try to connect to Redis
-        redis_client = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            password=REDIS_PASSWORD,
-            db=REDIS_DB,
-            decode_responses=True,  # Automatically decode responses to strings
-            socket_timeout=5,  # 5 second timeout
-            socket_connect_timeout=5
-        )
-        # Test the connection
-        redis_client.ping()
-        logger.info(f"Connected to Redis at {REDIS_HOST}:{REDIS_PORT}")
-    except (redis.ConnectionError, redis.TimeoutError) as e:
-        logger.warning(f"Redis connection failed: {e}. Falling back to in-memory cache only.")
-        redis_client = None
-
-    return redis_client
 
 
 # User state management functions
@@ -203,16 +136,38 @@ def get_user_latest_conversation(user_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def get_user_recent_history(user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+#   async getUserUrlTrackings(userId: string): Promise<UrlTrackingDto[]> {
+#     if (this.inMemoryMode) {
+#       const key = `user_state:${userId}:recent_history`;
+#       const url_trackings = this.memoryStorage[key] || [];
+#       return url_trackings || [];
+#     }
+#     if (!this.client) {
+#       this.logger.warn('Redis not available, returning empty URL tracking');
+#       return [];
+#     }
+#     try {
+#       const key = `user_state:${userId}:recent_history`;
+#       const data = await this.client.get(key);
+#       if (data) {
+#         return JSON.parse(data);
+#       }
+#       return [];
+#     } catch (error) {
+#       this.logger.error(`Error getting user URL tracking: ${error.message}`);
+#       return [];
+#     }
+#   }
+def get_user_recent_history(user_id: str, limit: int = 10) -> List[UrlTracking]:
     """Get user's recent conversation history"""
     client = get_redis_client()
     if not client:
         return []
     
     try:
-        key = f"{REDIS_PREFIX}user_history:{user_id}"
+        key = f"{REDIS_PREFIX}user_state:{user_id}:recent_history"
         history = client.lrange(key, 0, limit - 1)
-        return [json.loads(item) for item in history]
+        return [UrlTracking.from_json(json.loads(item)) for item in history]
     except Exception as e:
         logger.error(f"Error getting user history: {e}")
         return []

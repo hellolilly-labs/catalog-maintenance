@@ -107,17 +107,18 @@ class ChatAgent(Agent):
         # Streaming delegation state
         self._pending_delegation = None
         
-        # Pre-warm the LLM in background thread (non-blocking)
-        import threading
-        def prewarm_in_thread():
-            try:
-                asyncio.run(self._prewarm_llm())
-            except Exception as e:
-                logger.debug(f"ChatAgent: Pre-warming failed in thread: {e}")
-        
-        threading.Thread(target=prewarm_in_thread, daemon=True).start()
+        # Pre-warm the LLM in background (non-blocking)
+        # Note: Removed threading approach to avoid event loop issues
+        # Prewarming should be initiated from an async context instead
+        self._prewarm_task = None
         
         logger.info(f"ChatAgent initialized with knowledge bases: base={len(self._base_knowledge)}, brand={len(self._brand_knowledge)}, product={len(self._product_search_knowledge)}")
+    
+    async def start_prewarm(self) -> None:
+        """Start prewarming in the background when in an async context."""
+        if self._prewarm_task is None:
+            self._prewarm_task = asyncio.create_task(self._prewarm_llm())
+            logger.debug("ChatAgent: Started LLM prewarming task")
 
     async def _prewarm_llm(self) -> None:
         """

@@ -14,6 +14,7 @@ class LlmService:
   def fetch_model_service_from_model(
     model_name: str,
     account: str,
+    session_id: Optional[str] = None,
     user: Optional[str] = None,
     model_use: Optional[str] = None,
     parallel_tool_calls: Optional[bool] = False,
@@ -30,7 +31,7 @@ class LlmService:
       # Check if Langfuse observability should be enabled for Google models
       if (os.getenv("LANGFUSE_SECRET_KEY") and 
           os.getenv("LANGFUSE_PUBLIC_KEY") and 
-          user and account):
+          account):
         try:
           # Use Langfuse-enhanced Google LLM for automatic observability
           logger.info(f"Using Langfuse-enhanced Google LLM for model: {model_name}")
@@ -40,13 +41,15 @@ class LlmService:
               model=model_name, 
               user_id=user,
               account=account,
+              session_id=session_id,
               # thinking_config={"thinking_budget": 1250}
             )
           else:
             return LangfuseLKGoogleLLM(
               model=model_name, 
               user_id=user,
-              account=account
+              account=account,
+              session_id=session_id,
             )
         except Exception as e:
           logger.warning(f"Failed to initialize Langfuse Google LLM, falling back to regular Google LLM: {e}")
@@ -76,13 +79,14 @@ class LlmService:
         try:
           # Use Langfuse-enhanced LLM for automatic observability
           logger.info(f"Using Langfuse-enhanced LLM for model: {model_name}")
-          if parallel_tool_calls:
+          if parallel_tool_calls and False:
             return LangfuseLKOpenAILLM(
               model=model_name, 
               user_id=user,
               account=account,
               parallel_tool_calls=parallel_tool_calls,
               metadata=metadata,
+              session_id=session_id,
             )
           else:
             return LangfuseLKOpenAILLM(
@@ -91,19 +95,20 @@ class LlmService:
               account=account,
               # store=model_name=="gpt-4.1" or True, 
               metadata=metadata,
+              session_id=session_id,
             )
         except Exception as e:
           logger.warning(f"Failed to initialize Langfuse LLM, falling back to regular OpenAI: {e}")
           # Fallback to regular OpenAI LLM
           # return openai.llm.LLM(model=model_name, store=model_name=="gpt-4.1" or True, user=user, metadata=metadata)
-          if parallel_tool_calls:
+          if parallel_tool_calls and False:
             return openai.llm.LLM(model=model_name, parallel_tool_calls=parallel_tool_calls, user=user, metadata=metadata)
           else:
             return openai.llm.LLM(model=model_name, user=user, metadata=metadata)
       else:
         # Use regular OpenAI LLM (no observability or missing credentials)
         # return openai.llm.LLM(model=model_name, store=model_name=="gpt-4.1" or True, user=user, metadata=metadata)
-        if parallel_tool_calls:
+        if parallel_tool_calls and False:
           return openai.llm.LLM(model=model_name, parallel_tool_calls=parallel_tool_calls, user=user, metadata=metadata)
         else:
           return openai.llm.LLM(model=model_name, user=user, metadata=metadata)
@@ -143,6 +148,10 @@ class LlmService:
                       analysis_content += chunk.delta.content
               elif hasattr(chunk, "choices") and chunk.choices[0].delta.content:
                   analysis_content += chunk.choices[0].delta.content
+      except Exception as e:
+          import traceback
+          traceback.print_exc()
+          logger.error(f"Error in chat_wrapper: {e}")
       finally:
           await analysis_stream.aclose()
 

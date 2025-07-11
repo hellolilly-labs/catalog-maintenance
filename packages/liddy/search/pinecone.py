@@ -413,9 +413,8 @@ class PineconeRAG(BaseRAG):
                         model_to_use = self.config["rerank_model"]
                     
                     # Limit documents sent to reranker for efficiency
-                    # max_rerank_docs = min(len(results), 10)  # Reduced from 15
-                    # results_to_rerank = results[:max_rerank_docs]
-                    results_to_rerank = results
+                    max_rerank_docs = min(len(results), top_k)  # Respect top_k limit
+                    results_to_rerank = results[:max_rerank_docs]
                     
                     reranked = await self._rerank_results(query=query, results=results_to_rerank, top_k=top_k, top_n=top_n, rerank_model=model_to_use)
                     

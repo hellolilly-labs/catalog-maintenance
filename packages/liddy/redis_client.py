@@ -14,11 +14,7 @@ from typing import Dict, Optional, Any, List
 # Import Redis library
 import redis
 
-# Configure logging first, before any functions try to use it
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Get logger for this module
 logger = logging.getLogger(__name__)
 
 

@@ -359,10 +359,13 @@ class WorkflowStateManager:
         """Sync wrapper for get_brand_info"""
         import asyncio
         try:
-            loop = asyncio.get_event_loop()
-            return loop.run_until_complete(self.get_brand_info(brand_domain))
+            # Try to get the running loop
+            loop = asyncio.get_running_loop()
+            # If we're here, we're already in an async context
+            # This shouldn't be called from async code - use await instead
+            raise RuntimeError("get_brand_info_sync should not be called from async code. Use 'await get_brand_info()' instead.")
         except RuntimeError:
-            # No event loop running, create a new one
+            # No event loop running, safe to create a new one
             return asyncio.run(self.get_brand_info(brand_domain))
     
     async def get_brand_state(self, brand_domain: str) -> WorkflowState:

@@ -594,7 +594,7 @@ async def entrypoint(ctx: JobContext):
                 
                 # Get product using smart extraction (no fallback to URL lookup for performance)
                 product_manager: ProductManager = await agent.get_product_manager()
-                product = await product_manager.find_product_from_url_smart(most_recent_history.url, fallback_to_url_lookup=False)
+                product = await product_manager.find_product_from_url_smart(url=most_recent_history.url, fallback_to_url_lookup=False)
                 
                 if product and isinstance(product, Product):
                     speech_instructions += f"\n\nAs a reference, the user is currently looking at the following product. However, be sure to welcome the user and ask them how you can help them!\n\n{Product.to_markdown(product=product, depth=0, obfuscatePricing=True)}\n\n"

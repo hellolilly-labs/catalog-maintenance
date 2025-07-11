@@ -12,7 +12,7 @@ import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
-from .storage import get_account_storage_provider
+from liddy.storage import get_account_storage_provider
 
 logger = logging.getLogger(__name__)
 

@@ -204,28 +204,24 @@ class AccountPromptManager:
             return self._cached_account_config
         
         try:
-            # Run async call in current event loop or create new one
+            # Check if we're in an async context
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # If we're in an async context and no cached config, use hardcoded values
-                    # The config should be preloaded via load_account_config_async()
-                    if not self._cached_account_config:
-                        logger.debug(f"Using hardcoded personality config for {self.account} (async context)")
-                    return None
-                else:
-                    config = loop.run_until_complete(self.account_config_loader.get_account_config(self.account))
-            except RuntimeError:
-                # No event loop, create one
-                config = asyncio.run(self.account_config_loader.get_account_config(self.account))
-            
-            if config:
-                self._cached_account_config = config
-                logger.info(f"Loaded personality config for {self.account}")
-                return config
-            else:
-                logger.info(f"No account config found for {self.account}, using fallback")
+                loop = asyncio.get_running_loop()
+                # We're in an async context - don't try to load synchronously
+                # The config should be preloaded via load_account_config_async()
+                logger.debug(f"In async context for {self.account} - config should be preloaded")
                 return None
+            except RuntimeError:
+                # No running event loop - safe to use asyncio.run()
+                config = asyncio.run(self.account_config_loader.get_account_config(self.account))
+                
+                if config:
+                    self._cached_account_config = config
+                    logger.info(f"Loaded personality config for {self.account}")
+                    return config
+                else:
+                    logger.info(f"No account config found for {self.account}, using fallback")
+                    return None
                 
         except Exception as e:
             logger.warning(f"Error loading account config for {self.account}: {e}, using fallback")
