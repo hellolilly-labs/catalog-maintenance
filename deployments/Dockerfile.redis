@@ -1,0 +1,35 @@
+# Example Dockerfile with Redis product loading
+FROM python:3.12-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements and install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install redis
+
+# Copy application code
+COPY packages/ ./packages/
+COPY run/ ./run/
+COPY scripts/ ./scripts/
+
+# Make scripts executable
+RUN chmod +x scripts/*.sh
+
+# Environment variables (can be overridden at runtime)
+ENV PYTHONPATH=/app/packages:$PYTHONPATH
+ENV USE_REDIS_PRODUCTS=true
+ENV REDIS_URL=redis://redis:6379
+ENV REDIS_PRODUCT_TTL=86400
+
+# Use our entrypoint script
+ENTRYPOINT ["./scripts/docker_entrypoint.sh"]
+
+# Default command runs the voice agent
+CMD ["python", "run/voice_agent.py"]
