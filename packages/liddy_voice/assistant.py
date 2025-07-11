@@ -1494,9 +1494,9 @@ Parameter Schema and Description:
         context: RunContext[UserState],
         query: Optional[str] = None,
         product_id: Optional[str] = None,
-        acknowledgement_message: str = "Let me search for that",
-        top_k: str | int = "auto",
         search_competitor_products: bool = False,
+        top_k: str | int = "auto",
+        acknowledgement_message: str = "Let me search for that",
     ):
 
         """Search for products in our catalog or competitor products on the web.
@@ -1509,9 +1509,9 @@ Parameter Schema and Description:
         Args:
             query: The query to use for the search. Be as descriptive and detailed as possible based on the context of the entire conversation. For example, the query "mountain bike" is not very descriptive, but "mid-range non-electric mountain bike with electronic shifting for downhill flowy trails for advanced rider" is much more descriptive. The more descriptive the query, the better the results will be. You can also use this to search for specific products by name or ID, but be sure to include as much context as possible to help narrow down the results. (optional if product_id is provided)
             product_id: Specific product ID to lookup directly (optional if query is provided)
+            search_competitor_products: If True, search the web for competitor products instead of our catalog. IMPORTANT: Only use this when explicitly asked to compare with competitors or find products from other brands. Be very explicit with the user that you are searching for competitor products when this is True.
             top_k: The number of products to return. Defaults to "auto" which means the number of products to return is determined by quality of the results. If you want to return a specific number of products, you can set this to an integer. For example, if the product search is not returning back satisfactory results, you can set this to 10 to get more results.
             acknowledgement_message: A brief, natural-language phrase the agent should say immediately while performing this search. This should be a message that is relevant to the query and the user.
-            search_competitor_products: If True, search the web for competitor products instead of our catalog. IMPORTANT: Only use this when explicitly asked to compare with competitors or find products from other brands. Be very explicit with the user that you are searching for competitor products when this is True.
         """
         # Track overall timing
         overall_start = time.time()
@@ -1593,41 +1593,41 @@ Parameter Schema and Description:
                 if not index_name:
                     raise ToolError("No RAG index found for account")
                 else:
-                # For large catalogs: Use RAG search with standardized status updates
-                logger.info(f"🔍 Using RAG search for {self._account} with index: {index_name}")
-                rag_results = await self.perform_search_with_status(
-                    search_fn=lambda q, **params: SearchService.perform_search(
-                        query=q,
-                        search_function=SearchService.search_products_rag,
-                        search_params=params,
-                        user_state=self.session.userdata,
-                        # query_enhancer=SearchService.enhance_query
-                    ),
-                    query=query,
-                    search_params={
-                        "account": self._account,
-                        "enhancer_params": {
-                            "chat_ctx": self.chat_ctx,
-                            # "product_knowledge": self._account_prompt_manager.product_search_knowledge
-                        }
-                    },
-                    status_delay=100.0
-                )
-                timing_breakdown['search_type'] = 'rag'
-                
-                # Process RAG results into product objects
-                process_start = time.time()
-                if rag_results and isinstance(rag_results, dict) and not rag_results.get("error"):
-                    logger.debug(f"Processing {len(rag_results.get('results', []))} RAG results")
-                    for result in rag_results.get("results", []):
-                        if result.get('id'):
-                            product = await (await self.get_product_manager()).find_product_by_id(product_id=result.get('id'))
-                            if product:
-                                products_results.append(product)
-                                continue
-                        if result.get('metadata'):
-                            products_results.append(Product.from_metadata(result['metadata']))
-                timing_breakdown['process_results'] = time.time() - process_start
+                    # For large catalogs: Use RAG search with standardized status updates
+                    logger.info(f"🔍 Using RAG search for {self._account} with index: {index_name}")
+                    rag_results = await self.perform_search_with_status(
+                        search_fn=lambda q, **params: SearchService.perform_search(
+                            query=q,
+                            search_function=SearchService.search_products_rag,
+                            search_params=params,
+                            user_state=self.session.userdata,
+                            # query_enhancer=SearchService.enhance_query
+                        ),
+                        query=query,
+                        search_params={
+                            "account": self._account,
+                            "enhancer_params": {
+                                "chat_ctx": self.chat_ctx,
+                                # "product_knowledge": self._account_prompt_manager.product_search_knowledge
+                            }
+                        },
+                        status_delay=100.0
+                    )
+                    timing_breakdown['search_type'] = 'rag'
+                    
+                    # Process RAG results into product objects
+                    process_start = time.time()
+                    if rag_results and isinstance(rag_results, dict) and not rag_results.get("error"):
+                        logger.debug(f"Processing {len(rag_results.get('results', []))} RAG results")
+                        for result in rag_results.get("results", []):
+                            if result.get('id'):
+                                product = await (await self.get_product_manager()).find_product_by_id(product_id=result.get('id'))
+                                if product:
+                                    products_results.append(product)
+                                    continue
+                            if result.get('metadata'):
+                                products_results.append(Product.from_metadata(result['metadata']))
+                    timing_breakdown['process_results'] = time.time() - process_start
             
             timing_breakdown['search_execution'] = time.time() - search_start
             
