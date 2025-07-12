@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "liddy_voice"
+version = "0.1.0"
+description = "Voice assistant components for Liddy AI"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "Liddy AI" },
+]
+dependencies = [
+    "liddy",
+    "livekit",
+    "livekit-agents",
+    "livekit-plugins-assemblyai",
+    "livekit-plugins-deepgram",
+    "livekit-plugins-google",
+    "livekit-plugins-silero",
+    "livekit-plugins-elevenlabs",
+    "livekit-plugins-noise-cancellation",
+    "livekit-plugins-turn-detector",
+    "aiofiles",
+    "redis",
+    "pinecone>=6.0.2",
+    "python-dotenv",
+    "google-cloud-texttospeech",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "black",
+    "flake8",
+]
+
+[tool.setuptools]
+packages = ["liddy_voice"]
+package-dir = {"liddy_voice" = "."}
+
+[project.scripts]
+liddy-voice = "liddy_voice.voice_agent:main"

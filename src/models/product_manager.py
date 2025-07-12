@@ -12,7 +12,8 @@ import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
-from .storage import get_account_storage_provider
+from src.storage import get_account_storage_provider
+from src.models.product import Product
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class ProductManager:
             account: Account domain (e.g., "specialized.com")
         """
         self.account = account
-        self._products: Optional[List[Dict[str, Any]]] = None
+        self._products: Optional[List[Product]] = None
         self._storage_provider = None
         self._last_loaded: Optional[datetime] = None
         self._loading_lock = asyncio.Lock()
@@ -64,7 +65,7 @@ class ProductManager:
         await manager.load_at_startup()
         return manager
     
-    async def get_products(self) -> List[Dict[str, Any]]:
+    async def get_products(self) -> List[Product]:
         """
         Get product catalog from memory (waits for loading if in progress).
         
@@ -75,21 +76,22 @@ class ProductManager:
             List of product dictionaries from memory
         """
         # If products are already loaded, return immediately
-        if self._products is not None:
+        if self._products is not None and len(self._products) > 0:
             return self._products
         
         # If loading is in progress, wait for it to complete
         async with self._loading_lock:
             # Check again after acquiring lock (loading might have completed)
-            if self._products is not None:
+            if self._products is not None and len(self._products) > 0:
                 return self._products
             
             # If we reach here, loading hasn't been started yet
-            # Trigger loading now
-            await self.load_at_startup()
+            # Trigger loading now - but we need to call the internal method
+            # that doesn't try to acquire the lock again
+            await self._load_products_internal()
             return self._products or []
     
-    def get_products_if_loaded(self) -> Optional[List[Dict[str, Any]]]:
+    def get_products_if_loaded(self) -> Optional[List[Product]]:
         """
         Get products immediately if already loaded, None if still loading.
         
@@ -150,7 +152,8 @@ class ProductManager:
         from .product import Product
         
         products_data = await self.get_products()
-        return [Product.from_metadata(metadata=item) for item in products_data]
+        return products_data
+        # return [Product.from_metadata(metadata=item) for item in products_data]
     
     async def get_memory_info(self) -> Dict[str, Any]:
         """
@@ -183,40 +186,50 @@ class ProductManager:
             True if products loaded successfully
         """
         async with self._loading_lock:
-            try:
-                # Try GCP storage first
-                storage_products = await self._load_from_storage()
-                if storage_products is not None:
-                    self._products = storage_products
-                    self._last_loaded = datetime.now()
-                    self._memory_size = len(json.dumps(storage_products).encode('utf-8'))
-                    
-                    logger.info(f"Loaded {len(storage_products)} products for {self.account} from GCP storage ({self._memory_size:,} bytes)")
-                    return True
-                
-                # Fallback to local files
-                local_products = await self._load_from_local_files()
-                if local_products is not None:
-                    self._products = local_products
-                    self._last_loaded = datetime.now()
-                    self._memory_size = len(json.dumps(local_products).encode('utf-8'))
-                    
-                    logger.info(f"Loaded {len(local_products)} products for {self.account} from local files ({self._memory_size:,} bytes)")
-                    return True
-                
-                # Empty list if all fails
-                logger.warning(f"No product catalog found for {self.account}, using empty list")
-                self._products = []
+            return await self._load_products_internal()
+    
+    async def _load_products_internal(self) -> bool:
+        """
+        Internal method to load products without acquiring the lock.
+        This is called from methods that already hold the lock.
+        
+        Returns:
+            True if products loaded successfully
+        """
+        try:
+            # Try GCP storage first
+            storage_products = await self._load_from_storage()
+            if storage_products is not None:
+                self._products = storage_products
                 self._last_loaded = datetime.now()
-                self._memory_size = 0
-                return False
+                self._memory_size = len(json.dumps([p.to_dict() for p in storage_products]).encode('utf-8'))
                 
-            except Exception as e:
-                logger.error(f"Error loading products for {self.account}: {e}")
-                self._products = []
+                logger.info(f"Loaded {len(storage_products)} products for {self.account} from GCP storage ({self._memory_size:,} bytes)")
+                return True
+            
+            # Fallback to local files
+            local_products = await self._load_from_local_files()
+            if local_products is not None:
+                self._products = local_products
                 self._last_loaded = datetime.now()
-                self._memory_size = 0
-                return False
+                self._memory_size = len(json.dumps([p.to_dict() for p in local_products]).encode('utf-8'))
+                
+                logger.info(f"Loaded {len(local_products)} products for {self.account} from local files ({self._memory_size:,} bytes)")
+                return True
+            
+            # Empty list if all fails
+            logger.warning(f"No product catalog found for {self.account}, using empty list")
+            self._products = []
+            self._last_loaded = datetime.now()
+            self._memory_size = 0
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error loading products for {self.account}: {e}")
+            self._products = []
+            self._last_loaded = datetime.now()
+            self._memory_size = 0
+            return False
     
     async def refresh_from_storage(self) -> bool:
         """
@@ -229,15 +242,16 @@ class ProductManager:
         """
         return await self.load_at_startup()
     
-    async def _load_from_storage(self) -> Optional[List[Dict[str, Any]]]:
+    async def _load_from_storage(self) -> Optional[List[Product]]:
         """Load products from GCP storage"""
         try:
-            return await self.storage_provider.get_product_catalog(self.account)
+            product_dicts = await self.storage_provider.get_product_catalog(self.account)
+            return [Product.from_dict(product=item) for item in product_dicts]
         except Exception as e:
             logger.debug(f"GCP storage load failed for {self.account}: {e}")
             return None
     
-    async def _load_from_local_files(self) -> Optional[List[Dict[str, Any]]]:
+    async def _load_from_local_files(self) -> Optional[List[Product]]:
         """Load products from local files as fallback"""
         try:
             import os
@@ -264,23 +278,25 @@ class ProductManager:
             logger.debug(f"Fallback load failed for {self.account}: {e}")
             return None
     
-    async def save_products(self, products: List[Dict[str, Any]]) -> bool:
+    async def save_products(self, products: List[Product]) -> bool:
         """
         Save product catalog to GCP storage and update memory.
         
         Args:
-            products: List of product dictionaries to save
+            products: List of Product objects to save
             
         Returns:
             True if save was successful
         """
         try:
-            success = await self.storage_provider.save_product_catalog(self.account, products)
+            # Convert Product objects to dictionaries for storage
+            product_dicts = [product.to_dict() for product in products]
+            success = await self.storage_provider.save_product_catalog(self.account, product_dicts)
             if success:
                 # Update memory cache
                 self._products = products
                 self._last_loaded = datetime.now()
-                self._memory_size = len(json.dumps(products).encode('utf-8'))
+                self._memory_size = len(json.dumps([p.to_dict() for p in products]).encode('utf-8'))
                 
                 logger.info(f"Saved {len(products)} products for {self.account} ({self._memory_size:,} bytes in memory)")
                 return True

@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Product Modal Template - Brand Styled</title>
+    
+    <!-- Brand-specific CSS would be loaded here -->
+    <link rel="stylesheet" href="accounts/{brand_domain}/style/style.css">
+    
+    <style>
+        /* Demo page styling */
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        
+        .demo-trigger {
+            background: var(--brand-primary, #007bff);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Product Detail Modal - Brand Styled</h1>
+    <p>This modal uses brand-specific colors and fonts while maintaining a standardized structure.</p>
+    
+    <button class="demo-trigger" onclick="showProductModal()">Show Product Modal</button>
+
+    <!-- PRODUCT MODAL STRUCTURE -->
+    <!-- This structure is standardized across all brands -->
+    <div class="product-modal-overlay" id="productModal">
+        <div class="product-modal">
+            <!-- Close Button -->
+            <button class="product-modal-close" onclick="hideProductModal()">×</button>
+            
+            <!-- Modal Content -->
+            <div class="product-modal-content">
+                <!-- Left Side: Product Images -->
+                <div class="product-images">
+                    <!-- Image Carousel -->
+                    <div class="product-image-carousel">
+                        <img src="https://via.placeholder.com/400x400/B4202D/white?text=Product+Image+1" 
+                             alt="Product Image 1" class="product-image active">
+                        <img src="https://via.placeholder.com/400x400/000000/white?text=Product+Image+2" 
+                             alt="Product Image 2" class="product-image">
+                        <img src="https://via.placeholder.com/400x400/666666/white?text=Product+Image+3" 
+                             alt="Product Image 3" class="product-image">
+                        
+                        <!-- Navigation Arrows -->
+                        <button class="image-nav prev" onclick="prevImage()">‹</button>
+                        <button class="image-nav next" onclick="nextImage()">›</button>
+                    </div>
+                    
+                    <!-- Thumbnails -->
+                    <div class="product-thumbnails">
+                        <img src="https://via.placeholder.com/60x60/B4202D/white?text=1" 
+                             alt="Thumbnail 1" class="thumbnail active" onclick="setActiveImage(0)">
+                        <img src="https://via.placeholder.com/60x60/000000/white?text=2" 
+                             alt="Thumbnail 2" class="thumbnail" onclick="setActiveImage(1)">
+                        <img src="https://via.placeholder.com/60x60/666666/white?text=3" 
+                             alt="Thumbnail 3" class="thumbnail" onclick="setActiveImage(2)">
+                    </div>
+                </div>
+                
+                <!-- Right Side: Product Details -->
+                <div class="product-details">
+                    <!-- Product Name -->
+                    <h1 class="product-name">Specialized Tarmac SL7</h1>
+                    
+                    <!-- Product Price -->
+                    <div class="product-price">$3,200.00</div>
+                    
+                    <!-- Product Description -->
+                    <div class="product-description">
+                        The Tarmac SL7 is the ultimate race bike, engineered for pure speed and efficiency. 
+                        With its aerodynamic frame design and premium carbon construction, this bike delivers 
+                        uncompromising performance for serious cyclists.
+                    </div>
+                    
+                    <!-- Product Variants -->
+                    <div class="product-variants">
+                        <!-- Size Variant -->
+                        <div class="variant-group">
+                            <div class="variant-label">Size</div>
+                            <div class="variant-options">
+                                <div class="variant-option" onclick="selectVariant(this)">52cm</div>
+                                <div class="variant-option selected" onclick="selectVariant(this)">54cm</div>
+                                <div class="variant-option" onclick="selectVariant(this)">56cm</div>
+                                <div class="variant-option" onclick="selectVariant(this)">58cm</div>
+                            </div>
+                        </div>
+                        
+                        <!-- Color Variant -->
+                        <div class="variant-group">
+                            <div class="variant-label">Color</div>
+                            <div class="variant-options">
+                                <div class="variant-option selected" onclick="selectVariant(this)">Red</div>
+                                <div class="variant-option" onclick="selectVariant(this)">Black</div>
+                                <div class="variant-option" onclick="selectVariant(this)">White</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Quantity Selector -->
+                    <div class="quantity-selector">
+                        <div class="quantity-label">Quantity</div>
+                        <div class="quantity-controls">
+                            <button class="quantity-btn" onclick="changeQuantity(-1)">-</button>
+                            <input type="number" class="quantity-input" value="1" min="1" max="10" id="quantity">
+                            <button class="quantity-btn" onclick="changeQuantity(1)">+</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Add to Cart Button -->
+                    <button class="add-to-cart-btn" onclick="addToCart()">Add to Cart</button>
+                    
+                    <!-- Product Features -->
+                    <div class="product-features">
+                        <div class="features-title">Key Features</div>
+                        <ul class="features-list">
+                            <li class="feature-item">FACT 12r Carbon Frame</li>
+                            <li class="feature-item">Shimano Ultegra Di2 Groupset</li>
+                            <li class="feature-item">Roval CLX 50 Wheelset</li>
+                            <li class="feature-item">S-Works Power Saddle</li>
+                            <li class="feature-item">Professional Bike Fit Included</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentImageIndex = 0;
+        const images = document.querySelectorAll('.product-image');
+        const thumbnails = document.querySelectorAll('.thumbnail');
+
+        function showProductModal() {
+            document.getElementById('productModal').classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function hideProductModal() {
+            document.getElementById('productModal').classList.remove('active');
+            document.body.style.overflow = 'auto';
+        }
+
+        function setActiveImage(index) {
+            // Remove active class from all images and thumbnails
+            images.forEach(img => img.classList.remove('active'));
+            thumbnails.forEach(thumb => thumb.classList.remove('active'));
+            
+            // Add active class to selected image and thumbnail
+            images[index].classList.add('active');
+            thumbnails[index].classList.add('active');
+            currentImageIndex = index;
+        }
+
+        function nextImage() {
+            const nextIndex = (currentImageIndex + 1) % images.length;
+            setActiveImage(nextIndex);
+        }
+
+        function prevImage() {
+            const prevIndex = (currentImageIndex - 1 + images.length) % images.length;
+            setActiveImage(prevIndex);
+        }
+
+        function selectVariant(element) {
+            // Remove selected class from siblings
+            const siblings = element.parentNode.querySelectorAll('.variant-option');
+            siblings.forEach(sibling => sibling.classList.remove('selected'));
+            
+            // Add selected class to clicked element
+            element.classList.add('selected');
+        }
+
+        function changeQuantity(delta) {
+            const quantityInput = document.getElementById('quantity');
+            const currentValue = parseInt(quantityInput.value) || 1;
+            const newValue = Math.max(1, Math.min(10, currentValue + delta));
+            quantityInput.value = newValue;
+        }
+
+        function addToCart() {
+            const button = document.querySelector('.add-to-cart-btn');
+            const quantity = document.getElementById('quantity').value;
+            
+            // Add loading state
+            button.classList.add('loading');
+            button.textContent = 'Adding...';
+            
+            // Simulate API call
+            setTimeout(() => {
+                button.classList.remove('loading');
+                button.textContent = 'Added to Cart!';
+                
+                // Reset after 2 seconds
+                setTimeout(() => {
+                    button.textContent = 'Add to Cart';
+                }, 2000);
+            }, 1000);
+        }
+
+        // Close modal when clicking outside
+        document.getElementById('productModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                hideProductModal();
+            }
+        });
+
+        // Close modal with Escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                hideProductModal();
+            }
+        });
+    </script>
+</body>
+</html>

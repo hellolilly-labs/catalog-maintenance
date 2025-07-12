@@ -1,5 +1,54 @@
 import json
 from typing import List
+import inspect
+from datetime import datetime
+
+class DescriptorMetadata:
+    def __init__(self,
+                 generated_at: str | None = None,
+                 model: str | None = None,
+                 quality_score: float | None = None,
+                 quality_score_reasoning: str | None = None,
+                 generator_version: str | None = None,
+                 mode: str | None = None,
+                 uses_research: bool | None = None):
+        self.generated_at = generated_at if generated_at else datetime.now().isoformat()
+        self.model = model
+        self.quality_score = quality_score
+        self.quality_score_reasoning = quality_score_reasoning
+        self.generator_version = generator_version
+        self.mode = mode
+        self.uses_research = uses_research
+    
+    def to_dict(self) -> dict:
+        return {
+            "generated_at": self.generated_at,
+            "model": self.model,
+            "quality_score": self.quality_score,
+            "quality_score_reasoning": self.quality_score_reasoning,
+            "generator_version": self.generator_version,
+            "mode": self.mode,
+            "uses_research": self.uses_research
+        }
+
+    def to_json(self) -> str:
+        """Convert the object to a JSON string"""
+        return json.dumps(self.to_dict(), indent=2)
+
+    @classmethod
+    def from_dict(cls, metadata: dict) -> "DescriptorMetadata":
+        # Get the valid field names from the DescriptorMetadata constructor
+        sig = inspect.signature(cls.__init__)
+        valid_fields = list(sig.parameters.keys())
+        
+        # Filter the input dict to only include valid fields
+        filtered_dict = {}
+        for key, value in metadata.items():
+            if key in valid_fields:
+                filtered_dict[key] = value
+        
+        # Create the DescriptorMetadata instance with only valid fields
+        return cls(**filtered_dict)
 
 class Product:
     def __init__(self, 
@@ -24,8 +73,12 @@ class Product:
                  deleted: str | None = None,
                  imageAnalysis: list[dict] | None = None,
                  descriptor: str | None = None,
-                 relatedProducts: list[dict] | None = None,
-                 productReference: dict | None = None):
+                 descriptor_metadata: DescriptorMetadata | None = None,
+                 search_keywords: list[str] | None = None,
+                 key_selling_points: list[str] | None = None,
+                 voice_summary: str | None = None,
+                 product_labels: dict | None = None,
+                 year: str | None = None):
         self.id = id
         self.name = name
         self.categories = categories if categories is not None else []
@@ -62,8 +115,12 @@ class Product:
         self.deleted = deleted
         self.imageAnalysis = imageAnalysis if imageAnalysis is not None else []
         self.descriptor = descriptor
-        self.relatedProducts = relatedProducts if relatedProducts is not None else []
-        self.productReference = productReference if productReference is not None else None
+        self.descriptor_metadata = descriptor_metadata if descriptor_metadata is not None else DescriptorMetadata()
+        self.search_keywords = search_keywords if search_keywords is not None else []
+        self.key_selling_points = key_selling_points if key_selling_points is not None else []
+        self.voice_summary = voice_summary if voice_summary is not None else ''
+        self.product_labels = product_labels if product_labels is not None else {}
+        self.year = year
     
     def to_dict(self) -> dict:
         # Convert the object to a dictionary
@@ -89,9 +146,31 @@ class Product:
             "deleted": self.deleted,
             "imageAnalysis": self.imageAnalysis,
             "descriptor": self.descriptor,
-            "relatedProducts": self.relatedProducts,
-            "productReference": self.productReference
+            "descriptor_metadata": self.descriptor_metadata.to_dict() if self.descriptor_metadata else None,
+            "search_keywords": self.search_keywords,
+            "key_selling_points": self.key_selling_points,
+            "voice_summary": self.voice_summary,
+            "product_labels": self.product_labels,
+            "year": self.year
         }
+    
+    @classmethod
+    def from_dict(cls, product: dict) -> "Product":
+        # Get the valid field names from the Product constructor
+        sig = inspect.signature(cls.__init__)
+        valid_fields = list(sig.parameters.keys())
+        
+        # Filter the input dict to only include valid fields
+        filtered_dict = {}
+        for key, value in product.items():
+            if key in valid_fields:
+                if key == 'descriptor_metadata' and value is not None:
+                    filtered_dict['descriptor_metadata'] = DescriptorMetadata.from_dict(value)
+                else:
+                    filtered_dict[key] = value
+        
+        # Create the Product instance with only valid fields
+        return cls(**filtered_dict)
 
     @classmethod
     def from_metadata(cls, metadata: dict) -> "Product":
@@ -395,13 +474,9 @@ class Product:
         # });
         return markdown
     
-
-    
-
-    
-
-    
-
+    def to_json(self) -> str:
+        """Convert the object to a JSON string"""
+        return json.dumps(self.to_dict(), indent=2)
 
 # if __name__ == "__main__":
 #     # Example usage

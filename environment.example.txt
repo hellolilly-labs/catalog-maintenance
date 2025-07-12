@@ -1,0 +1,162 @@
+# ============================================================================
+# Catalog Maintenance Configuration Template
+# Copy this file to .env and fill in your actual values
+# ============================================================================
+
+# ============================================================================
+# Environment Configuration
+# ============================================================================
+
+# Environment: dev, staging, prod
+ENV=dev
+
+# Enable debug mode (true/false)
+DEBUG=true
+
+# Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+LOG_LEVEL=INFO
+
+# ============================================================================
+# Storage Configuration
+# ============================================================================
+
+# GCP storage buckets
+GCP_BUCKET_PROD=liddy-account-documents
+GCP_BUCKET_DEV=liddy-account-documents-dev
+
+# GCP Project ID (required in production)
+# GCP_PROJECT_ID=your-gcp-project-id
+
+# Path to GCP service account credentials (optional, can use default auth)
+# GCP_CREDENTIALS_PATH=/path/to/service-account.json
+
+# ============================================================================
+# LLM Service Configuration
+# ============================================================================
+
+# OpenAI Configuration (Primary LLM Provider)
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_DEFAULT_MODEL=o3
+OPENAI_MAX_TOKENS=4000
+
+# Anthropic Configuration (Future)
+# ANTHROPIC_API_KEY=your-anthropic-api-key
+
+# Google Gemini Configuration (Future)
+# GEMINI_API_KEY=your-gemini-api-key
+
+# ============================================================================
+# Langfuse Configuration (Prompt Management)
+# ============================================================================
+
+LANGFUSE_PUBLIC_KEY=your-langfuse-public-key
+LANGFUSE_SECRET_KEY=your-langfuse-secret-key
+LANGFUSE_HOST=https://cloud.langfuse.com
+
+# ============================================================================
+# Web Search Configuration (Future Brand Research)
+# ============================================================================
+
+# Tavily API for AI-optimized web search
+# TAVILY_API_KEY=your-tavily-api-key
+
+# Google Search API (backup search provider)
+# GOOGLE_SEARCH_API_KEY=your-google-search-api-key
+# GOOGLE_SEARCH_ENGINE_ID=your-custom-search-engine-id
+
+# ============================================================================
+# Research Configuration (Future Brand Research)
+# ============================================================================
+
+# Research time bounds (in seconds)
+MIN_RESEARCH_TIME=300    # 5 minutes minimum
+MAX_RESEARCH_TIME=900    # 15 minutes maximum
+
+# Research quality requirements
+MIN_SOURCES=15           # Minimum sources per research phase
+MIN_LLM_ROUNDS=5         # Minimum LLM analysis rounds
+DEFAULT_QUALITY_THRESHOLD=8.0  # Quality threshold (1-10 scale)
+
+# ============================================================================
+# Phase Cache Durations (in days)
+# ============================================================================
+
+# Brand research phase cache durations
+CACHE_DURATION_FOUNDATION=180        # 6 months (very stable)
+CACHE_DURATION_MARKET_POSITIONING=120  # 4 months (moderate change)
+CACHE_DURATION_PRODUCT_STYLE=60      # 2 months (frequent for fashion)
+CACHE_DURATION_CUSTOMER_CULTURAL=90  # 3 months (evolves with society)
+CACHE_DURATION_VOICE_MESSAGING=30    # 1 month (changes with campaigns)
+CACHE_DURATION_LINEARITY_ANALYSIS=120  # 4 months (semi-stable patterns)
+CACHE_DURATION_RAG_OPTIMIZATION=180  # 6 months (rarely needs updates)
+
+# Note: AI persona generation has manual refresh only (no auto-refresh)
+
+# ============================================================================
+# Pinecone Configuration (Vector Storage)
+# ============================================================================
+
+PINECONE_API_KEY=your-pinecone-api-key
+PINECONE_ENVIRONMENT=us-west1-gcp
+PINECONE_DEFAULT_DIMENSION=1536  # OpenAI embedding dimension
+PINECONE_INDEX_METRIC=cosine     # cosine, euclidean, or dotproduct
+
+# ============================================================================
+# Performance Configuration
+# ============================================================================
+
+# Parallel processing limits
+MAX_PARALLEL_BRANDS=5      # Maximum brands to process simultaneously
+MAX_CONCURRENT_BATCHES=5   # Maximum concurrent ingestion batches
+
+# Timeout settings (in seconds)
+DEFAULT_TIMEOUT=120        # General operation timeout
+INGESTION_TIMEOUT=1800     # Product ingestion timeout (30 minutes)
+INDEX_CREATION_TIMEOUT=300 # Pinecone index creation timeout (5 minutes)
+
+# Batch processing settings
+INGESTION_BATCH_SIZE=20    # Products per ingestion batch
+MAX_BATCH_SIZE=100         # Maximum batch size for operations
+RETRY_ATTEMPTS=3           # Number of retry attempts for failed operations
+UPSERT_RETRY_ATTEMPTS=3    # Retry attempts for vector upsert operations
+
+# Logging configuration
+ENABLE_PROGRESS_LOGGING=true  # Enable progress logging for long operations
+
+# ============================================================================
+# Optional: Future Features
+# ============================================================================
+
+# Replicate API for AI persona avatar generation (Future)
+# REPLICATE_API_TOKEN=your-replicate-api-token
+
+# ============================================================================
+# Development vs Production Examples
+# ============================================================================
+
+# Development Configuration Example:
+# ENV=dev
+# DEBUG=true
+# LOG_LEVEL=DEBUG
+# GCP_BUCKET_DEV=my-dev-bucket
+# INGESTION_BATCH_SIZE=5    # Smaller batches for testing
+
+# Production Configuration Example:
+# ENV=prod
+# DEBUG=false
+# LOG_LEVEL=INFO
+# GCP_PROJECT_ID=my-production-project
+# GCP_BUCKET_PROD=my-production-bucket
+# MAX_PARALLEL_BRANDS=10    # Higher throughput
+# INGESTION_BATCH_SIZE=50   # Larger batches for efficiency
+
+# ============================================================================
+# Quick Start Minimal Configuration
+# ============================================================================
+
+# For quick testing, you only need:
+# ENV=dev
+# OPENAI_API_KEY=your-openai-key
+# LANGFUSE_PUBLIC_KEY=your-langfuse-public-key
+# LANGFUSE_SECRET_KEY=your-langfuse-secret-key
+# PINECONE_API_KEY=your-pinecone-key 
