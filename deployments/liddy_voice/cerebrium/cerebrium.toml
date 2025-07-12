@@ -1,0 +1,40 @@
+[cerebrium.deployment]
+name = "liddy-voice-agent"
+python_version = "3.12"
+include_files = ["../../../packages/**/*", "../../../run/**/*", ".env"]
+exclude_files = ["**/__pycache__", "**/*.pyc", "**/test_*", "**/tests/*"]
+
+[cerebrium.hardware]
+cpu = 4
+memory = 16
+gpu = "NVIDIA_A10G"
+storage = 10
+
+[cerebrium.scaling]
+min_replicas = 0
+max_replicas = 10
+cooldown = 60
+
+[cerebrium.build]
+# Dependencies will be installed from requirements.txt
+# We'll create a specific requirements file for Cerebrium deployment
+requirements_file = "requirements-cerebrium.txt"
+
+[cerebrium.env]
+# Environment variables (values will be set via Cerebrium CLI or dashboard)
+OPENAI_API_KEY = ""
+ANTHROPIC_API_KEY = ""
+LIVEKIT_API_KEY = ""
+LIVEKIT_API_SECRET = ""
+LIVEKIT_URL = ""
+PINECONE_API_KEY = ""
+REDIS_HOST = ""
+REDIS_PORT = "6379"
+REDIS_PASSWORD = ""
+ELEVENLABS_API_KEY = ""
+DEEPGRAM_API_KEY = ""
+ASSEMBLYAI_API_KEY = ""
+GOOGLE_APPLICATION_CREDENTIALS = ""
+LANGFUSE_PUBLIC_KEY = ""
+LANGFUSE_SECRET_KEY = ""
+CEREBRAS_API_KEY = ""
