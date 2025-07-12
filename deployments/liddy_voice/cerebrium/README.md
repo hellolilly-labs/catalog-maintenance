@@ -2,6 +2,8 @@
 
 This directory contains the configuration and scripts needed to deploy the Liddy Voice Agent on Cerebrium's serverless GPU infrastructure.
 
+> **Note**: For detailed integration planning including GCP connectivity solutions, see [CEREBRIUM_INTEGRATION_PLAN.md](./CEREBRIUM_INTEGRATION_PLAN.md)
+
 ## Overview
 
 Cerebrium provides serverless GPU infrastructure with:
