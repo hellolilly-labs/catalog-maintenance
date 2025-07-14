@@ -158,7 +158,7 @@ class SessionStateManager:
                 conversation_exit_state.exit_reason = reason
                 conversation_exit_state.last_interaction_time = time.time()
             
-            return save_user_state(user_state)
+            return UserManager.save_user_state(user_state)
         except Exception as e:
             logger.error(f"Error storing conversation exit reason: {e}")
             return False
@@ -279,7 +279,7 @@ class SessionStateManager:
             return False
 
     @classmethod
-    async def build_user_state_message(cls, user_state:UserState, product_manager:ProductManager, include_current_page: bool=True, include_communication_directive: bool=False, include_resumption:bool=True, include_product_history: bool=True, include_browsing_history_depth: int=0) -> str:
+    async def build_user_state_message(cls, user_state:UserState, product_manager:ProductManager, include_communication_directive: bool=False, include_resumption:bool=True, include_product_history: bool=True, include_browsing_history_depth: int=5) -> str:
         """
         Build a user state message for the agent.
         
@@ -295,94 +295,92 @@ class SessionStateManager:
         if not product_manager:
             raise ValueError("Product manager is required")
         
-        if (include_current_page or include_browsing_history_depth != 0):
-            # Fetch more history if browsing history is requested
+        # the user_state should already have the current_url and current_title and current_product
+        current_url = user_state.current_url
+        current_url_title = user_state.current_url_title
+        current_url_timestamp = user_state.current_url_timestamp
+        current_product = user_state.current_product
+        current_product_id = user_state.current_product_id
+        current_product_timestamp = user_state.current_product_timestamp
+        recent_product_ids = user_state.recent_product_ids or []
+        
+        # Only fetch history if include_browsing_history_depth > 1,
+        # or if current_url from user_state is empty (None or "")
+        if (include_browsing_history_depth > 1) or (not user_state.current_url):
             limit = 10 if include_browsing_history_depth == -1 else max(1, include_browsing_history_depth + 1)
             history = cls.get_user_recent_history(user_id=user_state.user_id, limit=limit)
+            if history and len(history) > 0:
+                most_recent_history = history[0]
+                if most_recent_history and not current_url:
+                    current_url = most_recent_history.url
+                    current_url_title = most_recent_history.title if most_recent_history.title else current_url
+                    current_url_timestamp = most_recent_history.timestamp
+                    current_product = await product_manager.find_product_from_url_smart(url=current_url, fallback_to_url_lookup=False)
+                    if current_product and isinstance(current_product, Product):
+                        current_product_id = current_product.id
+                        current_product_timestamp = time.time()
+                        user_state.current_product = current_product
+                        user_state.current_product_id = current_product_id
+                        user_state.current_product_timestamp = current_product_timestamp
+                    else:
+                        current_product = None
+                        current_product_id = None
+                        current_product_timestamp = None
+                        user_state.current_product = None
+                        user_state.current_product_id = None
+                        user_state.current_product_timestamp = None
         else:
             history = None
+            if current_url:
+                history = [UrlTracking(url=current_url, title=current_url_title, timestamp=current_product_timestamp)]
 
         # Add user state to context if available
         user_state_message = ""
         current_page_message = None
-        if history and len(history) > 0 and (include_current_page or include_browsing_history_depth != 0):
-            most_recent_history = history[0]
+        
+        if include_browsing_history_depth >= 1:
+            if current_url:
+                current_page_message = f"# Current Page\n\nThe user is currently looking at the following page:\n\n[{current_url_title or current_url}]({current_url})\n\n"
+                if current_product and isinstance(current_product, Product):
+                    current_page_message += f"## Current Product\n\n"
+                    current_page_message += f"*Note: The user is viewing this product - you already have its details below*\n\n"
+                    current_page_message += f"{Product.to_markdown(product=current_product, depth=2, obfuscatePricing=True)}\n"
+        
+        if history and len(history) > 1 and include_browsing_history_depth > 1:
+            # Determine which items to include
+            # Skip the first item (current page) if we're already showing it
+            history_items = history[1:include_browsing_history_depth+1] if include_browsing_history_depth != -1 else history[1:]
             
-            if include_current_page and most_recent_history:
-                current_url = None
-                product = None
-                if most_recent_history.url:
-                    current_url = most_recent_history.url
-                    current_title = most_recent_history.title if most_recent_history.title else current_url
+            if history_items:
+                if not current_page_message:
+                    current_page_message = ""
+                current_page_message += f"\n\n## Browsing History\n\n"
+                for url in history_items:
+                    if url.url:
+                        # Add time context if available
+                        time_context = ""
+                        if hasattr(url, 'timestamp') and url.timestamp:
+                            time_diff = time.time() - url.timestamp
+                            if time_diff < 60:
+                                time_context = " (just now)"
+                            elif time_diff < 3600:
+                                time_context = f" ({int(time_diff/60)}m ago)"
+                            elif time_diff < 86400:
+                                time_context = f" ({time_diff/3600:.1f}h ago)"
+                        current_page_message += f"- [{url.title or url.url}]({url.url}){time_context}\n"
+                current_page_message += "\n"
 
-                    current_page_message = f"# Current Page\n\nThe user is currently looking at the following page:\n\n[{current_title}]({current_url})\n\n"
-
-                    # First check if we have a cached product on user state
-                    if user_state.current_product and user_state.current_product_timestamp:
-                        # Check if the cached product is fresh (less than 5 minutes old)
-                        cache_age = time.time() - user_state.current_product_timestamp
-                        if cache_age < 300:  # 5 minutes
-                            # Validate that the cached product matches the current URL
-                            cached_product_url = getattr(user_state.current_product, 'productUrl', None)
-                            if cached_product_url and current_url and cached_product_url.lower() == current_url.lower():
-                                product = user_state.current_product
-                                logger.info(f"📦 Using cached product for user {user_state.user_id}: {product.name} (cached {cache_age:.1f}s ago)")
-                            else:
-                                logger.info(f"🔄 Cached product URL mismatch, re-fetching...")
-                        else:
-                            logger.info(f"⏰ Cached product is stale ({cache_age:.1f}s old), re-fetching...")
-                    
-                    # Fetch product if not cached or stale
-                    if not product:
-                        # Use smart extraction with fallback to URL lookup
-                        product = await product_manager.find_product_from_url_smart(current_url, fallback_to_url_lookup=True)
-                        # Update cache if we found a product
-                        if product and isinstance(product, Product):
-                            user_state.current_product = product
-                            user_state.current_product_id = product.id
-                            user_state.current_product_timestamp = time.time()
-                            logger.info(f"🔄 Updated cached product for user {user_state.user_id}: {product.name}")
-                    
-                    if product and isinstance(product, Product):
-                        current_page_message += f"## Current Product\n\n"
-                        current_page_message += f"*Note: The user is viewing this product - you already have its details below*\n\n"
-                        current_page_message += f"{Product.to_markdown(product=product, depth=2, obfuscatePricing=True)}\n"
-                
-
-            # Add browsing history if requested
-            if include_browsing_history_depth != 0 and len(history) > 0:
-                # Determine which items to include
-                if include_current_page and len(history) > 1:
-                    # Skip the first item (current page) if we're already showing it
-                    history_items = history[1:include_browsing_history_depth+1] if include_browsing_history_depth != -1 else history[1:]
-                else:
-                    # Include all items up to the limit
-                    history_items = history[:include_browsing_history_depth] if include_browsing_history_depth != -1 else history
-                
-                if history_items:
-                    if not current_page_message:
-                        current_page_message = ""
-                    current_page_message += f"\n\n## Browsing History\n\n"
-                    for url in history_items:
-                        if url.title and url.url:
-                            # Add time context if available
-                            time_context = ""
-                            if hasattr(url, 'timestamp') and url.timestamp:
-                                time_diff = time.time() - url.timestamp
-                                if time_diff < 60:
-                                    time_context = " (just now)"
-                                elif time_diff < 3600:
-                                    time_context = f" ({int(time_diff/60)}m ago)"
-                                elif time_diff < 86400:
-                                    time_context = f" ({time_diff/3600:.1f}h ago)"
-                            current_page_message += f"- [{url.title}]({url.url}){time_context}\n"
-                    current_page_message += "\n"
-
-            if current_page_message:
-                user_state_message = current_page_message
+        if current_page_message:
+            user_state_message = current_page_message
         
         if include_product_history:
-            product_history = await cls.get_user_recent_products(user_id=user_state.user_id, product_manager=product_manager, limit=5)
+            product_history = []
+            
+            for timestamp, product_id in recent_product_ids:   
+                product = await product_manager.find_product_by_id(product_id)
+                if product and isinstance(product, Product):
+                    product_history.append((timestamp, product))
+            
             if product_history and len(product_history) > 0:
                 # get a count of each product in the history
                 products_by_count = {}

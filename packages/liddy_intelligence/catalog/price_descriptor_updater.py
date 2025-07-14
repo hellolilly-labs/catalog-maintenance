@@ -66,6 +66,7 @@ class PriceDescriptorUpdater:
             
         # Extract actual price values from the product
         prices_to_check = []
+        has_correct_sale_price = True
         
         if product.originalPrice:
             # Clean the price string and add variations
@@ -80,11 +81,25 @@ class PriceDescriptorUpdater:
             prices_to_check.append(sale_price)
             if sale_price.startswith('$'):
                 prices_to_check.append(sale_price[1:])
+            
+            # IMPORTANT: Check that the descriptor has the CURRENT sale price
+            # If it mentions a different sale price, it's outdated
+            has_correct_sale_price = sale_price in descriptor or sale_price[1:] in descriptor
+            
+            # Also check for outdated pricing - if original price is mentioned as the current price
+            # when there's a sale, the descriptor is outdated
+            if "price: " + original_price in descriptor.lower() or "priced at " + original_price in descriptor.lower():
+                return False  # Outdated - shows original price as current when on sale
         
-        # Check if any of the actual prices appear in the descriptor
-        for price in prices_to_check:
-            if price in descriptor:
-                return True
+        # For non-sale items, just check if the price is there
+        if not (product.salePrice and product.salePrice != product.originalPrice):
+            # Check if any of the actual prices appear in the descriptor
+            for price in prices_to_check:
+                if price in descriptor:
+                    return True
+        else:
+            # For sale items, must have the sale price
+            return has_correct_sale_price
                 
         # Also check for the price range string (e.g., "$1,000 - $2,000")
         price_range = Product.get_product_price_range_string(product)
