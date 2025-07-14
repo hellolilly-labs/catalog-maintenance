@@ -6,6 +6,7 @@ import re
 import random
 import time
 import psutil
+from datetime import datetime
 
 from langfuse import observe, get_client
 
@@ -134,6 +135,21 @@ class Assistant(Agent):
         self._security_config = get_voice_security_config()
         self._conversation_id = f"{self._session_id}_{self._user_id}"
         
+        # Initialize Langfuse client and create trace for the conversation
+        self._langfuse_client = get_client()
+        self._langfuse_trace = self._langfuse_client.trace(
+            name="voice_conversation",
+            session_id=ctx.room.name,  # Use room name as session ID for LiveKit correlation
+            user_id=self._user_id,
+            metadata={
+                "account": account,
+                "security_mode": "voice_only" if self._security_config.is_voice_only_mode() else "mixed",
+                "room_name": ctx.room.name,
+                "conversation_id": self._conversation_id,
+                "primary_model": primary_model
+            }
+        )
+        
         # Log security mode
         if self._security_config.is_voice_only_mode():
             logger.info(f"🔒 Assistant initialized with Voice-Only Security Mode for conversation {self._conversation_id}")
@@ -158,6 +174,7 @@ class Assistant(Agent):
         total_startup_time = time.time() - startup_start
         self._startup_timing = {
             "account": account,
+            "start_time": datetime.now(),
             "timing": {
                 "prompt_init": prompt_init_time,
                 "product_setup": product_setup_time, 
@@ -327,6 +344,7 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
         print("on_exit")
         
         # End security conversation tracking
+        security_stats = {}
         try:
             security_summary = await self._security_manager.end_conversation(self._conversation_id)
             logger.info(f"🛡️ Security summary for conversation {self._conversation_id}:")
@@ -334,8 +352,59 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
             logger.info(f"  - Echo rate: {security_summary['echo_stats'].get('echo_rate', 0):.1%}")
             if self._security_config.is_voice_only_mode() and security_summary.get('voice_stats'):
                 logger.info(f"  - Voice anomalies: {security_summary['voice_stats'].get('suspicious_patterns', 0)}")
+            
+            # Prepare security stats for Langfuse
+            security_stats = {
+                "echo_detections": security_summary['echo_stats'].get('total_echoes', 0),
+                "echo_rate": security_summary['echo_stats'].get('echo_rate', 0),
+                "max_consecutive_echoes": security_summary['echo_stats'].get('max_consecutive', 0),
+                "security_mode": "voice_only" if self._security_config.is_voice_only_mode() else "mixed"
+            }
+            
+            if self._security_config.is_voice_only_mode() and security_summary.get('voice_stats'):
+                security_stats["voice_anomalies"] = security_summary['voice_stats'].get('suspicious_patterns', 0)
+                security_stats["total_voice_inputs"] = security_summary['voice_stats'].get('total_inputs', 0)
+            
+            # Get comprehensive security dashboard
+            dashboard = self._security_manager.get_security_dashboard()
+            security_stats.update({
+                "total_inputs": dashboard['input_security']['total_inputs'],
+                "blocked_inputs": dashboard['input_security']['blocked_inputs'],
+                "sanitized_inputs": dashboard['input_security']['sanitized_inputs'],
+                "interventions": dashboard['echo_monitoring']['interventions'],
+                "health_status": dashboard['health_status']['status'],
+                "overall_health_score": dashboard['health_status']['overall_score']
+            })
+            
         except Exception as e:
             logger.error(f"Error ending security conversation: {e}")
+            security_stats = {"error": str(e)}
+        
+        # Update Langfuse trace with final stats
+        try:
+            if hasattr(self, '_langfuse_trace'):
+                # Get conversation duration
+                conversation_duration = (datetime.now() - self._startup_timing.get('start_time', datetime.now())).total_seconds()
+                
+                self._langfuse_trace.update(
+                    output={
+                        "security_summary": security_stats,
+                        "conversation_duration_seconds": conversation_duration,
+                        "startup_timing": self._startup_timing.get('timing', {}),
+                        "final_status": "completed"
+                    },
+                    metadata={
+                        **self._langfuse_trace.metadata,
+                        "security_stats": security_stats,
+                        "completed_at": datetime.now().isoformat()
+                    }
+                )
+                
+                # Flush to ensure data is sent
+                self._langfuse_client.flush()
+                logger.info(f"📊 Langfuse trace updated for conversation {self._conversation_id}")
+        except Exception as e:
+            logger.error(f"Error updating Langfuse trace: {e}")
         
         await super().on_exit()
         self._ctx.delete_room()
@@ -1037,6 +1106,17 @@ Parameter Schema and Description:
         model_settings: ModelSettings,
     ) -> AsyncIterable[llm.ChatChunk]:
         """Process the text with the LLM model"""
+        
+        # Create a span linked to our conversation trace
+        if hasattr(self, '_langfuse_trace'):
+            span = self._langfuse_trace.span(
+                name="llm_turn",
+                metadata={
+                    "user_id": self._user_id,
+                    "has_tools": len(tools) > 0,
+                    "model": self._primary_model
+                }
+            )
 
         # self._prompt_manager.update_current_generation()
         if not self._instructions_loaded:
