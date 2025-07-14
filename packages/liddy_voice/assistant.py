@@ -139,12 +139,12 @@ class Assistant(Agent):
         self._langfuse_client = get_client()
         self._langfuse_trace = self._langfuse_client.trace(
             name="voice_conversation",
-            session_id=ctx.room.name,  # Use room name as session ID for LiveKit correlation
+            session_id=self._session_id,  # This equals ctx.room.name for LiveKit correlation
             user_id=self._user_id,
             metadata={
                 "account": account,
                 "security_mode": "voice_only" if self._security_config.is_voice_only_mode() else "mixed",
-                "room_name": ctx.room.name,
+                "session_id": self._session_id,
                 "conversation_id": self._conversation_id,
                 "primary_model": primary_model
             }
