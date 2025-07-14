@@ -45,6 +45,11 @@ from liddy_voice.voice_search_wrapper import VoiceSearchService as SearchService
 from livekit.rtc import RemoteParticipant
 from liddy_voice.account_prompt_manager import get_account_prompt_manager, AccountPromptManager
 from liddy.models.product_manager import ProductManager
+from liddy_voice.security import (
+    RuntimeSecurityManager, 
+    get_voice_security_config,
+    create_security_manager
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +126,23 @@ class Assistant(Agent):
         # self.cerebras_client = None
         llm_setup_time = time.time() - llm_setup_start
         
-        # Phase 6: Background task setup
+        # Phase 6: Security manager setup
+        security_setup_start = time.time()
+        
+        # Initialize security components
+        self._security_manager: RuntimeSecurityManager = create_security_manager()
+        self._security_config = get_voice_security_config()
+        self._conversation_id = f"{self._session_id}_{self._user_id}"
+        
+        # Log security mode
+        if self._security_config.is_voice_only_mode():
+            logger.info(f"🔒 Assistant initialized with Voice-Only Security Mode for conversation {self._conversation_id}")
+        else:
+            logger.info(f"💬 Assistant initialized with Mixed Mode security for conversation {self._conversation_id}")
+        
+        security_setup_time = time.time() - security_setup_start
+        
+        # Phase 7: Background task setup
         bg_task_start = time.time()
         
         self.inactivity_task: asyncio.Task | None = None
@@ -142,6 +163,7 @@ class Assistant(Agent):
                 "product_setup": product_setup_time, 
                 "agent_init": agent_init_time,
                 "attr_setup": attr_setup_time,
+                "security_setup": security_setup_time,
                 "llm_setup": llm_setup_time,
                 "bg_task_setup": bg_task_time,
                 "total_startup": total_startup_time
@@ -303,6 +325,18 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
 
     async def on_exit(self) -> None:
         print("on_exit")
+        
+        # End security conversation tracking
+        try:
+            security_summary = await self._security_manager.end_conversation(self._conversation_id)
+            logger.info(f"🛡️ Security summary for conversation {self._conversation_id}:")
+            logger.info(f"  - Echo detections: {security_summary['echo_stats'].get('total_echoes', 0)}")
+            logger.info(f"  - Echo rate: {security_summary['echo_stats'].get('echo_rate', 0):.1%}")
+            if self._security_config.is_voice_only_mode() and security_summary.get('voice_stats'):
+                logger.info(f"  - Voice anomalies: {security_summary['voice_stats'].get('suspicious_patterns', 0)}")
+        except Exception as e:
+            logger.error(f"Error ending security conversation: {e}")
+        
         await super().on_exit()
         self._ctx.delete_room()
         # self._ctx.shutdown()
@@ -1015,6 +1049,51 @@ Parameter Schema and Description:
         for m in chat_ctx.items:
             if hasattr(m, "role") and m.role == "user":
                 last_user_message = m
+        
+        # Security check for user input
+        if last_user_message and hasattr(last_user_message, "text_content") and last_user_message.text_content:
+            # Extract conversation context for security check
+            conversation_context = []
+            for msg in chat_ctx.items[-10:]:  # Last 10 messages for context
+                if hasattr(msg, "role") and hasattr(msg, "text_content"):
+                    conversation_context.append({
+                        "role": msg.role,
+                        "content": msg.text_content or ""
+                    })
+            
+            # Process through security manager
+            security_result = await self._security_manager.process_conversation_turn(
+                user_input=last_user_message.text_content,
+                conversation_context=conversation_context,
+                conversation_id=self._conversation_id
+            )
+            
+            # Handle security action
+            if not security_result['proceed']:
+                # Input was blocked - create a safe response
+                logger.warning(f"🚫 Security blocked input: {security_result['reason']}")
+                # Generate a polite refusal message
+                blocked_response = llm.ChatMessage(
+                    role="assistant",
+                    content=["I'm sorry, but I can't process that request. Let me help you find the perfect product for your needs instead. What type of product are you looking for?"]
+                )
+                chat_ctx.items.append(blocked_response)
+                # Yield empty chunks to end the turn gracefully
+                return
+            
+            # If input was sanitized, update the last message with sanitized content
+            if security_result['security_action'] == 'sanitized' and security_result['sanitized_input']:
+                logger.info(f"🧹 Input sanitized for safety (risk: {security_result.get('risk_score', 0):.2f})")
+                # Create a new sanitized message
+                last_user_message = llm.ChatMessage(
+                    role="user",
+                    content=[security_result['sanitized_input']]
+                )
+                # Update the chat context with sanitized input
+                for i in range(len(chat_ctx.items) - 1, -1, -1):
+                    if hasattr(chat_ctx.items[i], "role") and chat_ctx.items[i].role == "user":
+                        chat_ctx.items[i] = last_user_message
+                        break
         if last_user_message and (not self.last_stt_message or last_user_message.id != self.last_stt_message.id):
             try:
                 json.loads(last_user_message.text_content)
@@ -1055,13 +1134,21 @@ Parameter Schema and Description:
         activity_llm = activity.llm
 
         conn_options = activity.session.conn_options.llm_conn_options
+        
+        # Track AI response for echo monitoring
+        ai_response_chunks = []
+        user_input_text = last_user_message.text_content if last_user_message and hasattr(last_user_message, "text_content") else ""
+        
+        # Get echo monitoring results if available
+        echo_adjustments = {}
+        
         async with activity_llm.chat(
             chat_ctx=chat_ctx, 
             tools=tools, 
             tool_choice=tool_choice, 
             conn_options=conn_options,
             extra_kwargs={
-                "presence_penalty": 0.8,
+                "presence_penalty": echo_adjustments.get('presence_penalty', 0.8),
                 # "frequency_penalty": 0.0,
                 # "max_completion_tokens": 4096,
                 # "temperature": 0.2,
@@ -1069,7 +1156,34 @@ Parameter Schema and Description:
             }
         ) as stream:
             async for chunk in stream:
+                # Collect text chunks for echo monitoring
+                if hasattr(chunk, 'delta') and hasattr(chunk.delta, 'content') and chunk.delta.content:
+                    ai_response_chunks.append(chunk.delta.content)
+                
                 yield chunk
+            
+            # After response is complete, check for echo behavior
+            if user_input_text and ai_response_chunks:
+                ai_response_text = ''.join(ai_response_chunks)
+                
+                # Check for echo behavior
+                echo_result = await self._security_manager.process_response(
+                    user_input=user_input_text,
+                    ai_response=ai_response_text,
+                    conversation_id=self._conversation_id
+                )
+                
+                if echo_result['echo_detected']:
+                    logger.warning(f"🔄 Echo detected (score: {echo_result.get('echo_score', 0):.2f})")
+                    
+                    # If intervention is required, log it
+                    if not echo_result['allow_response']:
+                        logger.error(f"🚨 Echo intervention triggered: {echo_result.get('intervention_message', 'Multiple echo responses detected')}")
+                        # Note: Response has already been sent, but we can adjust future responses
+                    
+                    # Store LLM adjustments for next turn if provided
+                    if echo_result.get('llm_adjustments'):
+                        echo_adjustments.update(echo_result['llm_adjustments'])
 
     async def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
         """Process text-to-speech with timeout handling for responsiveness"""
@@ -1312,6 +1426,11 @@ Parameter Schema and Description:
     async def on_room_disconnected(self, ev):
         logger.debug(f"Room disconnected: {ev}")
         try:
+            # End security conversation if not already ended
+            if hasattr(self, '_security_manager') and hasattr(self, '_conversation_id'):
+                await self._security_manager.end_conversation(self._conversation_id)
+                logger.info(f"🛡️ Security conversation ended for {self._conversation_id}")
+            
             # Clean up background tasks to prevent async warnings
             await self.cleanup()
         except Exception as e:
