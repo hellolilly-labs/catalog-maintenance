@@ -150,24 +150,8 @@ class RedisProductLoader:
                 mapping=metadata
             )
             
-            # Set expiration (24 hours by default)
-            ttl = int(os.getenv('REDIS_PRODUCT_TTL', 86400))
-            if ttl > 0:
-                # Set TTL on all keys for this account
-                cursor = 0
-                while True:
-                    cursor, keys = await self.redis_client.scan(
-                        cursor, 
-                        match=f"*:{account}:*",
-                        count=100
-                    )
-                    if keys:
-                        pipe = self.redis_client.pipeline()
-                        for key in keys:
-                            pipe.expire(key, ttl)
-                        await pipe.execute()
-                    if cursor == 0:
-                        break
+            # Products and accounts are stored permanently in Redis (no expiration)
+            # They are refreshed only when explicitly reloaded
             
             load_time = time.time() - start_time
             logger.info(f"✅ Loaded {product_count} products for {account} in {load_time:.2f}s" + 
@@ -175,7 +159,7 @@ class RedisProductLoader:
             
             # Log memory usage estimate
             memory_mb = metadata['size_bytes'] / (1024 * 1024)
-            logger.info(f"   Memory usage: ~{memory_mb:.1f} MB in Redis")
+            logger.info(f"   Memory usage: ~{memory_mb:.1f} MB in Redis (stored permanently)")
             
             return product_count
             

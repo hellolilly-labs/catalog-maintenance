@@ -163,7 +163,7 @@ class Assistant(Agent):
         if total_startup_time > 1.0:
             logger.warning(f"⚠️ Assistant startup exceeded 1s target: {total_startup_time:.3f}s for {account}")
 
-    async def start_deferred_prewarming(self):
+    async def start_deferred_prewarming(self, prewarm_llm: bool=True):
         """
         Start all prewarming tasks after the greeting has been sent.
         This allows the user to hear something immediately while the system warms up.
@@ -225,9 +225,9 @@ class Assistant(Agent):
         # self._background_tasks.append(self._word_boost_task)
         
         # Start comprehensive prewarming
-        prewarm_llm_task = asyncio.create_task(self._prewarm_llm())
-        # prewarm_task = asyncio.create_task(self._prewarm_all_systems())
-        self._background_tasks.append(prewarm_llm_task)
+        if prewarm_llm:
+            prewarm_llm_task = asyncio.create_task(self._prewarm_llm())
+            self._background_tasks.append(prewarm_llm_task)
         
         logger.info(f"✅ Deferred prewarming tasks started for {self._account}")
 
@@ -1041,7 +1041,35 @@ Parameter Schema and Description:
         #     # Create a background task for intent detection
         #     asyncio.create_task(self._process_intent_detection(last_user_message, chat_ctx))
 
-        return Agent.default.llm_node(self, chat_ctx=chat_ctx, tools=tools, model_settings=model_settings)
+        # return Agent.default.llm_node(self, chat_ctx=chat_ctx, tools=tools, model_settings=model_settings)
+        # from livekit.agents.llm import NOT_GIVEN
+
+        """Default implementation for `Agent.llm_node`"""
+        activity = self._get_activity_or_raise()
+        assert activity.llm is not None, "llm_node called but no LLM node is available"
+        assert isinstance(activity.llm, llm.LLM), (
+            "llm_node should only be used with LLM (non-multimodal/realtime APIs) nodes"
+        )
+
+        tool_choice = model_settings.tool_choice if model_settings else None
+        activity_llm = activity.llm
+
+        conn_options = activity.session.conn_options.llm_conn_options
+        async with activity_llm.chat(
+            chat_ctx=chat_ctx, 
+            tools=tools, 
+            tool_choice=tool_choice, 
+            conn_options=conn_options,
+            extra_kwargs={
+                "presence_penalty": 0.8,
+                # "frequency_penalty": 0.0,
+                # "max_completion_tokens": 4096,
+                # "temperature": 0.2,
+                # "top_p": 1.0,
+            }
+        ) as stream:
+            async for chunk in stream:
+                yield chunk
 
     async def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
         """Process text-to-speech with timeout handling for responsiveness"""
@@ -1111,7 +1139,7 @@ Parameter Schema and Description:
     async def _update_user_state_prompt(self) -> None:
         try:
             if self.session.userdata:
-                user_state_message = await SessionStateManager.build_user_state_message(user_state=self.session.userdata, product_manager=await self.get_product_manager(), include_current_page=True, include_product_history=True)
+                user_state_message = await SessionStateManager.build_user_state_message(user_state=self.session.userdata, product_manager=await self.get_product_manager(), include_product_history=True)
                 if user_state_message:
                     chat_ctx = self.chat_ctx.copy()
                     new_items = []
@@ -1312,6 +1340,70 @@ Parameter Schema and Description:
     async def on_participant_metadata_changed(self, ev):
         # logger.debug(f"Participant metadata changed: {ev}")
         pass
+
+    async def on_data_received(self, payload: bytes, participant: Participant, kind: str, topic: str):
+        logger.info(f"Data received: {payload}, {participant}, {kind}, {topic}")
+        try:
+            event = json.loads(payload.decode())
+            if event['event'] == 'page-navigate':
+                current_url = event['url']
+                current_title = event.get("title", "")
+                # Update the user state with the new URL
+                user_state: UserState = self.session.userdata
+                
+                if user_state and current_url:
+                    product = await self._product_manager.find_product_from_url_smart(current_url, fallback_to_url_lookup=False)
+                    if product and isinstance(product, Product):
+                        if user_state.current_product_id == product.id:
+                            logger.info(f"Current product is already the same, skipping update")
+                            return
+                        
+                        user_state.current_product = product
+                        user_state.current_product_id = product.id
+                        user_state.current_product_timestamp = time.time()
+                        user_state.current_url = current_url
+                        user_state.current_url_title = current_title
+                        user_state.current_url_timestamp = time.time()
+                        user_state.recent_product_ids = user_state.recent_product_ids or []
+                        # Check if product.id is already in the list
+                        product_already_exists = any(pid == product.id for _, pid in user_state.recent_product_ids)
+                        if not product_already_exists:
+                            user_state.recent_product_ids.insert(0, (time.time(), product.id))
+                            while len(user_state.recent_product_ids) > 10:
+                                user_state.recent_product_ids.pop()
+                        else:
+                            # move the product to the front of the list
+                            # remove the product from the list
+                            for i, (_, product_id) in enumerate(user_state.recent_product_ids):
+                                if product_id == product.id:
+                                    user_state.recent_product_ids.pop(i)
+                                    break
+                            # add the product to the front of the list
+                            user_state.recent_product_ids.insert(0, (time.time(), product.id))
+                            
+                        logger.info(f"Updated user state with current product: {product.name}")
+                    ## TODO: Handle "category" pages, etc.
+                    else:
+                        if not user_state.current_product_id and not user_state.current_url == current_url and not user_state.current_url_timestamp and time.time() - user_state.current_url_timestamp > 10:
+                            logger.info(f"No current product, skipping update")
+                            return
+                        
+                        user_state.current_product = None
+                        user_state.current_product_id = None
+                        user_state.current_product_timestamp = None
+                        user_state.current_url = current_url
+                        user_state.current_url_title = current_title
+                        user_state.current_url_timestamp = time.time()
+                        logger.info(f"Removed current product from user state")
+                    UserManager.save_user_state(user_state)
+                
+                # # Update agent context or ask follow-up
+                # await self.session.generate_reply(
+                #     instructions=f"I see you moved to {event['url']}. What would you like to do next?"
+                # )
+        except Exception as e:
+            logger.error(f"Error in on_data_received: {e}")
+            pass
     
     async def generate_and_say_wait_phrase_if_needed(self, use_fast_llm: bool = False, say_filler: bool = True, force: bool=False) -> Optional[str]:
         try:
@@ -1494,6 +1586,7 @@ Parameter Schema and Description:
         context: RunContext[UserState],
         query: Optional[str] = None,
         product_id: Optional[str] = None,
+        in_stock_only: Optional[bool] = None,
         search_competitor_products: bool = False,
         top_k: str | int = "auto",
         acknowledgement_message: str = "Let me search for that",
@@ -1509,6 +1602,7 @@ Parameter Schema and Description:
         Args:
             query: The query to use for the search. Be as descriptive and detailed as possible based on the context of the entire conversation. For example, the query "mountain bike" is not very descriptive, but "mid-range non-electric mountain bike with electronic shifting for downhill flowy trails for advanced rider" is much more descriptive. The more descriptive the query, the better the results will be. You can also use this to search for specific products by name or ID, but be sure to include as much context as possible to help narrow down the results. (optional if product_id is provided)
             product_id: Specific product ID to lookup directly (optional if query is provided)
+            in_stock_only: If True, only return products that are in stock.
             search_competitor_products: If True, search the web for competitor products instead of our catalog. IMPORTANT: Only use this when explicitly asked to compare with competitors or find products from other brands. Be very explicit with the user that you are searching for competitor products when this is True.
             top_k: The number of products to return. Defaults to "auto" which means the number of products to return is determined by quality of the results. If you want to return a specific number of products, you can set this to an integer. For example, if the product search is not returning back satisfactory results, you can set this to 10 to get more results.
             acknowledgement_message: A brief, natural-language phrase the agent should say immediately while performing this search. This should be a message that is relevant to the query and the user.
@@ -1741,6 +1835,8 @@ Parameter Schema and Description:
         You typically would first use `product_search` to find the product ID, and then use this function to display the product.
         
         NOTE: If you know the user is already looking at that product (because they are viewing that page or something like that) then you can silently call this function without necessarily saying anything to the user. This is useful for showing the product details without interrupting the conversation. Otherwise, it is generally a good idea to say something to the user to let them know you are displaying the product.
+        
+        **IMPORTANT**: If you are displaying a product that the user is already looking at, then do NOT display it again. This is critical because random unexpected displays of products can be very confusing and annoying to the user.
         
         Args:
             product_id: The ID of the product to display. Required.

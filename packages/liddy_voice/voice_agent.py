@@ -19,7 +19,7 @@ from livekit.agents import (
     AutoSubscribe,
     RoomInputOptions,
     ChatContext,
-    BackgroundAudioPlayer, AudioConfig, BuiltinAudioClip
+    BackgroundAudioPlayer, AudioConfig, BuiltinAudioClip,
 )
 from livekit.plugins import (
     assemblyai,
@@ -29,6 +29,7 @@ from livekit.plugins import (
     elevenlabs, 
     noise_cancellation
 )
+from livekit import rtc
 from google.cloud import texttospeech
 from liddy_voice.llm_service import LlmService
 from liddy_voice.assistant import Assistant
@@ -493,12 +494,6 @@ async def entrypoint(ctx: JobContext):
     account_manager = await get_account_manager(account)
     timing_breakdown['account_manager'] = time.monotonic() - account_mgr_start
     
-    # 2. Pre-fetch greeting early to minimize latency
-    greeting_fetch_start = time.monotonic()
-    welcome_message = await account_manager.get_default_greeting()
-    timing_breakdown['greeting_prefetch'] = time.monotonic() - greeting_fetch_start
-    logger.info(f"📝 Pre-fetched greeting: {welcome_message[:50]}...")
-    
     # 3. Create agent session with all models
     session_start = time.monotonic()
     session = await setup_agent(account=account, room_name=ctx.room.name)
@@ -553,6 +548,11 @@ async def entrypoint(ctx: JobContext):
     user_state_start = time.monotonic()
     metadata_str = participant.metadata
     user_id = participant.identity
+    current_url = None
+    current_url_title = None
+    current_url_timestamp = None
+    greeting = None
+    
     if metadata_str:
         metadata = json.loads(metadata_str)
         
@@ -561,6 +561,23 @@ async def entrypoint(ctx: JobContext):
         except Exception as e:
             logger.error(f"Error parsing metadata: {e}")
             user_id = participant.identity
+        
+        try:
+            current_url = metadata.get("currentUrl") if metadata.get("currentUrl") else metadata.get("current_url") if metadata.get("current_url") else None
+            current_url_title = metadata.get("currentTitle") if metadata.get("currentTitle") else metadata.get("current_title") if metadata.get("current_title") else None
+            current_url_timestamp = metadata.get("currentUrlTimestamp") if metadata.get("currentUrlTimestamp") else metadata.get("current_url_timestamp") if metadata.get("current_url_timestamp") else None
+        except Exception as e:
+            logger.error(f"Error parsing metadata: {e}")
+            current_url = None
+            current_url_title = None
+            current_url_timestamp = None
+            
+        try:
+            greeting = metadata.get("greeting") if metadata.get("greeting") else metadata.get("greeting_message") if metadata.get("greeting_message") else None
+        except Exception as e:
+            logger.error(f"Error parsing metadata: {e}")
+            greeting = None
+    
     user_state = UserManager.get_user_state(user_id)
     if user_state is None:
         user_state = UserState(user_id=user_id)
@@ -569,45 +586,61 @@ async def entrypoint(ctx: JobContext):
     agent.set_user_id(user_id=user_id)
     timing_breakdown['user_state_retrieval'] = time.monotonic() - user_state_start
     
+    # 2. Pre-fetch greeting early to minimize latency
+    if not greeting:
+        greeting_fetch_start = time.monotonic()
+        greeting = await account_manager.get_default_greeting()
+        timing_breakdown['greeting_prefetch'] = time.monotonic() - greeting_fetch_start
+        logger.info(f"📝 Pre-fetched greeting: {greeting[:50]}...")
+
     # 10. Deliver greeting immediately (non-blocking)
     greeting_start = time.monotonic()
-    logger.info(f"🎙️ Delivering greeting: {welcome_message}")
+    logger.info(f"🎙️ Delivering greeting: {greeting}")
     
     # async def deliver_greeting():
     tts_start = time.monotonic()
     timing_breakdown['time_to_first_utterance'] = time.monotonic() - start_total
     # await session.say(text=welcome_message, allow_interruptions=False)
     
-    speech_instructions = f"Greet the user with something like: {welcome_message}"
+    speech_instructions = f"Briefly greet the user with something like: {greeting}"
     
     # if the user is currently looking at a product, then add the product to the speech instructions
     try:
-        user_history = SessionStateManager.get_user_recent_history(user_id=user_id)
-        if user_history and len(user_history) > 0:
-            most_recent_history = user_history[0]
-            
+        # if not current_url:
+        #     user_history = SessionStateManager.get_user_recent_history(user_id=user_id)
+        #     if user_history and len(user_history) > 0:
+        #         most_recent_history = user_history[0]
+        #         current_url = most_recent_history.url
+        #         current_url_title = most_recent_history.title if most_recent_history.title else current_url
+        
+        if current_url:
             # Use centralized smart product extraction
             product = None
-            if most_recent_history.url:
-                current_url = most_recent_history.url.split("?")[0]
-                current_title = most_recent_history.title if most_recent_history.title else current_url
-                
-                # Get product using smart extraction (no fallback to URL lookup for performance)
-                product_manager: ProductManager = await agent.get_product_manager()
-                product = await product_manager.find_product_from_url_smart(url=most_recent_history.url, fallback_to_url_lookup=False)
-                
-                if product and isinstance(product, Product):
-                    speech_instructions += f"\n\nAs a reference, the user is currently looking at the following product. However, be sure to welcome the user and ask them how you can help them!\n\n{Product.to_markdown(product=product, depth=0, obfuscatePricing=True)}\n\n"
-                else:
-                    speech_instructions += f"\n\nAs a reference, the user is currently looking at the following page. However, be sure to welcome the user and ask them how you can help them!\n\n[{current_title}]({current_url})\n\n"
+            
+            # Get product using smart extraction (no fallback to URL lookup for performance)
+            product_manager: ProductManager = await agent.get_product_manager()
+            product = await product_manager.find_product_from_url_smart(url=current_url, fallback_to_url_lookup=False)
+            
+            if product and isinstance(product, Product):
+                speech_instructions += f"\n\nAs a reference, the user is currently looking at the following product. However, be sure to welcome the user and ask them how you can help them!\n\n{Product.to_markdown(product=product, depth=0, obfuscatePricing=True)}\n\n"
+            else:
+                speech_instructions += f"\n\nAs a reference, the user is currently looking at the following page. However, be sure to welcome the user and ask them how you can help them!\n\n[{current_url_title if current_url_title else current_url}]({current_url})\n\n"
     except Exception as e:
         import traceback
         traceback.print_exc()
         logger.error(f"Error getting user history: {e}")
     
-    await session.generate_reply(
-        instructions=speech_instructions
-    )
+    use_generated_greeting = os.getenv("USE_GENERATED_GREETING", "true").lower() == "true"
+    
+    if use_generated_greeting:
+        logger.info(f"🎙️ Delivering generated greeting: {speech_instructions}")
+        await session.generate_reply(
+            instructions=speech_instructions
+        )
+    else:
+        logger.info(f"🎙️ Delivering pre-fetched greeting: {greeting}")
+        await session.say(text=greeting, allow_interruptions=False)
+        
     tts_time = time.monotonic() - tts_start
     timing_breakdown['tts_generation'] = tts_time
     timing_breakdown['greeting_delivery'] = time.monotonic() - greeting_start
@@ -617,10 +650,11 @@ async def entrypoint(ctx: JobContext):
     # await deliver_greeting()
     
     # 11. Start deferred prewarming in background
-    async def start_deferred_prewarming():
-        if hasattr(agent, 'start_deferred_prewarming'):
-            await agent.start_deferred_prewarming()
-    deferred_prewarming_task = asyncio.create_task(start_deferred_prewarming())
+    deferred_prewarming_task = None
+    if hasattr(agent, 'start_deferred_prewarming'):
+        deferred_prewarming_task = asyncio.create_task(
+            agent.start_deferred_prewarming(prewarm_llm=(not use_generated_greeting))
+        )
     
     # 12. Set up metrics collection
     metrics_setup_start = time.monotonic()
@@ -715,6 +749,12 @@ async def entrypoint(ctx: JobContext):
     def handle_participant_attributes_changed(attributes, p):
         asyncio.create_task(agent.on_participant_attributes_changed(attributes=attributes, participant=p))
     ctx.room.on("participant_attributes_changed", handle_participant_attributes_changed)
+    
+    # room on data_received
+    def handle_data_received(data: rtc.DataPacket):
+        asyncio.create_task(agent.on_data_received(payload=data.data, participant=data.participant, kind=data.kind, topic=data.topic))
+    ctx.room.on("data_received", handle_data_received)
+    
     timing_breakdown['event_handlers'] = time.monotonic() - handlers_start
     
     # 16. Complete user setup
@@ -839,12 +879,12 @@ async def entrypoint(ctx: JobContext):
     # FINALIZATION - Wait for async tasks and log timing
     # ============================================================
     
-    # Wait for greeting delivery to complete for accurate timing
-    if 'greeting_task' in locals() and not greeting_task.done():
-        await greeting_task
+    # # Wait for greeting delivery to complete for accurate timing
+    # if 'greeting_task' in locals() and not greeting_task.done():
+    #     await greeting_task
     
     # Wait for deferred prewarming to complete
-    if 'deferred_prewarming_task' in locals() and not deferred_prewarming_task.done():
+    if deferred_prewarming_task and not deferred_prewarming_task.done():
         await deferred_prewarming_task
         
     # Calculate total initialization time

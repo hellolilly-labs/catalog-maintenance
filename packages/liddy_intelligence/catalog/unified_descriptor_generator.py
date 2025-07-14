@@ -25,6 +25,9 @@ from liddy.models.product import Product, DescriptorMetadata
 # Import product catalog researcher (synthesizes all research phases)
 from liddy_intelligence.research.product_catalog_research import get_product_catalog_researcher
 
+# Import price descriptor updater for enhanced pricing logic
+from liddy_intelligence.catalog.price_descriptor_updater import PriceDescriptorUpdater
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,8 +68,14 @@ class UnifiedDescriptorGenerator:
         # Initialize product catalog researcher (synthesizes all brand research)
         self.product_catalog_researcher = get_product_catalog_researcher(brand_domain)
         
+        # Initialize price descriptor updater for enhanced pricing logic
+        self.price_updater = PriceDescriptorUpdater(brand_domain)
+        
         # Cache for product catalog research
         self.product_catalog_intelligence = ""
+        
+        # Cache for price statistics
+        self.price_statistics = None
         
         logger.info(f"🔧 Initialized RAG-Optimized Descriptor Generator for {brand_domain}")
         logger.info(f"   Research: {'enabled' if self.config.use_research else 'disabled'}")
@@ -103,9 +112,18 @@ class UnifiedDescriptorGenerator:
         products = products_data if isinstance(products_data, list) else products_data.get('products', [])
         logger.info(f"  📁 Loaded {len(products)} products")
         
+        # Calculate price statistics for the entire catalog
+        logger.info("  📊 Calculating price statistics...")
+        # Load terminology research for price categorization
+        terminology_research = await self.price_updater._load_terminology_research(
+            auto_run=self.config.auto_run_terminology_research
+        )
+        self.price_statistics = self.price_updater.calculate_price_statistics(products)
+        logger.info(f"  ✅ Price statistics calculated: {len(self.price_statistics.get('by_category', {}))} categories")
+        
         # Process each product
         enhanced_products: List[Product] = []
-        stats = {'total': len(products), 'cached': 0, 'generated': 0, 'regenerated': 0}
+        stats = {'total': len(products), 'cached': 0, 'generated': 0, 'regenerated': 0, 'price_updated': 0}
 
         products_to_process = products
         if limit:
@@ -126,7 +144,34 @@ class UnifiedDescriptorGenerator:
                 quality: DescriptorMetadata = await self._assess_quality(existing_descriptor, existing_product_labels, product) if existing_descriptor else DescriptorMetadata(quality_score=0.0, quality_score_reasoning="No existing descriptor")
                 
                 if existing_descriptor and quality.quality_score >= self.config.quality_threshold and not force_regenerate:
-                    logger.info(f"    ✅ Using cached (quality: {quality.quality_score:.2f})")
+                    # Even for cached descriptors, validate and update pricing
+                    needs_price_update = not self.price_updater.check_descriptor_has_price(existing_descriptor, product)
+                    
+                    if needs_price_update:
+                        logger.info(f"    ✅ Using cached (quality: {quality.quality_score:.2f}) - updating pricing")
+                        # Update the descriptor with current pricing
+                        product.descriptor = self.price_updater.update_descriptor_with_price(
+                            existing_descriptor,
+                            product,
+                            self.price_statistics
+                        )
+                        # Update search keywords with price categories
+                        if product.search_keywords:
+                            product.search_keywords = self.price_updater.update_search_keywords_with_price(
+                                product.search_keywords,
+                                product,
+                                self.price_statistics
+                            )
+                        # Update metadata to track price update
+                        if not product.descriptor_metadata:
+                            product.descriptor_metadata = DescriptorMetadata()
+                        product.descriptor_metadata.price_updated_at = datetime.now().isoformat()
+                        includes_unsaved_products = True
+                        enhanced_products.append(product)  # Mark as enhanced since we updated it
+                        stats['price_updated'] += 1
+                    else:
+                        logger.info(f"    ✅ Using cached (quality: {quality.quality_score:.2f}) - pricing current")
+                    
                     stats['cached'] += 1
                 else:
                     if existing_descriptor:
@@ -201,7 +246,26 @@ class UnifiedDescriptorGenerator:
         
         # Update product with results
         product.descriptor = result['descriptor']
-        product.search_keywords = result.get('search_terms', [])[:self.config.max_search_terms]
+        
+        # PRICE VALIDATION AND ENHANCEMENT
+        # Check if descriptor contains accurate pricing
+        if not self.price_updater.check_descriptor_has_price(product.descriptor, product):
+            logger.debug(f"  💰 Adding price information to descriptor for {product.name}")
+            # Update descriptor with price info and semantic context
+            product.descriptor = self.price_updater.update_descriptor_with_price(
+                product.descriptor, 
+                product, 
+                self.price_statistics
+            )
+        
+        # Enhance search keywords with price categories
+        search_keywords = result.get('search_terms', [])[:self.config.max_search_terms]
+        product.search_keywords = self.price_updater.update_search_keywords_with_price(
+            search_keywords,
+            product,
+            self.price_statistics
+        )
+        
         product.key_selling_points = result.get('selling_points', [])[:self.config.max_selling_points]
         product.voice_summary = result.get('voice_summary', '')
         
@@ -211,12 +275,13 @@ class UnifiedDescriptorGenerator:
         
         # Add metadata
         product.descriptor_metadata = {}
-        quality_metadata = await self._assess_quality(result['descriptor'], product_labels, product)
+        quality_metadata = await self._assess_quality(product.descriptor, product_labels, product)
         quality_metadata.generated_at = datetime.now().isoformat()
         quality_metadata.model = model
         quality_metadata.generator_version = '4.0-rag-optimized'
         quality_metadata.mode = 'rag'
         quality_metadata.uses_research = self.config.use_research
+        quality_metadata.price_updated_at = datetime.now().isoformat()  # Track price update
         product.descriptor_metadata = quality_metadata
         
         return
@@ -282,6 +347,7 @@ Focus on RAG Optimization:
 - NO repetitive brand introductions (waste of vector space)
 - NO marketing fluff - pure informational content
 - Include all searchable terms users might query
+- ALWAYS include current pricing information (sale price, original price, discount percentage)
 
 CRITICAL - Avoid Repetitive Patterns:
 - DO NOT start with "Meet the [Brand]..." or similar formulaic introductions
@@ -311,7 +377,8 @@ Requirements:
 - Use cases, applications, and synonyms
 - NO repetitive brand introductions (waste of vector space)
 - NO marketing fluff - pure informational content
-- Include all searchable terms users might query"""
+- Include all searchable terms users might query
+- Include current pricing and any discounts/sales"""
     
     def _extract_product_data(self, product: Product) -> Dict[str, Any]:
         """Extract comprehensive product data"""

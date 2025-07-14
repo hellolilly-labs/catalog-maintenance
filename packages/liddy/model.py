@@ -407,12 +407,38 @@ class UserState:
     voice_session_id: Optional[str] = None
     interaction_start_time: float = field(default_factory=time.time)
     last_interaction_time: Optional[float] = None
+    current_url: Optional[str] = None
+    current_url_timestamp: Optional[float] = None
+    current_url_title: Optional[str] = None
     current_product: Optional["Product"] = None
     current_product_id: Optional[str] = None
     current_product_timestamp: Optional[float] = None
+    recent_product_ids: List[Tuple[float, str]] = field(default_factory=list)
     
     @staticmethod
-    def from_json(json_str: str) -> "UserState":
+    def _parse_recent_product_ids(data: List) -> List[Tuple[float, str]]:
+        """Parse recent_product_ids from various formats for backward compatibility."""
+        if not data:
+            return []
+        
+        result = []
+        for item in data:
+            if isinstance(item, str):
+                # Legacy format: just product_id string, use current time
+                result.append((time.time(), item))
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                # New format: [timestamp, product_id]
+                timestamp = float(item[0]) if item[0] is not None else time.time()
+                product_id = str(item[1])
+                result.append((timestamp, product_id))
+            # Skip invalid entries
+        
+        return result
+    
+    @staticmethod
+    def from_json(json_str: str | dict) -> "UserState":
+        if isinstance(json_str, dict):
+            return UserState.from_dict(json_str)
         json_object = json.loads(json_str)
         
         return UserState.from_dict(json_object)
@@ -432,9 +458,13 @@ class UserState:
             voice_session_id=data.get("voice_session_id"),
             interaction_start_time=data.get("interaction_start_time", time.time()),
             last_interaction_time=data.get("last_interaction_time"),
+            current_url=data.get("current_url"),
+            current_url_timestamp=data.get("current_url_timestamp"),
+            current_url_title=data.get("current_title"),
             current_product=None,  # Product object not serialized
             current_product_id=data.get("current_product_id"),
-            current_product_timestamp=data.get("current_product_timestamp")
+            current_product_timestamp=data.get("current_product_timestamp"),
+            recent_product_ids=UserState._parse_recent_product_ids(data.get("recent_product_ids", []))
         )
         return user_state
     
@@ -449,8 +479,12 @@ class UserState:
             "voice_session_id": self.voice_session_id,
             "interaction_start_time": self.interaction_start_time,
             "last_interaction_time": self.last_interaction_time,
+            "current_url": self.current_url,
+            "current_url_timestamp": self.current_url_timestamp,
+            "current_url_title": self.current_url_title,
             "current_product_id": self.current_product_id,
-            "current_product_timestamp": self.current_product_timestamp
+            "current_product_timestamp": self.current_product_timestamp,
+            "recent_product_ids": [[timestamp, product_id] for timestamp, product_id in self.recent_product_ids]
         }
     
     def to_json(self) -> str:
