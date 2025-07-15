@@ -135,10 +135,11 @@ class Assistant(Agent):
         self._security_config = get_voice_security_config()
         self._conversation_id = f"{self._session_id}_{self._user_id}"
         
-        # Initialize Langfuse client for flushing
+        # Initialize Langfuse client and start conversation span
         self._langfuse_client = get_client()
+        self._turn_count = 0  # Track conversation turns
         
-        # Store conversation metadata for observe decorators
+        # Store conversation metadata
         self._conversation_metadata = {
             "account": account,
             "security_mode": "voice_only" if self._security_config.is_voice_only_mode() else "mixed",
@@ -147,6 +148,17 @@ class Assistant(Agent):
             "primary_model": primary_model,
             "user_id": self._user_id
         }
+        
+        # Store Langfuse client reference but don't start span here
+        # We'll use context managers in the actual methods
+        self._langfuse_active = True
+        try:
+            # Test that Langfuse is properly initialized
+            self._langfuse_client.auth_check()
+            logger.info(f"📊 Langfuse client initialized for conversation {self._conversation_id}")
+        except Exception as e:
+            logger.error(f"Failed to initialize Langfuse client: {e}")
+            self._langfuse_active = False
         
         # Log security mode
         if self._security_config.is_voice_only_mode():
@@ -391,6 +403,25 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
                 logger.info(f"  - Total inputs: {security_stats.get('total_inputs', 0)}")
                 logger.info(f"  - Blocked inputs: {security_stats.get('blocked_inputs', 0)}")
                 logger.info(f"  - Echo detections: {security_stats.get('echo_detections', 0)}")
+                
+                # Log conversation summary event to Langfuse
+                with self._langfuse_client.start_as_current_span(
+                    name="conversation_completed",
+                    input={
+                        "conversation_id": self._conversation_id,
+                        "session_id": self._session_id
+                    },
+                    metadata={
+                        **self._conversation_metadata,
+                        "conversation_stats": {
+                            "duration_s": conversation_duration,
+                            "turn_count": self._turn_count,
+                            **security_stats
+                        },
+                        "type": "summary_event"
+                    }
+                ) as summary_span:
+                    summary_span.update(level="INFO")
                 
                 # Flush to ensure any pending Langfuse data is sent
                 self._langfuse_client.flush()
@@ -1089,12 +1120,6 @@ Parameter Schema and Description:
             # Pass the chunk along so downstream still executes
             yield chunk
 
-    @observe(
-        name="llm_node", 
-        as_type="generation",
-        capture_input=False,  # We'll handle input/output ourselves for privacy
-        capture_output=False
-    )
     async def llm_node(
         self,
         chat_ctx: llm.ChatContext,
@@ -1103,8 +1128,8 @@ Parameter Schema and Description:
     ) -> AsyncIterable[llm.ChatChunk]:
         """Process the text with the LLM model"""
         
-        # The @observe decorator on this method will handle Langfuse tracking
-        # Metadata is stored in self._conversation_metadata for reference
+        # Increment turn count for tracking
+        self._turn_count += 1
 
         # self._prompt_manager.update_current_generation()
         if not self._instructions_loaded:
@@ -1140,6 +1165,25 @@ Parameter Schema and Description:
             if not security_result['proceed']:
                 # Input was blocked - create a safe response
                 logger.warning(f"🚫 Security blocked input: {security_result['reason']}")
+                
+                # Log security event to Langfuse
+                if self._langfuse_active and self._langfuse_client:
+                    with self._langfuse_client.start_as_current_span(
+                        name="security_input_blocked",
+                        input={
+                            "user_input": last_user_message.text_content[:100],
+                            "reason": security_result['reason']
+                        },
+                        metadata={
+                            **self._conversation_metadata,
+                            "turn_number": self._turn_count,
+                            "risk_score": security_result.get('risk_score', 0.0),
+                            "security_action": "blocked",
+                            "type": "security_event"
+                        }
+                    ) as security_span:
+                        security_span.update(level="WARNING")
+                
                 # Generate a polite refusal message
                 blocked_response = llm.ChatMessage(
                     role="assistant",
@@ -1216,6 +1260,9 @@ Parameter Schema and Description:
                 # Reset to baseline (0.0)
                 echo_adjustments['frequency_penalty'] = 0.0
         
+        # The LangfuseLKOpenAILLM client already provides automatic tracing
+        # No need for manual context manager here to avoid duplicate traces
+        
         async with activity_llm.chat(
             chat_ctx=chat_ctx, 
             tools=tools, 
@@ -1224,9 +1271,6 @@ Parameter Schema and Description:
             extra_kwargs={
                 "presence_penalty": echo_adjustments.get('presence_penalty', 0.7),
                 "frequency_penalty": echo_adjustments.get('frequency_penalty', 0.0),
-                # "max_completion_tokens": 4096,
-                # "temperature": 0.2,
-                # "top_p": 1.0,
             }
         ) as stream:
             async for chunk in stream:
@@ -1235,29 +1279,48 @@ Parameter Schema and Description:
                     ai_response_chunks.append(chunk.delta.content)
                 
                 yield chunk
+        
+        # After response is complete, check for echo behavior
+        if user_input_text and ai_response_chunks:
+            ai_response_text = ''.join(ai_response_chunks)
             
-            # After response is complete, check for echo behavior
-            if user_input_text and ai_response_chunks:
-                ai_response_text = ''.join(ai_response_chunks)
+            # Check for echo behavior
+            echo_result = await self._security_manager.process_response(
+                user_input=user_input_text,
+                ai_response=ai_response_text,
+                conversation_id=self._conversation_id
+            )
+            
+            if echo_result['echo_detected']:
+                logger.warning(f"🔄 Echo detected (score: {echo_result.get('echo_score', 0):.2f})")
                 
-                # Check for echo behavior
-                echo_result = await self._security_manager.process_response(
-                    user_input=user_input_text,
-                    ai_response=ai_response_text,
-                    conversation_id=self._conversation_id
-                )
+                # If intervention is required, log it
+                if not echo_result['allow_response']:
+                    logger.error(f"🚨 Echo intervention triggered: {echo_result.get('intervention_message', 'Multiple echo responses detected')}")
+                    
+                    # Log echo intervention event to Langfuse
+                    if self._langfuse_active and self._langfuse_client:
+                        with self._langfuse_client.start_as_current_span(
+                            name="security_echo_intervention",
+                            input={
+                                "user_input": user_input_text[:100],
+                                "ai_response": ai_response_text[:100]
+                            },
+                            metadata={
+                                **self._conversation_metadata,
+                                "turn_number": self._turn_count,
+                                "echo_score": echo_result.get('echo_score', 0),
+                                "consecutive_count": echo_result.get('consecutive_count', 0),
+                                "intervention_message": echo_result.get('intervention_message', ''),
+                                "type": "security_event"
+                            }
+                        ) as echo_span:
+                            echo_span.update(level="ERROR")
+                    # Note: Response has already been sent, but we can adjust future responses
                 
-                if echo_result['echo_detected']:
-                    logger.warning(f"🔄 Echo detected (score: {echo_result.get('echo_score', 0):.2f})")
-                    
-                    # If intervention is required, log it
-                    if not echo_result['allow_response']:
-                        logger.error(f"🚨 Echo intervention triggered: {echo_result.get('intervention_message', 'Multiple echo responses detected')}")
-                        # Note: Response has already been sent, but we can adjust future responses
-                    
-                    # Store LLM adjustments for next turn if provided
-                    if echo_result.get('llm_adjustments'):
-                        echo_adjustments.update(echo_result['llm_adjustments'])
+                # Store LLM adjustments for next turn if provided
+                if echo_result.get('llm_adjustments'):
+                    echo_adjustments.update(echo_result['llm_adjustments'])
 
     async def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
         """Process text-to-speech with timeout handling for responsiveness"""
@@ -1625,10 +1688,38 @@ Parameter Schema and Description:
                     
                     chat_ctx.items.insert(0, self._fast_llm_prompt)
                     chat_ctx.items.append(llm.ChatMessage(role="user", content=["Based on the above conversation, generate a short instant response to the user's message with 2 to 10 words indicating that you are looking up the information. For example, 'one sec...' or 'let me check that for you'. Be sure your response is short and concise yet contextually relevant and natural."]))
-                    fast_response = await LlmService.chat_wrapper(
-                        llm_service=self._fast_llm,
-                        chat_ctx=chat_ctx,
-                    )
+                    
+                    # Use Langfuse context for auxiliary LLM calls
+                    if self._langfuse_active and self._langfuse_client:
+                        aux_metadata = {
+                            **self._conversation_metadata,
+                            "turn_number": self._turn_count,
+                            "is_auxiliary": True,  # Mark as auxiliary operation
+                            "operation_type": "fast_filler_response",
+                            "model": "gpt-4.1-nano"
+                        }
+                        
+                        with self._langfuse_client.start_as_current_generation(
+                            name="fast_filler_generation",
+                            model="gpt-4.1-nano",
+                            input={"prompt": "Generate filler response"},
+                            metadata=aux_metadata
+                        ) as generation:
+                            fast_response = await LlmService.chat_wrapper(
+                                llm_service=self._fast_llm,
+                                chat_ctx=chat_ctx,
+                            )
+                            generation.update(
+                                output=fast_response,
+                                usage_details={"estimated_tokens": len(fast_response.split())}
+                            )
+                    else:
+                        # Fallback without Langfuse
+                        fast_response = await LlmService.chat_wrapper(
+                            llm_service=self._fast_llm,
+                            chat_ctx=chat_ctx,
+                        )
+                    
                     logger.debug(f"Fast response: {fast_response}")
                     if say_filler:
                         await self.session.say(fast_response, add_to_chat_ctx=True)
@@ -1772,7 +1863,6 @@ Parameter Schema and Description:
             logger.error(f"Error in knowledge_search function: {e}")
             return {"error": str(e)}
 
-    @observe(name="product_search")
     @function_tool()
     async def product_search(
         self,
@@ -1806,6 +1896,57 @@ Parameter Schema and Description:
         
         logger.info(f"🔍 Product search called with query: {query}, product_id: {product_id}, top_k: {top_k}, competitor: {search_competitor_products}")
         
+        # Use Langfuse context for tool tracking
+        if self._langfuse_active and self._langfuse_client:
+            tool_metadata = {
+                **self._conversation_metadata,
+                "turn_number": self._turn_count,
+                "is_tool_call": True,
+                "tool_name": "product_search",
+                "query": query[:100] if query else None,
+                "product_id": product_id,
+                "is_competitor_search": search_competitor_products
+            }
+            
+            with self._langfuse_client.start_as_current_span(
+                name="tool_product_search",
+                input={
+                    "query": query,
+                    "product_id": product_id,
+                    "search_competitor_products": search_competitor_products,
+                    "top_k": top_k
+                },
+                metadata=tool_metadata
+            ) as span:
+                try:
+                    return await self._execute_product_search(
+                        context, query, product_id, in_stock_only,
+                        search_competitor_products, top_k, acknowledgement_message,
+                        timing_breakdown, overall_start, span
+                    )
+                except Exception as e:
+                    span.update(
+                        status_message=str(e)[:500],
+                        level="ERROR"
+                    )
+                    raise
+        else:
+            # Execute without Langfuse tracking
+            try:
+                return await self._execute_product_search(
+                    context, query, product_id, in_stock_only,
+                    search_competitor_products, top_k, acknowledgement_message,
+                    timing_breakdown, overall_start, None
+                )
+            except Exception as e:
+                raise
+    
+    async def _execute_product_search(
+        self, context, query, product_id, in_stock_only,
+        search_competitor_products, top_k, acknowledgement_message,
+        timing_breakdown, overall_start, langfuse_span
+    ):
+        """Execute the actual product search logic"""
         try:
             # Input validation
             validation_start = time.time()
@@ -2004,6 +2145,20 @@ Parameter Schema and Description:
             
             # say_message_to_user_task.cancel()
             
+            # Update Langfuse span with timing data if available
+            if langfuse_span:
+                langfuse_span.update(
+                    output={
+                        "products_found": len(products_results),
+                        "search_type": timing_breakdown.get('search_type', 'unknown')
+                    },
+                    metadata={
+                        "timing_breakdown": timing_breakdown,
+                        "total_time_s": total_time,
+                        "exceeded_threshold": total_time > 3.0
+                    }
+                )
+            
             return markdown_results
             
         except Exception as e:
@@ -2015,7 +2170,6 @@ Parameter Schema and Description:
             logger.error(f"   Timing at error: {timing_breakdown}")
             raise ToolError("Unable to search for products")
     
-    @observe(name="display_product")
     @function_tool()
     async def display_product(
         self,
@@ -2041,6 +2195,53 @@ Parameter Schema and Description:
         
         if not isinstance(product_id, str):
             raise ToolError("`product_id` is required")
+        
+        # Use Langfuse context for tool tracking
+        if self._langfuse_active and self._langfuse_client:
+            tool_metadata = {
+                **self._conversation_metadata,
+                "turn_number": self._turn_count,
+                "is_tool_call": True,
+                "tool_name": "display_product",
+                "product_id": product_id,
+                "has_variant": variant is not None
+            }
+            
+            with self._langfuse_client.start_as_current_span(
+                name="tool_display_product",
+                input={
+                    "product_id": product_id,
+                    "variant": variant,
+                    "resumption_message": resumption_message
+                },
+                metadata=tool_metadata
+            ) as span:
+                try:
+                    return await self._execute_display_product(
+                        product_id, variant, resumption_message,
+                        timing_breakdown, start_time, span
+                    )
+                except Exception as e:
+                    span.update(
+                        status_message=str(e)[:500],
+                        level="ERROR"
+                    )
+                    raise
+        else:
+            # Execute without Langfuse tracking
+            try:
+                return await self._execute_display_product(
+                    product_id, variant, resumption_message,
+                    timing_breakdown, start_time, None
+                )
+            except Exception as e:
+                raise
+    
+    async def _execute_display_product(
+        self, product_id, variant, resumption_message,
+        timing_breakdown, start_time, langfuse_span
+    ):
+        """Execute the actual display product logic"""
         try:
             logger.info(f"🔍 display_product started: {product_id}")
             
@@ -2190,6 +2391,20 @@ Parameter Schema and Description:
                 user_state.current_product_id = product.id
                 user_state.current_product_timestamp = time.time()
                 logger.info(f"✅ Updated current product for user {user_state.user_id}: {product.name} (ID: {product.id})")
+            
+            # Update Langfuse span with timing data if available
+            if langfuse_span:
+                langfuse_span.update(
+                    output={
+                        "product_displayed": product.name if product else "Not found",
+                        "variant_used": variant is not None
+                    },
+                    metadata={
+                        "timing_breakdown": timing_breakdown,
+                        "total_time_s": total_time,
+                        "already_viewing": current_product and current_product.id == product_id
+                    }
+                )
             
             return result
         except ToolError as e:
