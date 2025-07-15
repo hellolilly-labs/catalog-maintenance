@@ -508,10 +508,20 @@ async def entrypoint(ctx: JobContext):
     # 5. Configure room options
     options_start = time.monotonic()
     use_noise_cancellation = os.getenv("USE_NOISE_CANCELLATION", "false").lower() == "true"
+    voice_only_mode = os.getenv("VOICE_ONLY_MODE", "true").lower() == "true"
+    
     room_input_options = RoomInputOptions(
         close_on_disconnect=False,
+        text_enabled=not voice_only_mode,  # Disable text input in voice-only mode
         noise_cancellation=noise_cancellation.BVC() if use_noise_cancellation else None
     )
+    
+    # Log security mode
+    if voice_only_mode:
+        logger.info("🔒 Voice-Only Security Mode: Text input disabled for enhanced security")
+    else:
+        logger.info("💬 Mixed Mode: Voice and text input enabled")
+    
     timing_breakdown['room_options'] = time.monotonic() - options_start
     
     # 6. Start session with agent

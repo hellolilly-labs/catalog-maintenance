@@ -6,6 +6,7 @@ import re
 import random
 import time
 import psutil
+from datetime import datetime
 
 from langfuse import observe, get_client
 
@@ -45,6 +46,11 @@ from liddy_voice.voice_search_wrapper import VoiceSearchService as SearchService
 from livekit.rtc import RemoteParticipant
 from liddy_voice.account_prompt_manager import get_account_prompt_manager, AccountPromptManager
 from liddy.models.product_manager import ProductManager
+from liddy_voice.security import (
+    RuntimeSecurityManager, 
+    get_voice_security_config,
+    create_security_manager
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +127,48 @@ class Assistant(Agent):
         # self.cerebras_client = None
         llm_setup_time = time.time() - llm_setup_start
         
-        # Phase 6: Background task setup
+        # Phase 6: Security manager setup
+        security_setup_start = time.time()
+        
+        # Initialize security components
+        self._security_manager: RuntimeSecurityManager = create_security_manager()
+        self._security_config = get_voice_security_config()
+        self._conversation_id = f"{self._session_id}_{self._user_id}"
+        
+        # Initialize Langfuse client and start conversation span
+        self._langfuse_client = get_client()
+        self._turn_count = 0  # Track conversation turns
+        
+        # Store conversation metadata
+        self._conversation_metadata = {
+            "account": account,
+            "security_mode": "voice_only" if self._security_config.is_voice_only_mode() else "mixed",
+            "session_id": self._session_id,
+            "conversation_id": self._conversation_id,
+            "primary_model": primary_model,
+            "user_id": self._user_id
+        }
+        
+        # Store Langfuse client reference but don't start span here
+        # We'll use context managers in the actual methods
+        self._langfuse_active = True
+        try:
+            # Test that Langfuse is properly initialized
+            self._langfuse_client.auth_check()
+            logger.info(f"📊 Langfuse client initialized for conversation {self._conversation_id}")
+        except Exception as e:
+            logger.error(f"Failed to initialize Langfuse client: {e}")
+            self._langfuse_active = False
+        
+        # Log security mode
+        if self._security_config.is_voice_only_mode():
+            logger.info(f"🔒 Assistant initialized with Voice-Only Security Mode for conversation {self._conversation_id}")
+        else:
+            logger.info(f"💬 Assistant initialized with Mixed Mode security for conversation {self._conversation_id}")
+        
+        security_setup_time = time.time() - security_setup_start
+        
+        # Phase 7: Background task setup
         bg_task_start = time.time()
         
         self.inactivity_task: asyncio.Task | None = None
@@ -137,11 +184,13 @@ class Assistant(Agent):
         total_startup_time = time.time() - startup_start
         self._startup_timing = {
             "account": account,
+            "start_time": datetime.now(),
             "timing": {
                 "prompt_init": prompt_init_time,
                 "product_setup": product_setup_time, 
                 "agent_init": agent_init_time,
                 "attr_setup": attr_setup_time,
+                "security_setup": security_setup_time,
                 "llm_setup": llm_setup_time,
                 "bg_task_setup": bg_task_time,
                 "total_startup": total_startup_time
@@ -303,6 +352,82 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
 
     async def on_exit(self) -> None:
         print("on_exit")
+        
+        # End security conversation tracking
+        security_stats = {}
+        try:
+            security_summary = await self._security_manager.end_conversation(self._conversation_id)
+            logger.info(f"🛡️ Security summary for conversation {self._conversation_id}:")
+            logger.info(f"  - Echo detections: {security_summary['echo_stats'].get('total_echoes', 0)}")
+            logger.info(f"  - Echo rate: {security_summary['echo_stats'].get('echo_rate', 0):.1%}")
+            if self._security_config.is_voice_only_mode() and security_summary.get('voice_stats'):
+                logger.info(f"  - Voice anomalies: {security_summary['voice_stats'].get('suspicious_patterns', 0)}")
+            
+            # Prepare security stats for Langfuse
+            security_stats = {
+                "echo_detections": security_summary['echo_stats'].get('total_echoes', 0),
+                "echo_rate": security_summary['echo_stats'].get('echo_rate', 0),
+                "max_consecutive_echoes": security_summary['echo_stats'].get('max_consecutive', 0),
+                "security_mode": "voice_only" if self._security_config.is_voice_only_mode() else "mixed"
+            }
+            
+            if self._security_config.is_voice_only_mode() and security_summary.get('voice_stats'):
+                security_stats["voice_anomalies"] = security_summary['voice_stats'].get('suspicious_patterns', 0)
+                security_stats["total_voice_inputs"] = security_summary['voice_stats'].get('total_inputs', 0)
+            
+            # Get comprehensive security dashboard
+            dashboard = self._security_manager.get_security_dashboard()
+            security_stats.update({
+                "total_inputs": dashboard['input_security']['total_inputs'],
+                "blocked_inputs": dashboard['input_security']['blocked_inputs'],
+                "sanitized_inputs": dashboard['input_security']['sanitized_inputs'],
+                "interventions": dashboard['echo_monitoring']['interventions'],
+                "health_status": dashboard['health_status']['status'],
+                "overall_health_score": dashboard['health_status']['overall_score']
+            })
+            
+        except Exception as e:
+            logger.error(f"Error ending security conversation: {e}")
+            security_stats = {"error": str(e)}
+        
+        # Log final stats for this conversation
+        try:
+            if hasattr(self, '_langfuse_client'):
+                # Get conversation duration
+                conversation_duration = (datetime.now() - self._startup_timing.get('start_time', datetime.now())).total_seconds()
+                
+                # Log conversation summary
+                logger.info(f"📊 Conversation {self._conversation_id} completed:")
+                logger.info(f"  - Duration: {conversation_duration:.1f}s")
+                logger.info(f"  - Security mode: {self._conversation_metadata.get('security_mode', 'unknown')}")
+                logger.info(f"  - Total inputs: {security_stats.get('total_inputs', 0)}")
+                logger.info(f"  - Blocked inputs: {security_stats.get('blocked_inputs', 0)}")
+                logger.info(f"  - Echo detections: {security_stats.get('echo_detections', 0)}")
+                
+                # Log conversation summary event to Langfuse
+                with self._langfuse_client.start_as_current_span(
+                    name="conversation_completed",
+                    input={
+                        "conversation_id": self._conversation_id,
+                        "session_id": self._session_id
+                    },
+                    metadata={
+                        **self._conversation_metadata,
+                        "conversation_stats": {
+                            "duration_s": conversation_duration,
+                            "turn_count": self._turn_count,
+                            **security_stats
+                        },
+                        "type": "summary_event"
+                    }
+                ) as summary_span:
+                    summary_span.update(level="INFO")
+                
+                # Flush to ensure any pending Langfuse data is sent
+                self._langfuse_client.flush()
+        except Exception as e:
+            logger.error(f"Error logging conversation summary: {e}")
+        
         await super().on_exit()
         self._ctx.delete_room()
         # self._ctx.shutdown()
@@ -995,7 +1120,6 @@ Parameter Schema and Description:
             # Pass the chunk along so downstream still executes
             yield chunk
 
-    @observe(name="llm_node", as_type="generation")
     async def llm_node(
         self,
         chat_ctx: llm.ChatContext,
@@ -1003,6 +1127,9 @@ Parameter Schema and Description:
         model_settings: ModelSettings,
     ) -> AsyncIterable[llm.ChatChunk]:
         """Process the text with the LLM model"""
+        
+        # Increment turn count for tracking
+        self._turn_count += 1
 
         # self._prompt_manager.update_current_generation()
         if not self._instructions_loaded:
@@ -1015,6 +1142,70 @@ Parameter Schema and Description:
         for m in chat_ctx.items:
             if hasattr(m, "role") and m.role == "user":
                 last_user_message = m
+        
+        # Security check for user input
+        if last_user_message and hasattr(last_user_message, "text_content") and last_user_message.text_content:
+            # Extract conversation context for security check
+            conversation_context = []
+            for msg in chat_ctx.items[-10:]:  # Last 10 messages for context
+                if hasattr(msg, "role") and hasattr(msg, "text_content"):
+                    conversation_context.append({
+                        "role": msg.role,
+                        "content": msg.text_content or ""
+                    })
+            
+            # Process through security manager
+            security_result = await self._security_manager.process_conversation_turn(
+                user_input=last_user_message.text_content,
+                conversation_context=conversation_context,
+                conversation_id=self._conversation_id
+            )
+            
+            # Handle security action
+            if not security_result['proceed']:
+                # Input was blocked - create a safe response
+                logger.warning(f"🚫 Security blocked input: {security_result['reason']}")
+                
+                # Log security event to Langfuse
+                if self._langfuse_active and self._langfuse_client:
+                    with self._langfuse_client.start_as_current_span(
+                        name="security_input_blocked",
+                        input={
+                            "user_input": last_user_message.text_content[:100],
+                            "reason": security_result['reason']
+                        },
+                        metadata={
+                            **self._conversation_metadata,
+                            "turn_number": self._turn_count,
+                            "risk_score": security_result.get('risk_score', 0.0),
+                            "security_action": "blocked",
+                            "type": "security_event"
+                        }
+                    ) as security_span:
+                        security_span.update(level="WARNING")
+                
+                # Generate a polite refusal message
+                blocked_response = llm.ChatMessage(
+                    role="assistant",
+                    content=["I'm sorry, but I can't process that request. Let me help you find the perfect product for your needs instead. What type of product are you looking for?"]
+                )
+                chat_ctx.items.append(blocked_response)
+                # Yield empty chunks to end the turn gracefully
+                return
+            
+            # If input was sanitized, update the last message with sanitized content
+            if security_result['security_action'] == 'sanitized' and security_result['sanitized_input']:
+                logger.info(f"🧹 Input sanitized for safety (risk: {security_result.get('risk_score', 0):.2f})")
+                # Create a new sanitized message
+                last_user_message = llm.ChatMessage(
+                    role="user",
+                    content=[security_result['sanitized_input']]
+                )
+                # Update the chat context with sanitized input
+                for i in range(len(chat_ctx.items) - 1, -1, -1):
+                    if hasattr(chat_ctx.items[i], "role") and chat_ctx.items[i].role == "user":
+                        chat_ctx.items[i] = last_user_message
+                        break
         if last_user_message and (not self.last_stt_message or last_user_message.id != self.last_stt_message.id):
             try:
                 json.loads(last_user_message.text_content)
@@ -1055,21 +1246,81 @@ Parameter Schema and Description:
         activity_llm = activity.llm
 
         conn_options = activity.session.conn_options.llm_conn_options
+        
+        # Track AI response for echo monitoring
+        ai_response_chunks = []
+        user_input_text = last_user_message.text_content if last_user_message and hasattr(last_user_message, "text_content") else ""
+        
+        # Get echo monitoring results if available
+        echo_adjustments = {}
+        
+        # Check if we should reset frequency penalty from previous echo intervention
+        if hasattr(self._security_manager.echo_monitor, 'should_reset_frequency_penalty'):
+            if self._security_manager.echo_monitor.should_reset_frequency_penalty():
+                # Reset to baseline (0.0)
+                echo_adjustments['frequency_penalty'] = 0.0
+        
+        # The LangfuseLKOpenAILLM client already provides automatic tracing
+        # No need for manual context manager here to avoid duplicate traces
+        
         async with activity_llm.chat(
             chat_ctx=chat_ctx, 
             tools=tools, 
             tool_choice=tool_choice, 
             conn_options=conn_options,
             extra_kwargs={
-                "presence_penalty": 0.8,
-                # "frequency_penalty": 0.0,
-                # "max_completion_tokens": 4096,
-                # "temperature": 0.2,
-                # "top_p": 1.0,
+                "presence_penalty": echo_adjustments.get('presence_penalty', 0.7),
+                "frequency_penalty": echo_adjustments.get('frequency_penalty', 0.0),
             }
         ) as stream:
             async for chunk in stream:
+                # Collect text chunks for echo monitoring
+                if hasattr(chunk, 'delta') and hasattr(chunk.delta, 'content') and chunk.delta.content:
+                    ai_response_chunks.append(chunk.delta.content)
+                
                 yield chunk
+        
+        # After response is complete, check for echo behavior
+        if user_input_text and ai_response_chunks:
+            ai_response_text = ''.join(ai_response_chunks)
+            
+            # Check for echo behavior
+            echo_result = await self._security_manager.process_response(
+                user_input=user_input_text,
+                ai_response=ai_response_text,
+                conversation_id=self._conversation_id
+            )
+            
+            if echo_result['echo_detected']:
+                logger.warning(f"🔄 Echo detected (score: {echo_result.get('echo_score', 0):.2f})")
+                
+                # If intervention is required, log it
+                if not echo_result['allow_response']:
+                    logger.error(f"🚨 Echo intervention triggered: {echo_result.get('intervention_message', 'Multiple echo responses detected')}")
+                    
+                    # Log echo intervention event to Langfuse
+                    if self._langfuse_active and self._langfuse_client:
+                        with self._langfuse_client.start_as_current_span(
+                            name="security_echo_intervention",
+                            input={
+                                "user_input": user_input_text[:100],
+                                "ai_response": ai_response_text[:100]
+                            },
+                            metadata={
+                                **self._conversation_metadata,
+                                "turn_number": self._turn_count,
+                                "echo_score": echo_result.get('echo_score', 0),
+                                "consecutive_count": echo_result.get('consecutive_count', 0),
+                                "intervention_message": echo_result.get('intervention_message', ''),
+                                "type": "security_event"
+                            }
+                        ) as echo_span:
+                            echo_span.update(level="ERROR")
+                    # Note: Response has already been sent, but we can adjust future responses
+                
+                # Store LLM adjustments for next turn if provided
+                if echo_result.get('llm_adjustments'):
+                    echo_adjustments.update(echo_result['llm_adjustments'])
 
     async def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
         """Process text-to-speech with timeout handling for responsiveness"""
@@ -1312,6 +1563,11 @@ Parameter Schema and Description:
     async def on_room_disconnected(self, ev):
         logger.debug(f"Room disconnected: {ev}")
         try:
+            # End security conversation if not already ended
+            if hasattr(self, '_security_manager') and hasattr(self, '_conversation_id'):
+                await self._security_manager.end_conversation(self._conversation_id)
+                logger.info(f"🛡️ Security conversation ended for {self._conversation_id}")
+            
             # Clean up background tasks to prevent async warnings
             await self.cleanup()
         except Exception as e:
@@ -1432,10 +1688,38 @@ Parameter Schema and Description:
                     
                     chat_ctx.items.insert(0, self._fast_llm_prompt)
                     chat_ctx.items.append(llm.ChatMessage(role="user", content=["Based on the above conversation, generate a short instant response to the user's message with 2 to 10 words indicating that you are looking up the information. For example, 'one sec...' or 'let me check that for you'. Be sure your response is short and concise yet contextually relevant and natural."]))
-                    fast_response = await LlmService.chat_wrapper(
-                        llm_service=self._fast_llm,
-                        chat_ctx=chat_ctx,
-                    )
+                    
+                    # Use Langfuse context for auxiliary LLM calls
+                    if self._langfuse_active and self._langfuse_client:
+                        aux_metadata = {
+                            **self._conversation_metadata,
+                            "turn_number": self._turn_count,
+                            "is_auxiliary": True,  # Mark as auxiliary operation
+                            "operation_type": "fast_filler_response",
+                            "model": "gpt-4.1-nano"
+                        }
+                        
+                        with self._langfuse_client.start_as_current_generation(
+                            name="fast_filler_generation",
+                            model="gpt-4.1-nano",
+                            input={"prompt": "Generate filler response"},
+                            metadata=aux_metadata
+                        ) as generation:
+                            fast_response = await LlmService.chat_wrapper(
+                                llm_service=self._fast_llm,
+                                chat_ctx=chat_ctx,
+                            )
+                            generation.update(
+                                output=fast_response,
+                                usage_details={"estimated_tokens": len(fast_response.split())}
+                            )
+                    else:
+                        # Fallback without Langfuse
+                        fast_response = await LlmService.chat_wrapper(
+                            llm_service=self._fast_llm,
+                            chat_ctx=chat_ctx,
+                        )
+                    
                     logger.debug(f"Fast response: {fast_response}")
                     if say_filler:
                         await self.session.say(fast_response, add_to_chat_ctx=True)
@@ -1579,7 +1863,6 @@ Parameter Schema and Description:
             logger.error(f"Error in knowledge_search function: {e}")
             return {"error": str(e)}
 
-    @observe(name="product_search")
     @function_tool()
     async def product_search(
         self,
@@ -1613,6 +1896,57 @@ Parameter Schema and Description:
         
         logger.info(f"🔍 Product search called with query: {query}, product_id: {product_id}, top_k: {top_k}, competitor: {search_competitor_products}")
         
+        # Use Langfuse context for tool tracking
+        if self._langfuse_active and self._langfuse_client:
+            tool_metadata = {
+                **self._conversation_metadata,
+                "turn_number": self._turn_count,
+                "is_tool_call": True,
+                "tool_name": "product_search",
+                "query": query[:100] if query else None,
+                "product_id": product_id,
+                "is_competitor_search": search_competitor_products
+            }
+            
+            with self._langfuse_client.start_as_current_span(
+                name="tool_product_search",
+                input={
+                    "query": query,
+                    "product_id": product_id,
+                    "search_competitor_products": search_competitor_products,
+                    "top_k": top_k
+                },
+                metadata=tool_metadata
+            ) as span:
+                try:
+                    return await self._execute_product_search(
+                        context, query, product_id, in_stock_only,
+                        search_competitor_products, top_k, acknowledgement_message,
+                        timing_breakdown, overall_start, span
+                    )
+                except Exception as e:
+                    span.update(
+                        status_message=str(e)[:500],
+                        level="ERROR"
+                    )
+                    raise
+        else:
+            # Execute without Langfuse tracking
+            try:
+                return await self._execute_product_search(
+                    context, query, product_id, in_stock_only,
+                    search_competitor_products, top_k, acknowledgement_message,
+                    timing_breakdown, overall_start, None
+                )
+            except Exception as e:
+                raise
+    
+    async def _execute_product_search(
+        self, context, query, product_id, in_stock_only,
+        search_competitor_products, top_k, acknowledgement_message,
+        timing_breakdown, overall_start, langfuse_span
+    ):
+        """Execute the actual product search logic"""
         try:
             # Input validation
             validation_start = time.time()
@@ -1811,6 +2145,20 @@ Parameter Schema and Description:
             
             # say_message_to_user_task.cancel()
             
+            # Update Langfuse span with timing data if available
+            if langfuse_span:
+                langfuse_span.update(
+                    output={
+                        "products_found": len(products_results),
+                        "search_type": timing_breakdown.get('search_type', 'unknown')
+                    },
+                    metadata={
+                        "timing_breakdown": timing_breakdown,
+                        "total_time_s": total_time,
+                        "exceeded_threshold": total_time > 3.0
+                    }
+                )
+            
             return markdown_results
             
         except Exception as e:
@@ -1822,7 +2170,6 @@ Parameter Schema and Description:
             logger.error(f"   Timing at error: {timing_breakdown}")
             raise ToolError("Unable to search for products")
     
-    @observe(name="display_product")
     @function_tool()
     async def display_product(
         self,
@@ -1848,6 +2195,53 @@ Parameter Schema and Description:
         
         if not isinstance(product_id, str):
             raise ToolError("`product_id` is required")
+        
+        # Use Langfuse context for tool tracking
+        if self._langfuse_active and self._langfuse_client:
+            tool_metadata = {
+                **self._conversation_metadata,
+                "turn_number": self._turn_count,
+                "is_tool_call": True,
+                "tool_name": "display_product",
+                "product_id": product_id,
+                "has_variant": variant is not None
+            }
+            
+            with self._langfuse_client.start_as_current_span(
+                name="tool_display_product",
+                input={
+                    "product_id": product_id,
+                    "variant": variant,
+                    "resumption_message": resumption_message
+                },
+                metadata=tool_metadata
+            ) as span:
+                try:
+                    return await self._execute_display_product(
+                        product_id, variant, resumption_message,
+                        timing_breakdown, start_time, span
+                    )
+                except Exception as e:
+                    span.update(
+                        status_message=str(e)[:500],
+                        level="ERROR"
+                    )
+                    raise
+        else:
+            # Execute without Langfuse tracking
+            try:
+                return await self._execute_display_product(
+                    product_id, variant, resumption_message,
+                    timing_breakdown, start_time, None
+                )
+            except Exception as e:
+                raise
+    
+    async def _execute_display_product(
+        self, product_id, variant, resumption_message,
+        timing_breakdown, start_time, langfuse_span
+    ):
+        """Execute the actual display product logic"""
         try:
             logger.info(f"🔍 display_product started: {product_id}")
             
@@ -1997,6 +2391,20 @@ Parameter Schema and Description:
                 user_state.current_product_id = product.id
                 user_state.current_product_timestamp = time.time()
                 logger.info(f"✅ Updated current product for user {user_state.user_id}: {product.name} (ID: {product.id})")
+            
+            # Update Langfuse span with timing data if available
+            if langfuse_span:
+                langfuse_span.update(
+                    output={
+                        "product_displayed": product.name if product else "Not found",
+                        "variant_used": variant is not None
+                    },
+                    metadata={
+                        "timing_breakdown": timing_breakdown,
+                        "total_time_s": total_time,
+                        "already_viewing": current_product and current_product.id == product_id
+                    }
+                )
             
             return result
         except ToolError as e:
