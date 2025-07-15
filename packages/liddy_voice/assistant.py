@@ -135,20 +135,18 @@ class Assistant(Agent):
         self._security_config = get_voice_security_config()
         self._conversation_id = f"{self._session_id}_{self._user_id}"
         
-        # Initialize Langfuse client and create trace for the conversation
+        # Initialize Langfuse client for flushing
         self._langfuse_client = get_client()
-        self._langfuse_trace = self._langfuse_client.trace(
-            name="voice_conversation",
-            session_id=self._session_id,  # This equals ctx.room.name for LiveKit correlation
-            user_id=self._user_id,
-            metadata={
-                "account": account,
-                "security_mode": "voice_only" if self._security_config.is_voice_only_mode() else "mixed",
-                "session_id": self._session_id,
-                "conversation_id": self._conversation_id,
-                "primary_model": primary_model
-            }
-        )
+        
+        # Store conversation metadata for observe decorators
+        self._conversation_metadata = {
+            "account": account,
+            "security_mode": "voice_only" if self._security_config.is_voice_only_mode() else "mixed",
+            "session_id": self._session_id,
+            "conversation_id": self._conversation_id,
+            "primary_model": primary_model,
+            "user_id": self._user_id
+        }
         
         # Log security mode
         if self._security_config.is_voice_only_mode():
@@ -380,31 +378,24 @@ Overall Status: {'🎯 All targets met!' if all([targets.get('meets_startup_targ
             logger.error(f"Error ending security conversation: {e}")
             security_stats = {"error": str(e)}
         
-        # Update Langfuse trace with final stats
+        # Log final stats for this conversation
         try:
-            if hasattr(self, '_langfuse_trace'):
+            if hasattr(self, '_langfuse_client'):
                 # Get conversation duration
                 conversation_duration = (datetime.now() - self._startup_timing.get('start_time', datetime.now())).total_seconds()
                 
-                self._langfuse_trace.update(
-                    output={
-                        "security_summary": security_stats,
-                        "conversation_duration_seconds": conversation_duration,
-                        "startup_timing": self._startup_timing.get('timing', {}),
-                        "final_status": "completed"
-                    },
-                    metadata={
-                        **self._langfuse_trace.metadata,
-                        "security_stats": security_stats,
-                        "completed_at": datetime.now().isoformat()
-                    }
-                )
+                # Log conversation summary
+                logger.info(f"📊 Conversation {self._conversation_id} completed:")
+                logger.info(f"  - Duration: {conversation_duration:.1f}s")
+                logger.info(f"  - Security mode: {self._conversation_metadata.get('security_mode', 'unknown')}")
+                logger.info(f"  - Total inputs: {security_stats.get('total_inputs', 0)}")
+                logger.info(f"  - Blocked inputs: {security_stats.get('blocked_inputs', 0)}")
+                logger.info(f"  - Echo detections: {security_stats.get('echo_detections', 0)}")
                 
-                # Flush to ensure data is sent
+                # Flush to ensure any pending Langfuse data is sent
                 self._langfuse_client.flush()
-                logger.info(f"📊 Langfuse trace updated for conversation {self._conversation_id}")
         except Exception as e:
-            logger.error(f"Error updating Langfuse trace: {e}")
+            logger.error(f"Error logging conversation summary: {e}")
         
         await super().on_exit()
         self._ctx.delete_room()
@@ -1098,7 +1089,12 @@ Parameter Schema and Description:
             # Pass the chunk along so downstream still executes
             yield chunk
 
-    @observe(name="llm_node", as_type="generation")
+    @observe(
+        name="llm_node", 
+        as_type="generation",
+        capture_input=False,  # We'll handle input/output ourselves for privacy
+        capture_output=False
+    )
     async def llm_node(
         self,
         chat_ctx: llm.ChatContext,
@@ -1107,16 +1103,8 @@ Parameter Schema and Description:
     ) -> AsyncIterable[llm.ChatChunk]:
         """Process the text with the LLM model"""
         
-        # Create a span linked to our conversation trace
-        if hasattr(self, '_langfuse_trace'):
-            span = self._langfuse_trace.span(
-                name="llm_turn",
-                metadata={
-                    "user_id": self._user_id,
-                    "has_tools": len(tools) > 0,
-                    "model": self._primary_model
-                }
-            )
+        # The @observe decorator on this method will handle Langfuse tracking
+        # Metadata is stored in self._conversation_metadata for reference
 
         # self._prompt_manager.update_current_generation()
         if not self._instructions_loaded:
