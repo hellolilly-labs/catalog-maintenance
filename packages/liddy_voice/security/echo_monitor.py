@@ -22,6 +22,10 @@ class EchoMonitor:
         self.echo_threshold = 0.75  # Similarity threshold for echo detection
         self.intervention_threshold = 3  # Consecutive echoes before intervention
         
+        # Auto-reset tracking
+        self.pending_reset = False          # Flag for frequency penalty reset
+        self.prev_freq_penalty = 0.0        # Remembers baseline frequency penalty
+        
         # Statistics tracking
         self.stats = {
             'total_responses': 0,
@@ -92,8 +96,10 @@ class EchoMonitor:
         if result['requires_intervention']:
             self.stats['interventions'] += 1
             result['suggested_action'] = self._generate_intervention_note()
-            # Temporary presence_penalty reduction to break echo pattern
-            result['temp_penalty_adjustment'] = {'presence_penalty': 0.5}
+            # Add frequency penalty while keeping existing presence penalty
+            result['temp_penalty_adjustment'] = {'frequency_penalty': 0.2}
+            self.pending_reset = True  # Mark for reset after next turn
+            logger.info("🔄 EchoMonitor: frequency_penalty=0.2 for next turn")
             logger.error(f"🚨 Echo intervention triggered after {consecutive_echoes} consecutive echoes in conversation {conversation_id}")
         
         return result
@@ -284,3 +290,11 @@ class EchoMonitor:
             old_threshold = self.intervention_threshold
             self.intervention_threshold = max(1, min(10, intervention_threshold))
             logger.info(f"🔧 Intervention threshold adjusted: {old_threshold} -> {self.intervention_threshold}")
+    
+    def should_reset_frequency_penalty(self) -> bool:
+        """Check if frequency penalty should be reset after this turn"""
+        if self.pending_reset:
+            self.pending_reset = False
+            logger.info("🔄 EchoMonitor: frequency_penalty should be reset to baseline")
+            return True
+        return False

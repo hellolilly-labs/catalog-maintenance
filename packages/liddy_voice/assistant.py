@@ -1222,14 +1222,20 @@ Parameter Schema and Description:
         # Get echo monitoring results if available
         echo_adjustments = {}
         
+        # Check if we should reset frequency penalty from previous echo intervention
+        if hasattr(self._security_manager.echo_monitor, 'should_reset_frequency_penalty'):
+            if self._security_manager.echo_monitor.should_reset_frequency_penalty():
+                # Reset to baseline (0.0)
+                echo_adjustments['frequency_penalty'] = 0.0
+        
         async with activity_llm.chat(
             chat_ctx=chat_ctx, 
             tools=tools, 
             tool_choice=tool_choice, 
             conn_options=conn_options,
             extra_kwargs={
-                "presence_penalty": echo_adjustments.get('presence_penalty', 0.8),
-                # "frequency_penalty": 0.0,
+                "presence_penalty": echo_adjustments.get('presence_penalty', 0.7),
+                "frequency_penalty": echo_adjustments.get('frequency_penalty', 0.0),
                 # "max_completion_tokens": 4096,
                 # "temperature": 0.2,
                 # "top_p": 1.0,

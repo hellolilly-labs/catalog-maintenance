@@ -177,7 +177,7 @@ class RuntimeSecurityManager:
             'allow_response': True,
             'intervention_message': None,
             'echo_detected': echo_result['is_echo'],
-            'llm_adjustments': {},
+            'llm_adjustments': echo_result.get('temp_penalty_adjustment', {}),
             'echo_score': echo_result['echo_score'],
             'consecutive_count': echo_result['consecutive_count'],
             'conversation_id': conversation_id
