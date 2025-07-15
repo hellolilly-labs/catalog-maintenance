@@ -67,6 +67,9 @@ class IndustryTerminologyResearcher(BaseResearcher):
         # 4. Analyze product names for patterns
         product_patterns = self._analyze_product_patterns(products)
         
+        # 5. Research categorization patterns for brand-agnostic descriptor generation
+        categorization_patterns = await self._research_categorization_patterns(brand_name, industry, products)
+        
         # Collect all search results for proper source tracking
         all_search_results = []
         
@@ -84,13 +87,14 @@ class IndustryTerminologyResearcher(BaseResearcher):
             "industry_slang": industry_slang,
             "technical_terms": technical_terms,
             "product_patterns": product_patterns,
+            "categorization_patterns": categorization_patterns,
             "product_count": len(products),
             "search_results": all_search_results,
             "total_sources": max(total_sources, 20),  # Minimum 20 based on searches performed
             "search_stats": {
-                "total_queries": 12,  # Approximate based on queries in each research method
-                "successful_searches": 10,  # Estimate
-                "success_rate": 0.83
+                "total_queries": 15,  # Updated to include categorization research
+                "successful_searches": 12,  # Estimate
+                "success_rate": 0.80
             }
         }
     
@@ -114,7 +118,8 @@ class IndustryTerminologyResearcher(BaseResearcher):
             analysis["price_terminology"],
             analysis["industry_slang"],
             analysis["technical_terms"],
-            analysis["product_patterns"]
+            analysis["product_patterns"],
+            analysis["categorization_patterns"]
         )
         
         return {
@@ -126,7 +131,8 @@ class IndustryTerminologyResearcher(BaseResearcher):
                                    len(analysis["price_terminology"].get("mid_tier_terms", [])) +
                                    len(analysis["price_terminology"].get("budget_terms", [])),
                 "slang_terms_found": len(analysis["industry_slang"].get("general_slang", [])),
-                "technical_terms_found": len(analysis["technical_terms"].get("specifications", []))
+                "technical_terms_found": len(analysis["technical_terms"].get("specifications", [])),
+                "categorization_patterns_found": sum(len(terms) for terms in analysis["categorization_patterns"].values())
             }
         }
     
@@ -677,17 +683,28 @@ Include only terms that are specific to the {industry} industry."""
         # Extract product names and prices
         product_data = []
         for product in products:
-            price_str = product.salePrice or product.originalPrice
-            if price_str:
-                try:
-                    price = float(price_str.replace('$', '').replace(',', ''))
-                    product_data.append({
-                        'name': product.name,
-                        'price': price,
-                        'categories': product.categories[:2] if product.categories else []
-                    })
-                except:
-                    pass
+            # Get price using variant-aware logic
+            price = 0
+            if hasattr(product, 'price_range') and product.variants:
+                min_price, max_price = product.price_range()
+                price = (min_price + max_price) / 2 if min_price > 0 else 0  # Use average
+            else:
+                # Fallback for legacy products
+                price_str = product.sale_price if hasattr(product, 'sale_price') else product.salePrice
+                if not price_str:
+                    price_str = product.original_price if hasattr(product, 'original_price') else product.originalPrice
+                if price_str:
+                    try:
+                        price = float(price_str.replace('$', '').replace(',', ''))
+                    except:
+                        pass
+            
+            if price > 0:
+                product_data.append({
+                    'name': product.name,
+                    'price': price,
+                    'categories': product.categories[:2] if product.categories else []
+                })
         
         if not product_data:
             return {}
@@ -831,7 +848,8 @@ Focus on extracting actual terms used in product names, not generic descriptions
                                  price_terminology: Dict[str, Any],
                                  industry_slang: Dict[str, List[Tuple[str, str]]],
                                  technical_terms: Dict[str, Any],
-                                 product_patterns: Dict[str, Any]) -> str:
+                                 product_patterns: Dict[str, Any],
+                                 categorization_patterns: Dict[str, List[str]]) -> str:
         """Generate the final research report"""
         
         report = f"""# Industry Terminology Research: {brand_name}
@@ -1003,7 +1021,26 @@ Analysis of the current catalog reveals these naming conventions:
         
         report += f"""
 
-## 5. Implementation Recommendations
+## 5. Product Categorization Patterns
+
+Industry-specific terminology patterns for dynamic product categorization:
+
+"""
+        
+        # Add categorization patterns
+        if categorization_patterns:
+            for category, terms in categorization_patterns.items():
+                if terms:  # Only add categories that have terms
+                    category_title = category.replace('_', ' ').title()
+                    report += f"### {category_title}\n"
+                    report += f"Terms that indicate {category.replace('_', ' ')}:\n"
+                    for term in terms[:15]:  # Limit to first 15 terms
+                        report += f"- {term}\n"
+                    report += "\n"
+        
+        report += f"""These patterns enable brand-agnostic product categorization by learning industry-specific terminology from actual product data and web research.
+
+## 6. Implementation Recommendations
 
 ### For Product Descriptors:
 1. Include industry slang translations in descriptors to improve search matching
@@ -1027,7 +1064,7 @@ For a product in the top 25% price range with "Pro" in the name:
 - Add to keywords: ["pro", "professional", "high-end", "premium", "flagship"]
 - AI persona: Can explain that "Pro" indicates professional/premium features
 
-## 6. AI Persona Context
+## 7. AI Persona Context
 
 ### Programmatically Extractable Terminology
 
@@ -1411,6 +1448,344 @@ Each definition should be concise (under 100 characters) and explain what the te
         except Exception as e:
             logger.error(f"LLM extraction failed: {e}")
             return {'premium_terms': [], 'mid_tier_terms': [], 'budget_terms': []}
+    
+    async def _research_categorization_patterns(self, brand_name: str, industry: str, products: List[Product]) -> Dict[str, List[str]]:
+        """
+        Research industry-specific categorization patterns for brand-agnostic descriptor generation
+        
+        Args:
+            brand_name: Name of the brand
+            industry: Industry category
+            products: List of products to analyze
+            
+        Returns:
+            Dict containing categorization patterns for different aspects
+        """
+        logger.info(f"Researching categorization patterns for {industry} industry")
+        
+        # Start with generic patterns
+        patterns = {
+            "use_cases": ["for", "use", "activity", "application", "purpose", "intended"],
+            "materials": ["material", "made", "constructed", "built", "crafted"],
+            "key_features": ["feature", "technology", "system", "component", "function"],
+            "style_type": ["style", "design", "aesthetic", "finish", "appearance"],
+            "target_user": ["beginner", "professional", "advanced", "expert", "level"],
+            "performance_traits": ["performance", "efficiency", "quality", "grade", "tier"]
+        }
+        
+        # Extract industry-specific terms from product data
+        extracted_patterns = self._extract_patterns_from_products(products)
+        
+        # Merge extracted patterns with base patterns
+        for category, terms in extracted_patterns.items():
+            if category in patterns:
+                patterns[category].extend(terms)
+                # Remove duplicates while preserving order
+                patterns[category] = list(dict.fromkeys(patterns[category]))
+        
+        # Research additional industry-specific terminology via web search
+        try:
+            web_patterns = await self._research_web_categorization_patterns(brand_name, industry)
+            
+            # Merge web research patterns
+            for category, terms in web_patterns.items():
+                if category in patterns:
+                    patterns[category].extend(terms)
+                    # Remove duplicates while preserving order
+                    patterns[category] = list(dict.fromkeys(patterns[category]))
+                    
+        except Exception as e:
+            logger.warning(f"Web categorization research failed: {e}")
+        
+        # Store research results for use by other components
+        self._categorization_patterns = patterns
+        
+        logger.info(f"Generated categorization patterns: {len(patterns)} categories, "
+                   f"{sum(len(terms) for terms in patterns.values())} total terms")
+        
+        return patterns
+    
+    def _extract_patterns_from_products(self, products: List[Product]) -> Dict[str, List[str]]:
+        """
+        Extract categorization patterns from existing product data
+        
+        Args:
+            products: List of products to analyze
+            
+        Returns:
+            Dict of categorization patterns discovered from products
+        """
+        patterns = {
+            "use_cases": [],
+            "materials": [],
+            "key_features": [],
+            "style_type": [],
+            "target_user": [],
+            "performance_traits": []
+        }
+        
+        use_case_indicators = set()
+        material_indicators = set()
+        feature_indicators = set()
+        style_indicators = set()
+        user_indicators = set()
+        performance_indicators = set()
+        
+        for product in products[:50]:  # Analyze first 50 products for patterns
+            product_dict = product.to_dict()
+            
+            # Extract from product names and descriptions
+            text_fields = [
+                product.name or "",
+                product.description or "",
+                str(product_dict.get('long_description', '')),
+                str(product_dict.get('title', ''))
+            ]
+            
+            # Extract from highlights/features
+            if hasattr(product, 'highlights') and product.highlights:
+                text_fields.extend(product.highlights)
+            
+            # Extract from categories
+            if product.categories:
+                text_fields.extend(product.categories)
+            
+            # Analyze text for patterns
+            for text in text_fields:
+                if not text:
+                    continue
+                    
+                text_lower = text.lower()
+                words = re.findall(r'\b\w+\b', text_lower)
+                
+                # Look for use case patterns
+                for word in words:
+                    if any(indicator in word for indicator in ['for', 'designed', 'intended', 'perfect', 'ideal']):
+                        # Extract surrounding context
+                        context = self._extract_context_around_word(text_lower, word, 2)
+                        if context:
+                            use_case_indicators.update(context)
+                    
+                    # Look for material patterns
+                    if any(indicator in word for indicator in ['made', 'crafted', 'built', 'constructed']):
+                        context = self._extract_context_around_word(text_lower, word, 2)
+                        if context:
+                            material_indicators.update(context)
+                    
+                    # Look for feature patterns
+                    if any(indicator in word for indicator in ['feature', 'technology', 'system', 'includes']):
+                        context = self._extract_context_around_word(text_lower, word, 2)
+                        if context:
+                            feature_indicators.update(context)
+                    
+                    # Look for style patterns
+                    if any(indicator in word for indicator in ['style', 'design', 'finish', 'color']):
+                        context = self._extract_context_around_word(text_lower, word, 2)
+                        if context:
+                            style_indicators.update(context)
+                    
+                    # Look for user level patterns
+                    if any(indicator in word for indicator in ['level', 'grade', 'tier', 'class']):
+                        context = self._extract_context_around_word(text_lower, word, 2)
+                        if context:
+                            user_indicators.update(context)
+                    
+                    # Look for performance patterns
+                    if any(indicator in word for indicator in ['performance', 'quality', 'efficiency', 'rating']):
+                        context = self._extract_context_around_word(text_lower, word, 2)
+                        if context:
+                            performance_indicators.update(context)
+        
+        # Convert sets to lists and filter out common words
+        stop_words = {'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'a', 'an'}
+        
+        patterns["use_cases"] = [term for term in use_case_indicators if term not in stop_words and len(term) > 2][:10]
+        patterns["materials"] = [term for term in material_indicators if term not in stop_words and len(term) > 2][:10]
+        patterns["key_features"] = [term for term in feature_indicators if term not in stop_words and len(term) > 2][:10]
+        patterns["style_type"] = [term for term in style_indicators if term not in stop_words and len(term) > 2][:10]
+        patterns["target_user"] = [term for term in user_indicators if term not in stop_words and len(term) > 2][:10]
+        patterns["performance_traits"] = [term for term in performance_indicators if term not in stop_words and len(term) > 2][:10]
+        
+        return patterns
+    
+    def _extract_context_around_word(self, text: str, word: str, window: int) -> List[str]:
+        """
+        Extract context words around a given word
+        
+        Args:
+            text: Text to search in
+            word: Word to find context for
+            window: Number of words before and after
+            
+        Returns:
+            List of context words
+        """
+        words = text.split()
+        context = []
+        
+        for i, w in enumerate(words):
+            if word in w:
+                start = max(0, i - window)
+                end = min(len(words), i + window + 1)
+                context.extend(words[start:end])
+        
+        return [w for w in context if len(w) > 2 and w.isalpha()]
+    
+    async def _research_web_categorization_patterns(self, brand_name: str, industry: str) -> Dict[str, List[str]]:
+        """
+        Research industry-specific categorization patterns via web search
+        
+        Args:
+            brand_name: Name of the brand
+            industry: Industry category
+            
+        Returns:
+            Dict of categorization patterns from web research
+        """
+        patterns = {
+            "use_cases": [],
+            "materials": [],
+            "key_features": [],
+            "style_type": [],
+            "target_user": [],
+            "performance_traits": []
+        }
+        
+        try:
+            # Search for industry-specific terminology
+            queries = [
+                f"{industry} product categories types classification",
+                f"{industry} materials construction components",
+                f"{industry} features technology specifications",
+                f"{industry} user levels beginner professional expert",
+                f"{industry} product styles designs types"
+            ]
+            
+            all_results = []
+            for query in queries[:3]:  # Limit to 3 queries for efficiency
+                try:
+                    search_results = await self.web_searcher.search(query, num_results=5)
+                    if hasattr(search_results, 'results'):
+                        all_results.extend(search_results.results)
+                    elif isinstance(search_results, list):
+                        all_results.extend(search_results)
+                except Exception as e:
+                    logger.warning(f"Web search failed for query '{query}': {e}")
+            
+            if all_results:
+                # Extract patterns using LLM
+                extracted_patterns = await self._extract_categorization_patterns_with_llm(
+                    industry, all_results
+                )
+                
+                # Merge extracted patterns
+                for category, terms in extracted_patterns.items():
+                    if category in patterns:
+                        patterns[category].extend(terms)
+            
+        except Exception as e:
+            logger.error(f"Web categorization research failed: {e}")
+        
+        return patterns
+    
+    async def _extract_categorization_patterns_with_llm(self, industry: str, search_results: List) -> Dict[str, List[str]]:
+        """
+        Use LLM to extract categorization patterns from web search results
+        
+        Args:
+            industry: Industry category
+            search_results: Web search results
+            
+        Returns:
+            Dict of extracted categorization patterns
+        """
+        # Combine search results into text
+        combined_text = ""
+        for result in search_results[:10]:  # Limit to first 10 results
+            if hasattr(result, 'snippet'):
+                combined_text += f"{result.snippet} "
+            elif isinstance(result, dict) and 'snippet' in result:
+                combined_text += f"{result['snippet']} "
+        
+        if not combined_text.strip():
+            return {
+                "use_cases": [],
+                "materials": [],
+                "key_features": [],
+                "style_type": [],
+                "target_user": [],
+                "performance_traits": []
+            }
+        
+        prompt = f"""
+        Analyze the following text about the {industry} industry and extract categorization patterns.
+        
+        Extract terms that would help categorize products in these areas:
+        1. Use cases (how products are used, activities, applications)
+        2. Materials (what products are made from, construction)
+        3. Key features (product features, technologies, capabilities)
+        4. Style types (design styles, aesthetics, appearances)
+        5. Target users (user levels, expertise, demographics)
+        6. Performance traits (quality indicators, performance characteristics)
+        
+        Text: {combined_text[:2000]}
+        
+        Return a JSON object with these categories as keys and lists of relevant terms as values.
+        Focus on industry-specific terms that would be useful for product categorization.
+        """
+        
+        try:
+            response = await LLMFactory.chat_completion(
+                task="extract_categorization_patterns",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1
+            )
+            
+            content = response.get('content', '{}')
+            
+            # Try to parse JSON
+            try:
+                result = json.loads(content)
+                
+                # Validate and clean result
+                cleaned_result = {
+                    "use_cases": [],
+                    "materials": [],
+                    "key_features": [],
+                    "style_type": [],
+                    "target_user": [],
+                    "performance_traits": []
+                }
+                
+                for category in cleaned_result.keys():
+                    if category in result and isinstance(result[category], list):
+                        # Take only first 5 terms per category and clean them
+                        terms = [term.strip().lower() for term in result[category][:5] if isinstance(term, str)]
+                        cleaned_result[category] = [term for term in terms if len(term) > 1 and len(term) < 30]
+                
+                return cleaned_result
+                
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse LLM categorization response as JSON")
+                return {
+                    "use_cases": [],
+                    "materials": [],
+                    "key_features": [],
+                    "style_type": [],
+                    "target_user": [],
+                    "performance_traits": []
+                }
+                
+        except Exception as e:
+            logger.error(f"LLM categorization extraction failed: {e}")
+            return {
+                "use_cases": [],
+                "materials": [],
+                "key_features": [],
+                "style_type": [],
+                "target_user": [],
+                "performance_traits": []
+            }
     
     def _get_quality_evaluation_criteria(self) -> List[str]:
         """Define quality criteria for terminology research"""
