@@ -290,18 +290,22 @@ class ProductManager:
         return await self.load_at_startup()
     
     async def _load_from_storage(self) -> Optional[List[Product]]:
-        """Load products from GCP storage"""
+        """Load products from storage using ProductLoader (supports CSV and JSON)"""
         try:
-            product_dicts = await self.storage_provider.get_product_catalog(self.account)
-            if product_dicts is None:
-                logger.debug(f"Storage provider returned None for {self.account}")
+            from liddy.models.product_loader import ProductLoader
+            
+            # Use ProductLoader which handles CSV and JSON sources
+            loader = ProductLoader(self.account)
+            products = await loader.load_products()
+            
+            if not products:
+                logger.debug(f"ProductLoader returned no products for {self.account}")
                 return None
-            logger.debug(f"Storage provider returned {len(product_dicts)} products for {self.account}")
-            products = [Product.from_dict(product=item) for item in product_dicts]
-            logger.debug(f"Successfully converted {len(products)} products to Product objects")
+                
+            logger.debug(f"ProductLoader returned {len(products)} products for {self.account}")
             return products
         except Exception as e:
-            logger.error(f"GCP storage load failed for {self.account}: {e}", exc_info=True)
+            logger.error(f"ProductLoader failed for {self.account}: {e}", exc_info=True)
             return None
     
     async def _load_from_local_files(self) -> Optional[List[Product]]:
@@ -333,7 +337,7 @@ class ProductManager:
     
     async def save_products(self, products: List[Product]) -> bool:
         """
-        Save product catalog to GCP storage and update memory.
+        Save product catalog to storage and update memory.
         
         Args:
             products: List of Product objects to save
@@ -342,9 +346,12 @@ class ProductManager:
             True if save was successful
         """
         try:
-            # Convert Product objects to dictionaries for storage
-            product_dicts = [product.to_dict() for product in products]
-            success = await self.storage_provider.save_product_catalog(self.account, product_dicts)
+            from liddy.models.product_loader import ProductLoader
+            
+            # Use ProductLoader to save (maintains variant structure)
+            loader = ProductLoader(self.account)
+            success = await loader.save_products(products)
+            
             if success:
                 # Update memory cache
                 self._products = products

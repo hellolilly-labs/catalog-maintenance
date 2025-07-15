@@ -26,7 +26,8 @@ from liddy.models.product import Product, DescriptorMetadata
 from liddy_intelligence.research.product_catalog_research import get_product_catalog_researcher
 
 # Import price descriptor updater for enhanced pricing logic
-from liddy_intelligence.catalog.price_descriptor_updater import PriceDescriptorUpdater
+# Price functionality now integrated directly
+from liddy_intelligence.catalog.price_statistics_analyzer import PriceStatisticsAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +69,8 @@ class UnifiedDescriptorGenerator:
         # Initialize product catalog researcher (synthesizes all brand research)
         self.product_catalog_researcher = get_product_catalog_researcher(brand_domain)
         
-        # Initialize price descriptor updater for enhanced pricing logic
-        self.price_updater = PriceDescriptorUpdater(brand_domain)
+        # Price functionality now integrated directly
+        self.terminology_research = None  # Will be loaded as needed
         
         # Cache for product catalog research
         self.product_catalog_intelligence = ""
@@ -115,10 +116,10 @@ class UnifiedDescriptorGenerator:
         # Calculate price statistics for the entire catalog
         logger.info("  📊 Calculating price statistics...")
         # Load terminology research for price categorization
-        terminology_research = await self.price_updater._load_terminology_research(
+        self.terminology_research = await self._load_terminology_research(
             auto_run=self.config.auto_run_terminology_research
         )
-        self.price_statistics = self.price_updater.calculate_price_statistics(products)
+        self.price_statistics = self._calculate_price_statistics(products)
         logger.info(f"  ✅ Price statistics calculated: {len(self.price_statistics.get('by_category', {}))} categories")
         
         # Process each product
@@ -145,19 +146,19 @@ class UnifiedDescriptorGenerator:
                 
                 if existing_descriptor and quality.quality_score >= self.config.quality_threshold and not force_regenerate:
                     # Even for cached descriptors, validate and update pricing
-                    needs_price_update = not self.price_updater.check_descriptor_has_price(existing_descriptor, product)
+                    needs_price_update = not self._check_descriptor_has_price(existing_descriptor, product)
                     
                     if needs_price_update:
                         logger.info(f"    ✅ Using cached (quality: {quality.quality_score:.2f}) - updating pricing")
                         # Update the descriptor with current pricing
-                        product.descriptor = self.price_updater.update_descriptor_with_price(
+                        product.descriptor = self._update_descriptor_with_price(
                             existing_descriptor,
                             product,
                             self.price_statistics
                         )
                         # Update search keywords with price categories
                         if product.search_keywords:
-                            product.search_keywords = self.price_updater.update_search_keywords_with_price(
+                            product.search_keywords = self._update_search_keywords_with_price(
                                 product.search_keywords,
                                 product,
                                 self.price_statistics
@@ -249,10 +250,10 @@ class UnifiedDescriptorGenerator:
         
         # PRICE VALIDATION AND ENHANCEMENT
         # Check if descriptor contains accurate pricing
-        if not self.price_updater.check_descriptor_has_price(product.descriptor, product):
+        if not self._check_descriptor_has_price(product.descriptor, product):
             logger.debug(f"  💰 Adding price information to descriptor for {product.name}")
             # Update descriptor with price info and semantic context
-            product.descriptor = self.price_updater.update_descriptor_with_price(
+            product.descriptor = self._update_descriptor_with_price(
                 product.descriptor, 
                 product, 
                 self.price_statistics
@@ -260,7 +261,7 @@ class UnifiedDescriptorGenerator:
         
         # Enhance search keywords with price categories
         search_keywords = result.get('search_terms', [])[:self.config.max_search_terms]
-        product.search_keywords = self.price_updater.update_search_keywords_with_price(
+        product.search_keywords = self._update_search_keywords_with_price(
             search_keywords,
             product,
             self.price_statistics
@@ -1277,6 +1278,136 @@ JUSTIFICATION: [brief explanation]"""
                 categories["key_features"].append(highlight)
         
         return categories
+    
+    def _calculate_price_statistics(self, products: List[Product]) -> Dict[str, Any]:
+        """
+        Calculate price distribution statistics using the enhanced analyzer
+        
+        Args:
+            products: List of products to analyze
+            
+        Returns:
+            Dict with overall stats, category stats, and semantic phrases
+        """
+        # Use the enhanced analyzer
+        stats = PriceStatisticsAnalyzer.analyze_catalog_pricing(products, self.terminology_research)
+        
+        # Log the analysis results
+        overall = stats.get('overall', {})
+        logger.info(f"Price statistics for {self.brand_domain}: min=${overall.get('min', 0):.2f}, "
+                   f"p25=${overall.get('p25', 0):.2f}, p50=${overall.get('p50', 0):.2f}, "
+                   f"p75=${overall.get('p75', 0):.2f}, p95=${overall.get('p95', 0):.2f}, "
+                   f"max=${overall.get('max', 0):.2f}")
+        
+        if stats.get('recommendations', {}).get('warnings'):
+            for warning in stats['recommendations']['warnings']:
+                logger.warning(f"Pricing analysis warning: {warning}")
+        
+        return stats
+    
+    def _check_descriptor_has_price(self, descriptor: str, product: Product) -> bool:
+        """
+        Check if a descriptor contains the actual product price
+        
+        Args:
+            descriptor: Product descriptor text
+            product: Product object with price information
+            
+        Returns:
+            bool: True if actual price values are found in descriptor
+        """
+        if not descriptor:
+            return False
+            
+        # Extract actual price values from the product
+        prices_to_check = []
+        has_correct_sale_price = True
+        
+        if product.originalPrice:
+            # Clean the price string and add variations
+            original_price = product.originalPrice.strip()
+            prices_to_check.append(original_price)
+            # Also check without dollar sign
+            if original_price.startswith('$'):
+                prices_to_check.append(original_price[1:])
+        
+        if product.salePrice and product.salePrice != product.originalPrice:
+            sale_price = product.salePrice.strip()
+            prices_to_check.append(sale_price)
+            if sale_price.startswith('$'):
+                prices_to_check.append(sale_price[1:])
+            
+            # IMPORTANT: Check that the descriptor has the CURRENT sale price
+            # If it mentions a different sale price, it's outdated
+            has_correct_sale_price = sale_price in descriptor or sale_price[1:] in descriptor
+            
+            # Also check for outdated pricing - if original price is mentioned as the current price
+            # when there's a sale, the descriptor is outdated
+            if "price: " + original_price in descriptor.lower() or "priced at " + original_price in descriptor.lower():
+                return False  # Outdated - shows original price as current when on sale
+        
+        # For non-sale items, just check if the price is there
+        if not (product.salePrice and product.salePrice != product.originalPrice):
+            # Check if any of the actual prices appear in the descriptor
+            for price in prices_to_check:
+                if price in descriptor:
+                    return True
+        else:
+            # For sale items, must have the sale price
+            return has_correct_sale_price
+                
+        # Also check for the price range string (e.g., "$1,000 - $2,000")
+        price_range = Product.get_product_price_range_string(product)
+        if price_range and price_range in descriptor:
+            return True
+            
+        return False
+    
+    def _update_descriptor_with_price(self, descriptor: str, product: Product, 
+                                     price_stats: Optional[Dict[str, float]] = None) -> str:
+        """
+        Update a descriptor with current price information and semantic context
+        
+        Args:
+            descriptor: Current product descriptor
+            product: Product object with current pricing
+            price_stats: Optional price statistics for semantic context
+            
+        Returns:
+            str: Updated descriptor with price information and context
+        """
+        # Get basic price info
+        price_info = self._extract_price_from_product(product)
+        
+        # Add semantic price context based on statistics
+        if price_stats:
+            semantic_context = self._generate_semantic_price_context(product, price_stats)
+            if semantic_context:
+                price_info += f"\n\n{semantic_context}"
+        
+        # Price template
+        PRICE_TEMPLATE = """
+
+**Pricing:**
+{price_info}
+"""
+        
+        # Check if descriptor already has a pricing section
+        if re.search(r'\*\*Pricing:?\*\*', descriptor):
+            # Replace existing pricing section
+            pattern = r'\*\*Pricing:?\*\*.*?(?=\n\*\*|\n\n|\Z)'
+            replacement = f"**Pricing:**\n{price_info}"
+            updated = re.sub(pattern, replacement, descriptor, flags=re.DOTALL)
+        else:
+            # Add pricing section
+            # Try to add it before the search terms or at the end
+            if '**Search Terms:**' in descriptor:
+                parts = descriptor.split('**Search Terms:**')
+                updated = parts[0].rstrip() + PRICE_TEMPLATE.format(price_info=price_info) + '\n**Search Terms:**' + parts[1]
+            else:
+                updated = descriptor.rstrip() + PRICE_TEMPLATE.format(price_info=price_info)
+        
+        return updated
 
 
 

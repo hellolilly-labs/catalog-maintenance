@@ -1,7 +1,8 @@
 import json
-from typing import List
+from typing import List, Optional, Tuple, Dict, Any
 import inspect
 from datetime import datetime
+from .product_variant import ProductVariant
 
 class DescriptorMetadata:
     def __init__(self,
@@ -81,7 +82,8 @@ class Product:
                  key_selling_points: list[str] | None = None,
                  voice_summary: str | None = None,
                  product_labels: dict | None = None,
-                 year: str | None = None):
+                 year: str | None = None,
+                 variants: list[ProductVariant] | None = None):
         self.id = id
         self.name = name
         self.categories = categories if categories is not None else []
@@ -130,6 +132,7 @@ class Product:
         self.voice_summary = voice_summary if voice_summary is not None else ''
         self.product_labels = product_labels if product_labels is not None else {}
         self.year = year
+        self.variants = variants if variants is not None else []
     
     def to_dict(self) -> dict:
         # Convert the object to a dictionary
@@ -160,7 +163,8 @@ class Product:
             "key_selling_points": self.key_selling_points,
             "voice_summary": self.voice_summary,
             "product_labels": self.product_labels,
-            "year": self.year
+            "year": self.year,
+            "variants": [v.to_dict() for v in self.variants] if self.variants else []
         }
     
     @classmethod
@@ -179,6 +183,15 @@ class Product:
                         filtered_dict['descriptor_metadata'] = value
                     else:
                         filtered_dict['descriptor_metadata'] = DescriptorMetadata.from_dict(value)
+                elif key == 'variants' and value is not None:
+                    # Convert variant dicts to ProductVariant objects
+                    if isinstance(value, list):
+                        filtered_dict['variants'] = [
+                            ProductVariant.from_dict(v) if isinstance(v, dict) else v
+                            for v in value
+                        ]
+                    else:
+                        filtered_dict['variants'] = value
                 else:
                     filtered_dict[key] = value
         
@@ -496,6 +509,132 @@ class Product:
     def to_json(self) -> str:
         """Convert the object to a JSON string"""
         return json.dumps(self.to_dict(), indent=2)
+    
+    # Variant-aware helper methods
+    def price_range(self) -> Tuple[float, float]:
+        """
+        Get the price range across all variants.
+        
+        Returns:
+            Tuple of (min_price, max_price) in float values
+        """
+        if not self.variants:
+            # Fallback to legacy price fields
+            try:
+                price_str = self.salePrice or self.originalPrice or "0"
+                price = float(price_str.replace('$', '').replace(',', ''))
+                return (price, price)
+            except:
+                return (0.0, 0.0)
+        
+        prices = []
+        for variant in self.variants:
+            try:
+                # Check sale price first, then regular price
+                price_str = variant.price or "0"
+                price = float(price_str.replace('$', '').replace(',', ''))
+                prices.append(price)
+            except:
+                continue
+        
+        if not prices:
+            return (0.0, 0.0)
+        
+        return (min(prices), max(prices))
+    
+    def get_variant_by_sku(self, sku: str) -> Optional[ProductVariant]:
+        """Get a specific variant by its SKU/ID"""
+        if not self.variants:
+            return None
+        
+        for variant in self.variants:
+            if variant.id == sku:
+                return variant
+        
+        return None
+    
+    def get_default_variant(self) -> Optional[ProductVariant]:
+        """Get the default variant for this product"""
+        if not self.variants:
+            return None
+        
+        # First try to find explicitly marked default
+        for variant in self.variants:
+            if variant.isDefault:
+                return variant
+        
+        # Fallback to first variant
+        return self.variants[0] if self.variants else None
+    
+    def get_variants_by_attribute(self, attr_name: str, attr_value: str) -> List[ProductVariant]:
+        """
+        Get all variants matching a specific attribute value.
+        
+        Args:
+            attr_name: Attribute name (e.g., 'size', 'color')
+            attr_value: Attribute value to match
+            
+        Returns:
+            List of matching variants
+        """
+        if not self.variants:
+            return []
+        
+        matching = []
+        for variant in self.variants:
+            if variant.attributes.get(attr_name) == attr_value:
+                matching.append(variant)
+        
+        return matching
+    
+    def get_available_sizes(self) -> List[str]:
+        """Get all unique sizes from variants"""
+        if not self.variants:
+            return self.sizes or []
+        
+        sizes = set()
+        for variant in self.variants:
+            if 'size' in variant.attributes:
+                sizes.add(variant.attributes['size'])
+        
+        return sorted(list(sizes))
+    
+    def get_available_colors(self) -> List[str]:
+        """Get all unique colors from variants"""
+        if not self.variants:
+            # Return legacy colors field
+            return [c['name'] if isinstance(c, dict) else c for c in self.colors] if self.colors else []
+        
+        colors = set()
+        for variant in self.variants:
+            if 'color' in variant.attributes:
+                colors.add(variant.attributes['color'])
+        
+        return sorted(list(colors))
+    
+    def get_total_inventory(self) -> int:
+        """Get total inventory across all variants"""
+        if not self.variants:
+            return 0
+        
+        total = 0
+        for variant in self.variants:
+            if variant.inventoryQuantity:
+                total += variant.inventoryQuantity
+        
+        return total
+    
+    def is_in_stock(self) -> bool:
+        """Check if any variant is in stock"""
+        if not self.variants:
+            # Fallback to checking sale/original price existence
+            return bool(self.salePrice or self.originalPrice)
+        
+        for variant in self.variants:
+            if variant.inStock or (variant.inventoryQuantity and variant.inventoryQuantity > 0):
+                return True
+        
+        return False
 
 # if __name__ == "__main__":
 #     # Example usage
