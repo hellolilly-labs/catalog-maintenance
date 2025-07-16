@@ -68,16 +68,20 @@ class PriceDescriptorUpdater:
         prices_to_check = []
         has_correct_sale_price = True
         
-        if product.originalPrice:
+        # Use property access for backward compatibility
+        original_price = product.original_price if hasattr(product, 'original_price') else product.originalPrice
+        sale_price = product.sale_price if hasattr(product, 'sale_price') else product.salePrice
+        
+        if original_price:
             # Clean the price string and add variations
-            original_price = product.originalPrice.strip()
+            original_price = original_price.strip()
             prices_to_check.append(original_price)
             # Also check without dollar sign
             if original_price.startswith('$'):
                 prices_to_check.append(original_price[1:])
         
-        if product.salePrice and product.salePrice != product.originalPrice:
-            sale_price = product.salePrice.strip()
+        if sale_price and sale_price != original_price:
+            sale_price = sale_price.strip()
             prices_to_check.append(sale_price)
             if sale_price.startswith('$'):
                 prices_to_check.append(sale_price[1:])
@@ -88,11 +92,11 @@ class PriceDescriptorUpdater:
             
             # Also check for outdated pricing - if original price is mentioned as the current price
             # when there's a sale, the descriptor is outdated
-            if "price: " + original_price in descriptor.lower() or "priced at " + original_price in descriptor.lower():
+            if original_price and ("price: " + original_price in descriptor.lower() or "priced at " + original_price in descriptor.lower()):
                 return False  # Outdated - shows original price as current when on sale
         
         # For non-sale items, just check if the price is there
-        if not (product.salePrice and product.salePrice != product.originalPrice):
+        if not (sale_price and sale_price != original_price):
             # Check if any of the actual prices appear in the descriptor
             for price in prices_to_check:
                 if price in descriptor:
@@ -120,23 +124,27 @@ class PriceDescriptorUpdater:
         """
         price_parts = []
         
+        # Use property access for backward compatibility
+        original_price = product.original_price if hasattr(product, 'original_price') else product.originalPrice
+        sale_price = product.sale_price if hasattr(product, 'sale_price') else product.salePrice
+        
         # Handle sale pricing
-        if product.salePrice and product.salePrice != product.originalPrice:
+        if sale_price and sale_price != original_price:
             # Parse prices to compare them numerically
             try:
-                sale_value = float(product.salePrice.replace('$', '').replace(',', ''))
-                orig_value = float(product.originalPrice.replace('$', '').replace(',', ''))
+                sale_value = float(sale_price.replace('$', '').replace(',', ''))
+                orig_value = float(original_price.replace('$', '').replace(',', ''))
                 discount_pct = ((orig_value - sale_value) / orig_value) * 100
                 
-                price_parts.append(f"On sale for {product.salePrice} (save {discount_pct:.0f}%)")
-                price_parts.append(f"Originally {product.originalPrice}")
+                price_parts.append(f"On sale for {sale_price} (save {discount_pct:.0f}%)")
+                price_parts.append(f"Originally {original_price}")
             except:
                 # Fallback if parsing fails
-                price_parts.append(f"Sale Price: {product.salePrice}")
-                price_parts.append(f"Original Price: {product.originalPrice}")
+                price_parts.append(f"Sale Price: {sale_price}")
+                price_parts.append(f"Original Price: {original_price}")
         else:
             # Regular pricing
-            price_parts.append(f"Price: {product.originalPrice}")
+            price_parts.append(f"Price: {original_price}")
         
         # Add price range for context
         price_range = Product.get_product_price_range_string(product)
@@ -195,8 +203,10 @@ class PriceDescriptorUpdater:
         Returns:
             str: Semantic price context
         """
-        # Get current price
-        price_str = product.salePrice or product.originalPrice
+        # Get current price - use property access for compatibility
+        sale_price = product.sale_price if hasattr(product, 'sale_price') else product.salePrice
+        original_price = product.original_price if hasattr(product, 'original_price') else product.originalPrice
+        price_str = sale_price or original_price
         if not price_str:
             return ""
             
@@ -256,11 +266,13 @@ class PriceDescriptorUpdater:
             else:
                 context_parts.append(self._get_budget_context(semantic_phrases.get('budget', [])))
         
-        # Add sale context if applicable
-        if product.salePrice and product.salePrice != product.originalPrice:
+        # Add sale context if applicable - use property access for compatibility
+        sale_price_prop = product.sale_price if hasattr(product, 'sale_price') else product.salePrice
+        original_price_prop = product.original_price if hasattr(product, 'original_price') else product.originalPrice
+        if sale_price_prop and sale_price_prop != original_price_prop:
             try:
-                sale_price = float(product.salePrice.replace('$', '').replace(',', ''))
-                orig_price = float(product.originalPrice.replace('$', '').replace(',', ''))
+                sale_price = float(sale_price_prop.replace('$', '').replace(',', ''))
+                orig_price = float(original_price_prop.replace('$', '').replace(',', ''))
                 discount_pct = ((orig_price - sale_price) / orig_price) * 100
                 
                 if discount_pct >= 30:
@@ -420,26 +432,38 @@ class PriceDescriptorUpdater:
         )
     
     async def _load_terminology_research(self, auto_run: bool = True, force_refresh: bool = False) -> Optional[Dict]:
-        """Load terminology research, optionally running it if missing
+        """Load terminology research, optionally running it if missing or incomplete
         
         Args:
-            auto_run: If True, automatically run the researcher if missing
+            auto_run: If True, automatically run the researcher if missing or incomplete
+            force_refresh: If True, force regeneration regardless of existing research
         """
         try:
             research_content = None
+            needs_regeneration = force_refresh
             
             # Check if research exists
             if not force_refresh:
                 try:
                     research_content = await self.storage_provider.get_research_data(account=self.account, research_type="industry_terminology")
+                    
+                    # VALIDATE COMPLETENESS: Check if research has new categorization_patterns field
+                    if research_content and not self._is_research_complete(research_content):
+                        logger.info(f"🔄 Existing terminology research is incomplete (missing categorization patterns). Regenerating...")
+                        needs_regeneration = True
+                        research_content = None
+                        
                 except Exception as e:
                     logger.debug(f"Terminology research not found: {e}")
                     research_content = None
             
-            # If no research content, either run it or warn
-            if research_content is None:
+            # If no research content or needs regeneration, either run it or warn
+            if research_content is None or needs_regeneration:
                 if auto_run:
-                    logger.info(f"📚 No terminology research found. Running it now for {self.account}...")
+                    if needs_regeneration:
+                        logger.info(f"🔄 Updating terminology research with new categorization patterns for {self.account}...")
+                    else:
+                        logger.info(f"📚 No terminology research found. Running it now for {self.account}...")
                     
                     # Import and run the researcher
                     from liddy_intelligence.research.industry_terminology_researcher import IndustryTerminologyResearcher
@@ -480,6 +504,14 @@ class PriceDescriptorUpdater:
                     'premium_indicators': [],
                     'mid_indicators': [],
                     'budget_indicators': []
+                },
+                'categorization_patterns': {
+                    'use_cases': [],
+                    'materials': [],
+                    'key_features': [],
+                    'style_type': [],
+                    'target_user': [],
+                    'performance_traits': []
                 }
             }
             
@@ -487,8 +519,47 @@ class PriceDescriptorUpdater:
             lines = research_content.split('\n')
             current_section = None
             in_brand_specific = False
+            in_categorization_section = False
+            current_categorization_type = None
             
             for line in lines:
+                # Check for categorization patterns section
+                if 'Product Categorization Patterns' in line:
+                    in_categorization_section = True
+                    current_section = None
+                    continue
+                elif in_categorization_section and line.strip().startswith('##') and 'Categorization' not in line:
+                    # End of categorization section
+                    in_categorization_section = False
+                    current_categorization_type = None
+                
+                # Parse categorization patterns section
+                if in_categorization_section:
+                    # Look for subsection headers
+                    if line.strip().startswith('### '):
+                        section_header = line.replace('### ', '').strip().lower()
+                        if 'use case' in section_header:
+                            current_categorization_type = 'use_cases'
+                        elif 'material' in section_header:
+                            current_categorization_type = 'materials'
+                        elif 'feature' in section_header or 'key feature' in section_header:
+                            current_categorization_type = 'key_features'
+                        elif 'style' in section_header:
+                            current_categorization_type = 'style_type'
+                        elif 'user' in section_header or 'target' in section_header:
+                            current_categorization_type = 'target_user'
+                        elif 'performance' in section_header or 'trait' in section_header:
+                            current_categorization_type = 'performance_traits'
+                        continue
+                    
+                    # Extract terms from bullet points in categorization section
+                    elif line.strip().startswith('- ') and current_categorization_type:
+                        term = line.replace('-', '').strip().lower()
+                        if term and len(term) > 1 and current_categorization_type in terminology_data['categorization_patterns']:
+                            terminology_data['categorization_patterns'][current_categorization_type].append(term)
+                        continue
+                
+                # Parse price terminology sections (existing logic)
                 # Check for brand-specific sections FIRST (more specific)
                 if 'Brand-Specific Premium Indicators' in line:
                     current_section = 'premium'
@@ -510,8 +581,8 @@ class PriceDescriptorUpdater:
                     current_section = 'mid'
                     in_brand_specific = False
                 
-                # Extract terms from bullet points
-                elif line.strip().startswith('- ') and current_section:
+                # Extract terms from bullet points (price terminology)
+                elif line.strip().startswith('- ') and current_section and not in_categorization_section:
                     # Handle different bullet formats
                     if '**' in line:
                         # Format: - **term**: description
@@ -544,12 +615,73 @@ class PriceDescriptorUpdater:
                             else:
                                 terminology_data['price_terminology']['budget_terms'].append(term)
             
-            logger.info(f"Loaded terminology research with {len(terminology_data['price_terminology']['premium_terms'])} premium terms")
+            # Log loading success with details
+            categorization_count = sum(len(terms) for terms in terminology_data['categorization_patterns'].values())
+            logger.info(f"Loaded terminology research with {len(terminology_data['price_terminology']['premium_terms'])} premium terms and {categorization_count} categorization patterns")
+            
+            # Debug: Show categorization pattern details
+            for category, terms in terminology_data['categorization_patterns'].items():
+                if terms:
+                    logger.debug(f"  {category}: {len(terms)} terms - {terms[:3]}{'...' if len(terms) > 3 else ''}")
+            
             return terminology_data
             
         except Exception as e:
             logger.warning(f"Could not load terminology research: {e}")
             return None
+    
+    def _is_research_complete(self, research_content: str) -> bool:
+        """
+        Check if terminology research contains all required fields including new categorization patterns
+        
+        Args:
+            research_content: Raw research content string
+            
+        Returns:
+            bool: True if research is complete with all required fields
+        """
+        if not research_content:
+            return False
+        
+        # Check for required sections that indicate complete research
+        required_sections = [
+            "Product Categorization Patterns",  # New section added
+            "Price Tier Terminology",
+            "Industry Slang", 
+            "Technical Terminology"
+        ]
+        
+        missing_sections = []
+        for section in required_sections:
+            if section not in research_content:
+                missing_sections.append(section)
+        
+        if missing_sections:
+            logger.debug(f"Terminology research missing sections: {missing_sections}")
+            return False
+        
+        # Additional validation: Check if categorization patterns section has content
+        lines = research_content.split('\n')
+        in_categorization_section = False
+        has_categorization_content = False
+        
+        for line in lines:
+            if "Product Categorization Patterns" in line:
+                in_categorization_section = True
+            elif in_categorization_section and line.strip().startswith('### '):
+                # Found a subsection in categorization patterns
+                has_categorization_content = True
+                break
+            elif in_categorization_section and line.strip().startswith('##'):
+                # Moved to next major section
+                break
+        
+        if not has_categorization_content:
+            logger.debug("Terminology research lacks categorization pattern content")
+            return False
+        
+        logger.debug("Terminology research validation passed - all required sections present")
+        return True
     
     def calculate_price_statistics(self, products: List[Product]) -> Dict[str, Any]:
         """
@@ -717,7 +849,10 @@ class PriceDescriptorUpdater:
         price_keywords = []
         
         # Get the current price (sale or original)
-        current_price_str = product.salePrice or product.originalPrice
+        # Use property access for compatibility
+        sale_price = product.sale_price if hasattr(product, 'sale_price') else product.salePrice
+        original_price = product.original_price if hasattr(product, 'original_price') else product.originalPrice
+        current_price_str = sale_price or original_price
         if current_price_str:
             try:
                 current_price = float(current_price_str.replace('$', '').replace(',', ''))
@@ -740,8 +875,10 @@ class PriceDescriptorUpdater:
                 # Add specific price point
                 price_keywords.append(f"${int(current_price)}")
                 
-                # Add sale-specific keywords if on sale
-                if product.salePrice and product.salePrice != product.originalPrice:
+                # Add sale-specific keywords if on sale - use property access for compatibility
+                sale_price = product.sale_price if hasattr(product, 'sale_price') else product.salePrice
+                original_price = product.original_price if hasattr(product, 'original_price') else product.originalPrice
+                if sale_price and sale_price != original_price:
                     price_keywords.extend([
                         "on sale",
                         "discount",
@@ -802,10 +939,12 @@ class PriceDescriptorUpdater:
                 if self.check_descriptor_has_price(product.descriptor, product):
                     stats["already_had_price"] += 1
                     
-                    # Still update if it's a sale price change
-                    if product.salePrice and product.salePrice != product.originalPrice:
+                    # Still update if it's a sale price change - use property access for compatibility
+                    sale_price = product.sale_price if hasattr(product, 'sale_price') else product.salePrice
+                    original_price = product.original_price if hasattr(product, 'original_price') else product.originalPrice
+                    if sale_price and sale_price != original_price:
                         # Check if the sale price is already in the descriptor
-                        if product.salePrice not in product.descriptor:
+                        if sale_price not in product.descriptor:
                             # Update the descriptor with new sale price
                             product.descriptor = self.update_descriptor_with_price(
                                 product.descriptor, product, price_statistics
@@ -875,11 +1014,17 @@ class PriceDescriptorUpdater:
                 logger.error(f"Product {product_id} not found")
                 return False
             
-            # Update prices
+            # Update prices - use property access for compatibility
             if new_sale_price is not None:
-                product.salePrice = new_sale_price
+                if hasattr(product, 'sale_price'):
+                    product.sale_price = new_sale_price
+                else:
+                    product.salePrice = new_sale_price
             if new_original_price is not None:
-                product.originalPrice = new_original_price
+                if hasattr(product, 'original_price'):
+                    product.original_price = new_original_price
+                else:
+                    product.originalPrice = new_original_price
             
             # Calculate price statistics if not already cached
             if not self.price_stats:
@@ -950,8 +1095,11 @@ class PriceDescriptorUpdater:
                     continue
                 
                 try:
-                    # Update price
-                    product.salePrice = sale_price
+                    # Update price - use property access for compatibility
+                    if hasattr(product, 'sale_price'):
+                        product.sale_price = sale_price
+                    else:
+                        product.salePrice = sale_price
                     
                     # Update descriptor and keywords
                     product.descriptor = self.update_descriptor_with_price(

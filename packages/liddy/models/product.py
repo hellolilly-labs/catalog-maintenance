@@ -1,7 +1,8 @@
 import json
-from typing import List
+from typing import List, Optional, Tuple, Dict, Any
 import inspect
 from datetime import datetime
+from .product_variant import ProductVariant
 
 class DescriptorMetadata:
     def __init__(self,
@@ -81,11 +82,16 @@ class Product:
                  key_selling_points: list[str] | None = None,
                  voice_summary: str | None = None,
                  product_labels: dict | None = None,
-                 year: str | None = None):
+                 year: str | None = None,
+                 variants: list[ProductVariant] | None = None):
         self.id = id
         self.name = name
         self.categories = categories if categories is not None else []
         self.brand = brand
+        # Store legacy fields as private attributes for property access
+        self._salePrice = salePrice
+        self._originalPrice = originalPrice
+        # Keep public attributes for backward compatibility with direct access
         self.salePrice = salePrice
         self.originalPrice = originalPrice
         self.productUrl = productUrl
@@ -106,8 +112,9 @@ class Product:
                     self.imageUrls[i] = str(self.imageUrls[i])
 
         self.videoUrls = videoUrls if videoUrls is not None else []
-        self.colors = colors if colors is not None else []
-        self.sizes = sizes if sizes is not None else []
+        # Store legacy fields as private attributes for property access
+        self._colors = colors if colors is not None else []
+        self._sizes = sizes if sizes is not None else []
         self.sizing = sizing if sizing is not None else {}
         self.description = description
         self.specifications = specifications if specifications is not None else {}
@@ -130,23 +137,26 @@ class Product:
         self.voice_summary = voice_summary if voice_summary is not None else ''
         self.product_labels = product_labels if product_labels is not None else {}
         self.year = year
+        self.variants = []
+        if isinstance(variants, list):
+            for i in range(len(variants)):
+                if isinstance(variants[i], dict):
+                    self.variants.append(ProductVariant(**variants[i]))
+                elif isinstance(variants[i], ProductVariant):
+                    self.variants.append(variants[i])
     
     def to_dict(self) -> dict:
         # Convert the object to a dictionary
-        return {
+        result = {
             "id": self.id,
             "name": self.name,
             "categories": self.categories,
             "brand": self.brand,
-            "salePrice": self.salePrice,
-            "originalPrice": self.originalPrice,
             "productUrl": self.productUrl,
             "imageUrls": self.imageUrls,
             "videoUrls": self.videoUrls,
-            "colors": self.colors,
-            "sizes": self.sizes,
-            "sizing": self.sizing,
-            "sizeSpecifications": self.sizeSpecifications,
+            "sizing": self.sizing,  # Keep AI-generated sizing info
+            "sizeSpecifications": self.sizeSpecifications,  # Keep AI-generated size specs
             "highlights": self.highlights,
             "description": self.description,
             "specifications": self.specifications,
@@ -160,8 +170,18 @@ class Product:
             "key_selling_points": self.key_selling_points,
             "voice_summary": self.voice_summary,
             "product_labels": self.product_labels,
-            "year": self.year
+            "year": self.year,
+            "variants": [v.to_dict() for v in self.variants] if self.variants else []
         }
+        
+        # Only include legacy fields if no variants exist (for backward compatibility)
+        if not self.variants:
+            result["salePrice"] = self.salePrice
+            result["originalPrice"] = self.originalPrice
+            result["colors"] = self.colors
+            result["sizes"] = self.sizes
+        
+        return result
     
     @classmethod
     def from_dict(cls, product: dict) -> "Product":
@@ -179,6 +199,15 @@ class Product:
                         filtered_dict['descriptor_metadata'] = value
                     else:
                         filtered_dict['descriptor_metadata'] = DescriptorMetadata.from_dict(value)
+                elif key == 'variants' and value is not None:
+                    # Convert variant dicts to ProductVariant objects
+                    if isinstance(value, list):
+                        filtered_dict['variants'] = [
+                            ProductVariant.from_dict(v) if isinstance(v, dict) else v
+                            for v in value
+                        ]
+                    else:
+                        filtered_dict['variants'] = value
                 else:
                     filtered_dict[key] = value
         
@@ -377,21 +406,33 @@ class Product:
             else:
                 markdown += f"\n{prehash}## Price\n- Price: {product.originalPrice}\n"
 
-        if product.colors and len(product.colors) > 0:
-            markdown += f"\n{prehash}## Colors\n"
-            for color in product.colors:
-                if isinstance(color, dict):
-                    # if the color is a dict, then get the value
-                    color_text = "-"
-                    if "name" in color:
-                        color_text += f" {color['name']}"
-                    if "isDefault" in color and color['isDefault']:
-                        color_text += f" **Default Color**"
-                    if "id" in color:
-                        color_text += f" **ID**: {color['id']}"
-                    markdown += color_text + "\n"
-                elif isinstance(color, str):
-                    markdown += f"- {color}\n"
+        # Handle variant attributes generically
+        if hasattr(product, 'get_all_variant_attributes'):
+            variant_attrs = product.get_all_variant_attributes()
+            if variant_attrs:
+                markdown += f"\n{prehash}## Available Options\n"
+                for attr_name, values in sorted(variant_attrs.items()):
+                    # Format attribute name nicely (e.g., "brew_type" -> "Brew Type")
+                    display_name = attr_name.replace('_', ' ').title()
+                    markdown += f"- {display_name}: {', '.join(values)}\n"
+                markdown += "\n"
+        else:
+            # Fallback to legacy color handling
+            if product.colors and len(product.colors) > 0:
+                markdown += f"\n{prehash}## Colors\n"
+                for color in product.colors:
+                    if isinstance(color, dict):
+                        # if the color is a dict, then get the value
+                        color_text = "-"
+                        if "name" in color:
+                            color_text += f" {color['name']}"
+                        if "isDefault" in color and color['isDefault']:
+                            color_text += f" **Default Color**"
+                        if "id" in color:
+                            color_text += f" **ID**: {color['id']}"
+                        markdown += color_text + "\n"
+                    elif isinstance(color, str):
+                        markdown += f"- {color}\n"
         
         if product.sizing and 'size_chart' in product.sizing:
             markdown += f"\n{prehash}## Sizing\n"
@@ -407,8 +448,6 @@ class Product:
             if 'fit_advice' in product.sizing:
                 markdown += f"- Fit Advice: {product.sizing['fit_advice']}\n"
             markdown += "\n"
-        elif product.sizes and len(product.sizes) > 0:
-            markdown += f"\n{prehash}## Sizes\n- {', '.join(product.sizes)}\n"
         
         #     if product.sizeSpecifications:
         #         markdown += f"\n{prehash}### Size Specifications\n"
@@ -496,6 +535,218 @@ class Product:
     def to_json(self) -> str:
         """Convert the object to a JSON string"""
         return json.dumps(self.to_dict(), indent=2)
+    
+    # Backward-compatible properties that read from variants
+    @property
+    def sale_price(self) -> Optional[str]:
+        """Get sale price from default/first variant for backward compatibility"""
+        if self.salePrice:  # If legacy field is set, return it
+            return self.salePrice
+        
+        if not self.variants:
+            return None
+        
+        default_variant = self.get_default_variant()
+        if default_variant:
+            return default_variant.price
+        
+        return self.variants[0].price if self.variants else None
+    
+    @property
+    def original_price(self) -> Optional[str]:
+        """Get original price from default/first variant for backward compatibility"""
+        if self.originalPrice:  # If legacy field is set, return it
+            return self.originalPrice
+        
+        if not self.variants:
+            return None
+        
+        default_variant = self.get_default_variant()
+        if default_variant:
+            return default_variant.originalPrice or default_variant.price
+        
+        first_variant = self.variants[0] if self.variants else None
+        if first_variant:
+            return first_variant.originalPrice or first_variant.price
+        
+        return None
+    
+    @property
+    def colors(self) -> List[Any]:
+        """Get colors from variants for backward compatibility"""
+        if self._colors and not self.variants:  # Return legacy field if no variants
+            return self._colors
+        
+        # Return color dicts to match legacy format
+        colors = []
+        for color in self.get_available_colors():
+            colors.append({"name": color})
+        return colors
+    
+    @property
+    def sizes(self) -> List[str]:
+        """Get sizes from variants for backward compatibility"""
+        if self._sizes and not self.variants:  # Return legacy field if no variants
+            return self._sizes
+        
+        return self.get_available_sizes()
+    
+    # Variant-aware helper methods
+    def price_range(self) -> Tuple[float, float]:
+        """
+        Get the price range across all variants.
+        
+        Returns:
+            Tuple of (min_price, max_price) in float values
+        """
+        if not self.variants:
+            # Fallback to legacy price fields
+            try:
+                price_str = self.salePrice or self.originalPrice or "0"
+                price = float(price_str.replace('$', '').replace(',', ''))
+                return (price, price)
+            except:
+                return (0.0, 0.0)
+        
+        prices = []
+        for variant in self.variants:
+            try:
+                # Check sale price first, then regular price
+                price_str = variant.price or "0"
+                price = float(price_str.replace('$', '').replace(',', ''))
+                prices.append(price)
+            except:
+                continue
+        
+        if not prices:
+            return (0.0, 0.0)
+        
+        return (min(prices), max(prices))
+    
+    def get_variant_by_sku(self, sku: str) -> Optional[ProductVariant]:
+        """Get a specific variant by its SKU/ID"""
+        if not self.variants:
+            return None
+        
+        for variant in self.variants:
+            if variant.id == sku:
+                return variant
+        
+        return None
+    
+    def get_default_variant(self) -> Optional[ProductVariant]:
+        """Get the default variant for this product"""
+        if not self.variants:
+            return None
+        
+        # First try to find explicitly marked default
+        for variant in self.variants:
+            if variant.isDefault:
+                return variant
+        
+        # Fallback to first variant
+        return self.variants[0] if self.variants else None
+    
+    def get_variants_by_attribute(self, attr_name: str, attr_value: str) -> List[ProductVariant]:
+        """
+        Get all variants matching a specific attribute value.
+        
+        Args:
+            attr_name: Attribute name (e.g., 'size', 'color')
+            attr_value: Attribute value to match
+            
+        Returns:
+            List of matching variants
+        """
+        if not self.variants:
+            return []
+        
+        matching = []
+        for variant in self.variants:
+            if variant.attributes.get(attr_name) == attr_value:
+                matching.append(variant)
+        
+        return matching
+    
+    def get_available_sizes(self) -> List[str]:
+        """Get all unique sizes from variants"""
+        if not self.variants:
+            return self.sizes or []
+        
+        sizes = set()
+        for variant in self.variants:
+            if 'size' in variant.attributes:
+                sizes.add(variant.attributes['size'])
+        
+        return sorted(list(sizes))
+    
+    def get_available_colors(self) -> List[str]:
+        """Get all unique colors from variants"""
+        if not self.variants:
+            # Return legacy colors field
+            return [c['name'] if isinstance(c, dict) else c for c in self.colors] if self.colors else []
+        
+        colors = set()
+        for variant in self.variants:
+            if 'color' in variant.attributes:
+                colors.add(variant.attributes['color'])
+        
+        return sorted(list(colors))
+    
+    def get_total_inventory(self) -> int:
+        """Get total inventory across all variants"""
+        if not self.variants:
+            return 0
+        
+        total = 0
+        for variant in self.variants:
+            if variant.inventoryQuantity:
+                total += variant.inventoryQuantity
+        
+        return total
+    
+    def is_in_stock(self) -> bool:
+        """Check if any variant is in stock"""
+        if self.variants:
+            # Check variants for stock status
+            for variant in self.variants:
+                if variant.inStock or (variant.inventoryQuantity and variant.inventoryQuantity > 0):
+                    return True
+            return False
+        else:
+            # Fallback to checking sale/original price existence for legacy products
+            return bool(self.salePrice or self.originalPrice)
+    
+    def get_all_variant_attributes(self) -> Dict[str, List[str]]:
+        """
+        Get all variant attributes and their unique values.
+        
+        Returns:
+            Dict mapping attribute names to lists of unique values
+            e.g., {'color': ['Red', 'Blue'], 'size': ['S', 'M', 'L'], 'material': ['Cotton', 'Wool']}
+        """
+        attributes = {}
+        
+        if not self.variants:
+            # Fallback to legacy fields
+            if self.colors:
+                colors = [c['name'] if isinstance(c, dict) else c for c in self.colors]
+                if colors:
+                    attributes['color'] = sorted(list(set(colors)))
+            if self.sizes:
+                attributes['size'] = sorted(list(set(self.sizes)))
+            return attributes
+        
+        # Collect from variants
+        for variant in self.variants:
+            if variant.attributes:
+                for attr_name, attr_value in variant.attributes.items():
+                    if attr_name not in attributes:
+                        attributes[attr_name] = set()
+                    attributes[attr_name].add(str(attr_value))
+        
+        # Convert sets to sorted lists
+        return {k: sorted(list(v)) for k, v in attributes.items()}
 
 # if __name__ == "__main__":
 #     # Example usage

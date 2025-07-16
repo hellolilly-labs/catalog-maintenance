@@ -86,6 +86,14 @@ select = ["E", "F", "I", "N", "UP", "YTT", "B", "A", "C4", "T10", "ISC", "ICN", 
 ignore = ["E501", "B008", "B905"]
 target-version = "py39"
 
+[tool.ruff.per-file-ignores]
+# Enable ERA001 (commented code detection) but do NOT auto-fix
+"packages/liddy_intelligence/research/industry_terminology_researcher.py" = []
+
+[tool.ruff.lint]
+# ERA001: eradicate (commented code detection) - enabled but no auto-fix
+unfixable = ["ERA001"]
+
 [tool.mypy]
 python_version = "3.9"
 warn_return_any = true

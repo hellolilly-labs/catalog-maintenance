@@ -25,8 +25,13 @@ from liddy.models.product import Product, DescriptorMetadata
 # Import product catalog researcher (synthesizes all research phases)
 from liddy_intelligence.research.product_catalog_research import get_product_catalog_researcher
 
-# Import price descriptor updater for enhanced pricing logic
+# Import descriptor module system
+from liddy_intelligence.catalog.descriptors import DescriptorModuleManager
+from liddy_intelligence.catalog.price_statistics_analyzer import PriceStatisticsAnalyzer
 from liddy_intelligence.catalog.price_descriptor_updater import PriceDescriptorUpdater
+
+# Import relevance guardrails
+from liddy_intelligence.constants.prompt_blocks import RELEVANCE_GUARDRAILS, SENTINEL
 
 logger = logging.getLogger(__name__)
 
@@ -68,14 +73,20 @@ class UnifiedDescriptorGenerator:
         # Initialize product catalog researcher (synthesizes all brand research)
         self.product_catalog_researcher = get_product_catalog_researcher(brand_domain)
         
-        # Initialize price descriptor updater for enhanced pricing logic
+        # Initialize descriptor module manager
+        self.module_manager = DescriptorModuleManager()
+        
+        # Initialize price statistics analyzer
+        self.price_analyzer = PriceStatisticsAnalyzer()
+        
+        # Initialize legacy price updater for backward compatibility
+        # This will be removed once all references are migrated to modules
         self.price_updater = PriceDescriptorUpdater(brand_domain)
         
         # Cache for product catalog research
         self.product_catalog_intelligence = ""
-        
-        # Cache for price statistics
-        self.price_statistics = None
+        self.terminology_research_cache = None
+        self.detected_industry = None  # Will be detected from research or products
         
         logger.info(f"🔧 Initialized RAG-Optimized Descriptor Generator for {brand_domain}")
         logger.info(f"   Research: {'enabled' if self.config.use_research else 'disabled'}")
@@ -94,9 +105,6 @@ class UnifiedDescriptorGenerator:
         """
         logger.info(f"📝 Processing descriptors for {self.brand_domain}")
         
-        # Check for terminology research before proceeding
-        await self._check_terminology_research(auto_run=self.config.auto_run_terminology_research)
-        
         # Load product catalog research if enabled
         if self.config.use_research and not self.product_catalog_intelligence:
             self.product_catalog_intelligence = await self._load_product_catalog_intelligence()
@@ -112,14 +120,17 @@ class UnifiedDescriptorGenerator:
         products = products_data if isinstance(products_data, list) else products_data.get('products', [])
         logger.info(f"  📁 Loaded {len(products)} products")
         
-        # Calculate price statistics for the entire catalog
+        # Calculate price statistics for the entire catalog using PriceDescriptorUpdater
         logger.info("  📊 Calculating price statistics...")
         # Load terminology research for price categorization
-        terminology_research = await self.price_updater._load_terminology_research(
-            auto_run=self.config.auto_run_terminology_research
+        terminology_research = await self._load_terminology_research()
+        
+        # Calculate price statistics using the analyzer
+        price_statistics = PriceStatisticsAnalyzer.analyze_catalog_pricing(
+            products, 
+            terminology_research
         )
-        self.price_statistics = self.price_updater.calculate_price_statistics(products)
-        logger.info(f"  ✅ Price statistics calculated: {len(self.price_statistics.get('by_category', {}))} categories")
+        logger.info(f"  ✅ Price statistics calculated: {len(price_statistics.get('by_category', {}))} categories")
         
         # Process each product
         enhanced_products: List[Product] = []
@@ -153,14 +164,14 @@ class UnifiedDescriptorGenerator:
                         product.descriptor = self.price_updater.update_descriptor_with_price(
                             existing_descriptor,
                             product,
-                            self.price_statistics
+                            price_statistics
                         )
                         # Update search keywords with price categories
                         if product.search_keywords:
                             product.search_keywords = self.price_updater.update_search_keywords_with_price(
                                 product.search_keywords,
                                 product,
-                                self.price_statistics
+                                price_statistics
                             )
                         # Update metadata to track price update
                         if not product.descriptor_metadata:
@@ -182,7 +193,7 @@ class UnifiedDescriptorGenerator:
                         stats['generated'] += 1
                     
                     # Generate new descriptor
-                    await self._generate_descriptor(product)
+                    await self._generate_descriptor(product, price_statistics)
                     enhanced_products.append(product)
                     
                     # save our progress
@@ -218,7 +229,70 @@ class UnifiedDescriptorGenerator:
         
         return products, filter_labels
     
-    async def _generate_descriptor(self, product: Product, model: Optional[str] = None):
+    async def _load_terminology_research(self) -> Optional[Dict]:
+        """Load terminology research for price categorization"""
+        if self.terminology_research_cache is not None:
+            return self.terminology_research_cache
+        
+        try:
+            # Try to load terminology research
+            research_content = await self.storage.get_research_data(
+                account=self.brand_domain, 
+                research_type="industry_terminology"
+            )
+            
+            if research_content:
+                # Parse the research content (simplified - you'd want more robust parsing)
+                terminology_data = {
+                    'price_terminology': {
+                        'premium_terms': [],
+                        'mid_terms': [],
+                        'budget_terms': []
+                    }
+                }
+                
+                # Cache and return
+                self.terminology_research_cache = terminology_data
+                return terminology_data
+        except Exception as e:
+            logger.debug(f"Could not load terminology research: {e}")
+        
+        return None
+    
+    async def _detect_industry(self) -> str:
+        """Detect the industry from research or product data"""
+        # First try to get from foundation research
+        try:
+            foundation_research = await self.storage.get_research_data(
+                account=self.brand_domain,
+                research_type="foundation"
+            )
+            if foundation_research:
+                # Simple heuristic: look for common industry keywords
+                industry_keywords = {
+                    "cycling": ["bike", "bicycle", "cycling", "cyclist"],
+                    "outdoor": ["outdoor", "hiking", "camping", "backpack"],
+                    "electronics": ["electronic", "tech", "gadget", "device"],
+                    "apparel": ["clothing", "apparel", "fashion", "wear"],
+                    "sports": ["sport", "athletic", "fitness", "exercise"],
+                    "automotive": ["car", "auto", "vehicle", "motor"],
+                    "home": ["home", "furniture", "decor", "household"],
+                    "beauty": ["beauty", "cosmetic", "skincare", "makeup"]
+                }
+                
+                research_lower = foundation_research.lower()
+                for industry, keywords in industry_keywords.items():
+                    if any(keyword in research_lower for keyword in keywords):
+                        logger.info(f"Detected industry: {industry}")
+                        return industry
+        except Exception as e:
+            logger.debug(f"Could not load foundation research: {e}")
+        
+        # Fallback to general retail
+        logger.info("Using default industry: retail")
+        return "retail"
+    
+    async def _generate_descriptor(self, product: Product, price_statistics: Optional[Dict[str, Any]] = None, model: Optional[str] = None):
         """Generate descriptor based on configured mode"""
         
         # Use Product.to_markdown for better formatted product data
@@ -230,44 +304,62 @@ class UnifiedDescriptorGenerator:
         prompt_messages = await self._build_versioned_prompt(product_info, prompt_key)
         
         try:
-            # Generate via LLM
-            response = await LLMFactory.chat_completion(
-                task="rag_descriptor_generation",
-                messages=prompt_messages,
-                model=model
-            )
+            # Generate via LLM with retry logic for sentinel
+            max_attempts = 3
+            temperature = 0.0
             
-            # Parse response based on mode
-            result = self._parse_response(response.get('content', ''), product)
+            for attempt in range(max_attempts):
+                response = await LLMFactory.chat_completion(
+                    task="rag_descriptor_generation",
+                    messages=prompt_messages,
+                    model=model,
+                    temperature=temperature
+                )
+                
+                content = response.get('content', '')
+                
+                # Check for sentinel
+                if SENTINEL in content:
+                    # Parse response based on mode
+                    result = self._parse_response(content, product)
+                    break
+                else:
+                    logger.warning(f"Attempt {attempt + 1}: Response missing sentinel. Retrying with higher temperature.")
+                    temperature = min(temperature + 0.1, 0.7)
+                    
+                    if attempt == max_attempts - 1:
+                        logger.error("Failed to get response with sentinel after 3 attempts. Using fallback.")
+                        result = self._generate_fallback(product)
             
         except Exception as e:
             logger.error(f"Generation failed: {e}")
             result = self._generate_fallback(product)
         
-        # Update product with results
-        product.descriptor = result['descriptor']
+        # Initial descriptor from LLM
+        initial_descriptor = result['descriptor']
+        initial_keywords = result.get('search_terms', [])[:self.config.max_search_terms]
         
-        # PRICE VALIDATION AND ENHANCEMENT
-        # Check if descriptor contains accurate pricing
-        if not self.price_updater.check_descriptor_has_price(product.descriptor, product):
-            logger.debug(f"  💰 Adding price information to descriptor for {product.name}")
-            # Update descriptor with price info and semantic context
-            product.descriptor = self.price_updater.update_descriptor_with_price(
-                product.descriptor, 
-                product, 
-                self.price_statistics
-            )
+        # Apply descriptor modules for enhancement
+        module_config = {
+            'price_stats': price_statistics,
+            'terminology_research': await self._load_terminology_research()
+        }
         
-        # Enhance search keywords with price categories
-        search_keywords = result.get('search_terms', [])[:self.config.max_search_terms]
-        product.search_keywords = self.price_updater.update_search_keywords_with_price(
-            search_keywords,
-            product,
-            self.price_statistics
+        enhancement_result = self.module_manager.enhance_product(
+            product=product,
+            initial_descriptor=initial_descriptor,
+            **module_config
         )
         
+        # Update product with enhanced results
+        product.descriptor = enhancement_result['descriptor']
+        product.search_keywords = enhancement_result['search_keywords']
         product.key_selling_points = result.get('selling_points', [])[:self.config.max_selling_points]
         product.voice_summary = result.get('voice_summary', '')
+        
+        # Store module metadata
+        if 'modules_applied' in enhancement_result:
+            logger.debug(f"  🔧 Applied modules: {', '.join(enhancement_result['modules_applied'])}")
         
         # Extract and store product-specific labels for filtering
         product_labels = self._extract_product_labels(product, result)
@@ -309,11 +401,19 @@ class UnifiedDescriptorGenerator:
         except Exception as e:
             logger.warning(f"Langfuse prompt retrieval failed: {e}")
                 
+        # Detect industry if not already detected
+        if not self.detected_industry:
+            self.detected_industry = await self._detect_industry()
+        
         # Fill in template parameters using ProductCatalogResearcher output
         research_context = ""
         if self.config.use_research and self.product_catalog_intelligence:
             # Use the comprehensive product catalog intelligence that synthesizes all research phases
             research_context = f"\n# PRODUCT CATALOG INTELLIGENCE\n\n{self.product_catalog_intelligence[:8000]}\n"
+        
+        # Add relevance guardrails after research context
+        guardrails = RELEVANCE_GUARDRAILS.replace("{{industry}}", self.detected_industry)
+        research_context += f"\n{guardrails}\n"
         
         # Replace template parameters
         system_content = system_prompt.replace("{{mode}}", "rag")
@@ -322,6 +422,7 @@ class UnifiedDescriptorGenerator:
         system_content = system_content.replace("{{product_info}}", product_info)
         system_content = system_content.replace("{{min_length}}", str(self.config.descriptor_length[0]))
         system_content = system_content.replace("{{max_length}}", str(self.config.descriptor_length[1]))
+        system_content = system_content.replace("{{sentinel}}", SENTINEL)
         
         # Build user prompt with structured output format
         user_content = user_prompt.replace("{{research_context}}", research_context)
@@ -367,7 +468,8 @@ Requirements:
 - {{min_length}}-{{max_length}} words for main descriptor
 - Natural search query matching
 - Extract key selling points and search terms
-- Provide concise voice summary"""
+- Provide concise voice summary
+- Final line: {{sentinel}}"""
     
     def _get_focus_instructions(self, mode: str) -> str:
         """Get RAG-specific focus instructions"""
@@ -418,15 +520,19 @@ Requirements:
             if hasattr(product, field) and getattr(product, field) is not None:
                 data["pricing"][field] = getattr(product, field)
         
-        # Colors
-        for field in ["colors", "color", "color_options"]:
-            if hasattr(product, field) and getattr(product, field):
-                data["colors"].extend(getattr(product, field))
-        
-        # # Sizes
-        # for field in ["sizes", "size", "size_options"]:
-        #     if field in product and getattr(product, field):
-        #         data["sizes"].extend(getattr(product, field))
+        # Extract variant attributes generically
+        if hasattr(product, 'get_all_variant_attributes'):
+            variant_attrs = product.get_all_variant_attributes()
+            # Store all variant attributes in a new field
+            data["variant_attributes"] = variant_attrs
+            # For backward compatibility, also populate colors if present
+            if "color" in variant_attrs:
+                data["colors"] = variant_attrs["color"]
+        else:
+            # Fallback to legacy color extraction
+            for field in ["colors", "color", "color_options"]:
+                if hasattr(product, field) and getattr(product, field):
+                    data["colors"].extend(getattr(product, field))
         
         # Specifications (dynamically detect spec-like fields)
         # Look for fields that appear to be specifications based on patterns
@@ -563,7 +669,10 @@ IMPORTANT:
     #     return "\n".join(sections)
     
     def _parse_response(self, content: str, product: Product) -> Dict[str, Any]:
-        """Parse LLM response"""
+        """Parse LLM response and remove sentinel"""
+        # Remove sentinel from content before parsing
+        content = content.replace(SENTINEL, "").strip()
+        
         result = {
             "descriptor": "",
             "search_terms": [],
@@ -634,7 +743,7 @@ IMPORTANT:
             result["search_terms"] = self._extract_search_terms(product, result["descriptor"])
         
         if not result["selling_points"]:
-            result["selling_points"] = self._extract_selling_points(product, result["descriptor"])
+            result["selling_points"] = self._extract_selling_points(product, result["descriptor"], price_statistics)
         
         if not result["voice_summary"]:
             result["voice_summary"] = self._generate_voice_summary(product)
@@ -813,62 +922,7 @@ JUSTIFICATION: [brief explanation]"""
     
 
     
-    async def _check_terminology_research(self, auto_run: bool = True) -> None:
-        """Check if terminology research exists and run it if missing
-        
-        Args:
-            auto_run: If True, automatically run the researcher if missing
-        """
-        try:
-            research_path = f"research/industry_terminology/research.md"
-            research_exists = await self.storage.file_exists(research_path)
-            
-            if not research_exists:
-                if auto_run:
-                    logger.info(
-                        f"📚 No industry terminology research found. Running it now for {self.brand_domain}..."
-                    )
-                    # Import and run the terminology researcher
-                    from liddy_intelligence.research.industry_terminology_researcher import IndustryTerminologyResearcher
-                    
-                    researcher = IndustryTerminologyResearcher(
-                        brand_domain=self.brand_domain,
-                        force_refresh=False
-                    )
-                    
-                    try:
-                        await researcher.conduct_research()
-                        logger.info(f"✅ Industry terminology research completed successfully")
-                    except Exception as e:
-                        logger.error(f"Failed to run terminology research: {e}")
-                        logger.warning(
-                            f"⚠️  You can manually run: python run/research_industry_terminology.py {self.brand_domain}"
-                        )
-                else:
-                    logger.warning(
-                        f"⚠️  No industry terminology research found for {self.brand_domain}. "
-                        f"This research improves price categorization and search. "
-                        f"Run: python run/research_industry_terminology.py {self.brand_domain}"
-                    )
-            else:
-                # Check age of research
-                metadata = await self.storage.get_file_metadata(research_path)
-                if metadata and 'updated' in metadata:
-                    from datetime import datetime, timezone
-                    updated = datetime.fromisoformat(metadata['updated'].replace('Z', '+00:00'))
-                    age_days = (datetime.now(timezone.utc) - updated).days
-                    if age_days > 30:
-                        logger.warning(
-                            f"⚠️  Industry terminology research is {age_days} days old. "
-                            f"Consider refreshing: python run/research_industry_terminology.py {self.brand_domain} --force"
-                        )
-                    else:
-                        logger.info(f"✅ Found industry terminology research ({age_days} days old)")
-                else:
-                    logger.info(f"✅ Found industry terminology research")
-                    
-        except Exception as e:
-            logger.debug(f"Could not check terminology research: {e}")
+
     
     async def _load_product_catalog_intelligence(self) -> str:
         """Load product catalog intelligence from ProductCatalogResearcher"""
@@ -963,30 +1017,49 @@ JUSTIFICATION: [brief explanation]"""
         # From descriptor
         terms.update(re.findall(r'\b\w{4,}\b', descriptor.lower()))
         
-        # Remove common words
-        stop_words = {'the', 'and', 'for', 'with', 'this', 'that', 'from', 'have', 'been', 'your', 'will', 'can', 'are'}
-        terms = terms - stop_words
+        # Filtering now handled by relevance guardrails
+        # Basic length filtering remains
+        terms = {term for term in terms if len(term) >= 3}
         
         return sorted(list(terms))[:self.config.max_search_terms]
     
-    def _extract_selling_points(self, product: Product, descriptor: str) -> List[str]:
-        """Extract selling points"""
+    def _extract_selling_points(self, product: Product, descriptor: str, price_statistics: Optional[Dict[str, Any]] = None) -> List[str]:
+        """Extract selling points using sophisticated price categorization"""
         points = []
         
-        # Price-based selling points
+        # Price-based selling points using PriceDescriptorUpdater's sophisticated categorization
         try:
-            if product.salePrice:
-                sale_price = float(product.salePrice.replace('$', '').replace(',', ''))
-                if sale_price < 100:
-                    points.append("Exceptional value")
-                elif sale_price > 1000:
+            # Get price using variant-aware logic
+            if hasattr(product, 'price_range') and product.variants:
+                min_price, max_price = product.price_range()
+                avg_price = (min_price + max_price) / 2
+            else:
+                # Fallback to single price
+                price_str = product.sale_price if hasattr(product, 'sale_price') else product.salePrice
+                if not price_str:
+                    price_str = product.original_price if hasattr(product, 'original_price') else product.originalPrice
+                avg_price = float(price_str.replace('$', '').replace(',', '')) if price_str else 0
+            
+            if avg_price > 0 and price_statistics:
+                # Use sophisticated price categorization from PriceDescriptorUpdater
+                price_keywords = self.price_updater.get_price_category_keywords(avg_price, price_statistics, product)
+                
+                # Convert keywords to selling points
+                if "premium" in price_keywords or "luxury" in price_keywords:
                     points.append("Premium quality")
-                elif sale_price > 500:
+                elif "high-end" in price_keywords or "flagship" in price_keywords:
                     points.append("High-quality")
-                elif sale_price > 200:
+                elif "budget" in price_keywords or "value" in price_keywords:
+                    points.append("Exceptional value")
+                elif "affordable" in price_keywords:
                     points.append("Good value")
-                elif sale_price > 100:
-                    points.append("Affordable")
+                elif "mid-range" in price_keywords:
+                    points.append("Quality construction")
+                    
+                # Add sale-specific selling points
+                if "on sale" in price_keywords or "discount" in price_keywords:
+                    points.append("Special pricing available")
+                    
         except (ValueError, AttributeError):
             pass
         
@@ -1035,9 +1108,29 @@ JUSTIFICATION: [brief explanation]"""
                 if benefit_match:
                     parts.append(f"great for {benefit_match.group(1)}")
         
-        # Add price if available
-        if hasattr(product, 'salePrice') and product.salePrice:
-            parts.append(f"priced at {product.salePrice}")
+        # Add price if available using PriceDescriptorUpdater
+        try:
+            price_info = self.price_updater.extract_price_from_product(product)
+            if price_info:
+                # Extract a concise price summary for voice
+                if "Price range:" in price_info:
+                    # Extract just the range part
+                    range_match = re.search(r'Price range: \$[\d,.]+ - \$[\d,.]+', price_info)
+                    if range_match:
+                        range_text = range_match.group(0).replace("Price range: ", "")
+                        parts.append(f"priced from {range_text.replace(' - ', ' to ')}")
+                elif "On sale for" in price_info:
+                    # Extract sale price
+                    sale_match = re.search(r'On sale for (\$[\d,.]+)', price_info)
+                    if sale_match:
+                        parts.append(f"on sale for {sale_match.group(1)}")
+                elif "Price:" in price_info:
+                    # Extract regular price
+                    price_match = re.search(r'Price: (\$[\d,.]+)', price_info)
+                    if price_match:
+                        parts.append(f"priced at {price_match.group(1)}")
+        except:
+            pass
         
         # Combine with natural connectors (keep under 50 words)
         if len(parts) >= 2:
@@ -1053,7 +1146,26 @@ JUSTIFICATION: [brief explanation]"""
             # Trim to essential parts
             if product.name and product.categories:
                 category = product.categories[0]
-                price_part = f" priced at {product.salePrice}" if hasattr(product, 'salePrice') and product.salePrice else ""
+                # Get price part using PriceDescriptorUpdater
+                price_part = ""
+                try:
+                    price_info = self.price_updater.extract_price_from_product(product)
+                    if price_info:
+                        if "Price range:" in price_info:
+                            range_match = re.search(r'Price range: \$[\d,.]+ - \$[\d,.]+', price_info)
+                            if range_match:
+                                range_text = range_match.group(0).replace("Price range: ", "")
+                                price_part = f" priced from {range_text.replace(' - ', ' to ')}"
+                        elif "On sale for" in price_info:
+                            sale_match = re.search(r'On sale for (\$[\d,.]+)', price_info)
+                            if sale_match:
+                                price_part = f" on sale for {sale_match.group(1)}"
+                        elif "Price:" in price_info:
+                            price_match = re.search(r'Price: (\$[\d,.]+)', price_info)
+                            if price_match:
+                                price_part = f" priced at {price_match.group(1)}"
+                except:
+                    pass
                 result = f"The {product.name} is a {category}{price_part}."
         
         return result
@@ -1068,15 +1180,28 @@ JUSTIFICATION: [brief explanation]"""
         features = product.highlights[:3] if product.highlights else []
         feature_text = f" featuring {', '.join(features)}" if features else ""
         
-        # Try to extract price
-        price = 0
+        # Use PriceDescriptorUpdater for price extraction
+        price_text = ""
         try:
-            if product.salePrice:
-                price = float(product.salePrice.replace('$', '').replace(',', ''))
-        except (ValueError, AttributeError):
+            price_info = self.price_updater.extract_price_from_product(product)
+            if price_info:
+                if "Price range:" in price_info:
+                    # Extract range and format for fallback
+                    range_match = re.search(r'Price range: (\$[\d,.]+ - \$[\d,.]+)', price_info)
+                    if range_match:
+                        price_text = f" Available from {range_match.group(1).replace(' - ', ' to ')}."
+                elif "On sale for" in price_info:
+                    # Extract sale price
+                    sale_match = re.search(r'On sale for (\$[\d,.]+)', price_info)
+                    if sale_match:
+                        price_text = f" On sale for {sale_match.group(1)}."
+                elif "Price:" in price_info:
+                    # Extract regular price
+                    price_match = re.search(r'Price: (\$[\d,.]+)', price_info)
+                    if price_match:
+                        price_text = f" Available at {price_match.group(1)}."
+        except:
             pass
-        
-        price_text = f" Available at ${price:,.2f}." if price > 0 else ""
         
         descriptor = f"{name} is a quality {category}{feature_text}.{price_text}"
         
@@ -1171,7 +1296,7 @@ JUSTIFICATION: [brief explanation]"""
         return labels
     
     def _categorize_search_terms_dynamic(self, search_terms: List[str]) -> Dict[str, List[str]]:
-        """Categorize search terms into structured labels"""
+        """Categorize search terms using research-driven patterns (brand-agnostic)"""
         categories = {
             "use_cases": [],
             "materials": [],
@@ -1181,15 +1306,8 @@ JUSTIFICATION: [brief explanation]"""
             "performance_traits": []
         }
         
-        # Define flexible patterns for categorization
-        patterns = {
-            "use_cases": ["for", "use", "activity", "sport", "riding", "racing", "commuting", "touring", "training", "workout", "exercise"],
-            "materials": ["carbon", "aluminum", "steel", "titanium", "fabric", "leather", "mesh", "polymer", "cotton", "polyester", "nylon"],
-            "key_features": ["feature", "technology", "system", "component", "upgrade", "accessory", "function", "capability"],
-            "style_type": ["style", "design", "aesthetic", "color", "finish", "appearance", "look", "classic", "modern", "vintage"],
-            "target_user": ["beginner", "professional", "advanced", "men", "women", "youth", "adult", "kids", "senior", "expert"],
-            "performance_traits": ["performance", "speed", "efficiency", "comfort", "durability", "lightweight", "strong", "fast", "smooth"]
-        }
+        # Use research-driven categorization patterns
+        patterns = self._get_categorization_patterns_from_research()
         
         for term in search_terms:
             term_lower = term.lower()
@@ -1207,8 +1325,85 @@ JUSTIFICATION: [brief explanation]"""
         
         return categories
     
+    def _get_categorization_patterns_from_research(self) -> Dict[str, List[str]]:
+        """Extract brand-specific categorization patterns from terminology research"""
+        
+        # Try to get terminology research from PriceDescriptorUpdater
+        terminology_research = None
+        if hasattr(self.price_updater, 'terminology_research') and self.price_updater.terminology_research:
+            terminology_research = self.price_updater.terminology_research
+        
+        if terminology_research:
+            return self._extract_patterns_from_terminology_research(terminology_research)
+        else:
+            # Generic fallback patterns (no brand-specific terms)
+            return self._get_generic_categorization_patterns()
+    
+    def _extract_patterns_from_terminology_research(self, research: Dict) -> Dict[str, List[str]]:
+        """Extract categorization patterns from brand terminology research"""
+        patterns = {
+            "use_cases": ["for", "use", "activity", "application", "purpose", "intended"],
+            "materials": ["material", "made", "constructed", "built", "crafted"],
+            "key_features": ["feature", "technology", "system", "component", "function"],
+            "style_type": ["style", "design", "aesthetic", "finish", "appearance"],
+            "target_user": ["beginner", "professional", "advanced", "expert", "level"],
+            "performance_traits": ["performance", "efficiency", "quality", "grade", "tier"]
+        }
+        
+        # PRIMARY: Use the new categorization_patterns if available
+        if 'categorization_patterns' in research:
+            research_patterns = research['categorization_patterns']
+            for category, terms in research_patterns.items():
+                if category in patterns and isinstance(terms, list):
+                    patterns[category].extend(terms)
+                    # Remove duplicates while preserving order
+                    patterns[category] = list(dict.fromkeys(patterns[category]))
+        
+        # FALLBACK: Extract from legacy brand_specific_tiers structure
+        elif 'brand_specific_tiers' in research:
+            brand_tiers = research['brand_specific_tiers']
+            
+            # Add brand-discovered use case terms
+            if 'use_case_indicators' in brand_tiers:
+                patterns["use_cases"].extend(brand_tiers['use_case_indicators'])
+                
+            # Add brand-discovered material terms  
+            if 'material_indicators' in brand_tiers:
+                patterns["materials"].extend(brand_tiers['material_indicators'])
+                
+            # Add brand-discovered feature terms
+            if 'feature_indicators' in brand_tiers:
+                patterns["key_features"].extend(brand_tiers['feature_indicators'])
+                
+            # Add brand-discovered style terms
+            if 'style_indicators' in brand_tiers:
+                patterns["style_type"].extend(brand_tiers['style_indicators'])
+        
+        # Extract from price terminology research for user targeting
+        if 'price_terminology' in research:
+            price_terms = research['price_terminology']
+            
+            # Map premium/budget terms to target_user patterns
+            if 'premium_terms' in price_terms:
+                patterns["target_user"].extend([f"premium {term[0] if isinstance(term, tuple) else term}" for term in price_terms['premium_terms'][:3]])
+            if 'budget_terms' in price_terms:
+                patterns["target_user"].extend([f"entry {term[0] if isinstance(term, tuple) else term}" for term in price_terms['budget_terms'][:3]])
+        
+        return patterns
+    
+    def _get_generic_categorization_patterns(self) -> Dict[str, List[str]]:
+        """Generic categorization patterns when no research is available"""
+        return {
+            "use_cases": ["for", "use", "activity", "application", "purpose", "intended", "suitable", "designed"],
+            "materials": ["material", "made", "constructed", "built", "crafted", "composition", "fabric"],
+            "key_features": ["feature", "technology", "system", "component", "function", "capability", "includes"],
+            "style_type": ["style", "design", "aesthetic", "finish", "appearance", "look", "color", "pattern"],
+            "target_user": ["beginner", "professional", "advanced", "expert", "level", "grade", "starter", "entry"],
+            "performance_traits": ["performance", "efficiency", "quality", "grade", "tier", "level", "rating"]
+        }
+    
     def _categorize_selling_points_dynamic(self, selling_points: List[str]) -> Dict[str, List[str]]:
-        """Categorize selling points into structured labels"""
+        """Categorize selling points using research-driven patterns (brand-agnostic)"""
         categories = {
             "use_cases": [],
             "materials": [],
@@ -1216,21 +1411,30 @@ JUSTIFICATION: [brief explanation]"""
             "performance_traits": []
         }
         
+        # Get research-driven patterns for selling point categorization
+        patterns = self._get_categorization_patterns_from_research()
+        
         for point in selling_points:
             point_lower = point.lower()
+            categorized = False
             
-            # Performance characteristics
-            if any(word in point_lower for word in ["performance", "speed", "efficiency", "comfort", "lightweight", "durable"]):
-                categories["performance_traits"].append(point)
-            # Materials
-            elif any(word in point_lower for word in ["carbon", "aluminum", "steel", "material", "construction"]):
-                categories["materials"].append(point)
-            # Use cases
-            elif any(word in point_lower for word in ["for", "ideal", "perfect", "designed for", "suitable"]):
-                categories["use_cases"].append(point)
-            # Default to features
-            else:
-                categories["key_features"].append(point)
+            # Try to categorize based on research-driven patterns
+            for category, keywords in patterns.items():
+                if category in categories and any(keyword in point_lower for keyword in keywords):
+                    categories[category].append(point)
+                    categorized = True
+                    break
+            
+            # Fallback categorization if research patterns don't match
+            if not categorized:
+                if any(word in point_lower for word in ["performance", "efficiency", "quality", "grade"]):
+                    categories["performance_traits"].append(point)
+                elif any(word in point_lower for word in ["material", "construction", "built", "made"]):
+                    categories["materials"].append(point)
+                elif any(word in point_lower for word in ["for", "ideal", "perfect", "designed", "suitable"]):
+                    categories["use_cases"].append(point)
+                else:
+                    categories["key_features"].append(point)
         
         return categories
     
@@ -1277,6 +1481,14 @@ JUSTIFICATION: [brief explanation]"""
                 categories["key_features"].append(highlight)
         
         return categories
+    
+
+    
+
+    
+
+
+
 
 
 

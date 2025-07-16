@@ -33,21 +33,44 @@ class PriceStatisticsAnalyzer:
         all_prices = []
         
         for product in products:
-            price_str = product.salePrice or product.originalPrice
-            if price_str:
-                try:
-                    price = float(price_str.replace('$', '').replace(',', ''))
-                    if price > 0:  # Skip free items
-                        all_prices.append(price)
-                        
-                        # Get primary category
-                        if product.categories:
-                            primary_category = product.categories[0]
-                            prices_by_category[primary_category].append(price)
-                        else:
-                            prices_by_category['uncategorized'].append(price)
-                except:
-                    pass
+            # Get prices from variants if available
+            if hasattr(product, 'variants') and product.variants:
+                # Add all variant prices
+                for variant in product.variants:
+                    price_str = variant.price if variant.price else variant.originalPrice
+                    if price_str:
+                        try:
+                            price = float(price_str.replace('$', '').replace(',', ''))
+                            if price > 0:  # Skip free items
+                                all_prices.append(price)
+                                
+                                # Get primary category
+                                if product.categories:
+                                    primary_category = product.categories[0]
+                                    prices_by_category[primary_category].append(price)
+                                else:
+                                    prices_by_category['uncategorized'].append(price)
+                        except:
+                            pass
+            else:
+                # Fallback for legacy products
+                price_str = product.sale_price if hasattr(product, 'sale_price') else product.salePrice
+                if not price_str:
+                    price_str = product.original_price if hasattr(product, 'original_price') else product.originalPrice
+                if price_str:
+                    try:
+                        price = float(price_str.replace('$', '').replace(',', ''))
+                        if price > 0:  # Skip free items
+                            all_prices.append(price)
+                            
+                            # Get primary category
+                            if product.categories:
+                                primary_category = product.categories[0]
+                                prices_by_category[primary_category].append(price)
+                            else:
+                                prices_by_category['uncategorized'].append(price)
+                    except:
+                        pass
         
         if not all_prices:
             return {}
