@@ -17,6 +17,8 @@ import json
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import re
+import numpy as np
+from collections import defaultdict
 
 from liddy_intelligence.research.base_researcher import BaseResearcher
 from liddy.models.product import Product
@@ -678,10 +680,13 @@ Include only terms that are specific to the {industry} industry."""
             return {'specifications': [], 'features': [], 'technologies': []}
     
     async def _analyze_product_tiers(self, products: List[Product]) -> Dict[str, Any]:
-        """Analyze product names and prices to identify tier patterns using LLM"""
+        """Analyze product names and prices to identify tier patterns using sophisticated statistical analysis"""
         
-        # Extract product names and prices
+        # Extract product names and prices with category information
         product_data = []
+        prices_by_category = defaultdict(list)
+        all_prices = []
+        
         for product in products:
             # Safely get product attributes
             product_name = self._get_product_attribute(product, 'name', '')
@@ -735,79 +740,348 @@ Include only terms that are specific to the {industry} industry."""
             
             if price > 0:
                 categories = self._get_product_attribute(product, 'categories', [])
+                primary_category = categories[0] if categories else "general"
+                
                 product_data.append({
                     'name': product_name,
                     'price': price,
-                    'categories': categories[:2] if categories else []
+                    'categories': categories[:2] if categories else [],
+                    'primary_category': primary_category
                 })
+                
+                # Collect data for statistical analysis
+                all_prices.append(price)
+                prices_by_category[primary_category].append(price)
         
         if not product_data:
             return {}
         
-        # Sort by price
-        product_data.sort(key=lambda x: x['price'], reverse=True)
+        # Perform sophisticated statistical analysis
+        price_analysis = self._analyze_pricing_statistics(all_prices, prices_by_category)
         
-        # Sample products from different price tiers for LLM analysis
-        # Use at least 1 sample per tier, but no more than 15
-        sample_size = max(1, min(15, len(product_data) // 15))  # 15% or max 15 products per tier
+        # Categorize products using sophisticated tier boundaries
+        tier_samples = self._categorize_products_by_sophisticated_tiers(product_data, price_analysis)
         
-        # Calculate tier boundaries to ensure we get distinct samples
-        total_products = len(product_data)
-        
-        tier_samples = {}
-        
-        # Premium tier - top products
-        tier_samples['premium'] = product_data[:sample_size]
-        
-        # Mid-high tier - around 25th percentile
-        mid_high_start = max(sample_size, total_products // 4)
-        mid_high_end = min(mid_high_start + sample_size, total_products // 2)
-        tier_samples['mid_high'] = product_data[mid_high_start:mid_high_end]
-        
-        # Mid-low tier - around 50th percentile  
-        mid_low_start = max(mid_high_end, total_products // 2)
-        mid_low_end = min(mid_low_start + sample_size, total_products - sample_size)
-        tier_samples['mid_low'] = product_data[mid_low_start:mid_low_end]
-        
-        # Budget tier - bottom products
-        tier_samples['budget'] = product_data[-sample_size:]
-        
-        # Use LLM to analyze naming patterns
-        llm_analysis = await self._llm_analyze_product_patterns(tier_samples)
+        # Use LLM to analyze naming patterns with enhanced data
+        llm_analysis = await self._llm_analyze_product_patterns(tier_samples, price_analysis)
         
         return llm_analysis
     
-    async def _llm_analyze_product_patterns(self, tier_samples: Dict[str, List[Dict]]) -> Dict[str, Any]:
-        """Use LLM to analyze product naming patterns across price tiers"""
+    def _analyze_pricing_statistics(self, all_prices: List[float], prices_by_category: Dict[str, List[float]]) -> Dict[str, Any]:
+        """
+        Perform sophisticated statistical analysis of pricing data using the same approach as PriceStatisticsAnalyzer
+        """
+        if not all_prices:
+            return {}
         
-        # Format samples for LLM
+        # Calculate overall statistics with percentiles
+        overall_stats = self._calculate_statistics(all_prices)
+        
+        # Detect if we have a multi-modal distribution
+        multi_modal = self._detect_multimodal_distribution(all_prices)
+        
+        # Calculate category-specific statistics
+        category_stats = {}
+        for category, prices in prices_by_category.items():
+            if len(prices) >= 5:  # Need enough data points
+                category_stats[category] = self._calculate_statistics(prices)
+        
+        # Determine pricing strategy
+        if multi_modal:
+            # Use clustering to find natural price groups
+            price_clusters = self._cluster_prices(all_prices)
+            overall_stats['price_clusters'] = price_clusters
+            overall_stats['is_multimodal'] = True
+            
+            # Define tiers based on clusters
+            if len(price_clusters) >= 3:
+                overall_stats['budget_threshold'] = price_clusters[0]['max']
+                overall_stats['mid_low_threshold'] = price_clusters[1]['max'] if len(price_clusters) > 1 else price_clusters[0]['max'] * 2
+                overall_stats['mid_high_threshold'] = price_clusters[2]['max'] if len(price_clusters) > 2 else price_clusters[1]['max'] * 2
+                overall_stats['premium_threshold'] = price_clusters[-1]['min']
+        else:
+            # Use standard percentile approach but check if it makes sense
+            overall_stats['is_multimodal'] = False
+            
+            # Check if the distribution is too skewed
+            if overall_stats['std'] > overall_stats['mean']:
+                # High variance - use log scale percentiles
+                log_prices = np.log10(all_prices)
+                log_percentiles = {
+                    'p25': np.percentile(log_prices, 25),
+                    'p50': np.percentile(log_prices, 50),
+                    'p75': np.percentile(log_prices, 75),
+                    'p95': np.percentile(log_prices, 95)
+                }
+                
+                overall_stats['budget_threshold'] = 10 ** log_percentiles['p25']
+                overall_stats['mid_low_threshold'] = 10 ** log_percentiles['p50']
+                overall_stats['mid_high_threshold'] = 10 ** log_percentiles['p75']
+                overall_stats['premium_threshold'] = 10 ** log_percentiles['p95']
+            else:
+                # Normal distribution - use regular percentiles
+                overall_stats['budget_threshold'] = overall_stats['p25']
+                overall_stats['mid_low_threshold'] = overall_stats['p50']
+                overall_stats['mid_high_threshold'] = overall_stats['p75']
+                overall_stats['premium_threshold'] = overall_stats['p95']
+        
+        return {
+            'overall': overall_stats,
+            'by_category': category_stats,
+            'distribution_type': 'multimodal' if multi_modal else 'unimodal'
+        }
+    
+    def _calculate_statistics(self, prices: List[float]) -> Dict[str, float]:
+        """Calculate comprehensive statistics for a price list including percentiles"""
+        prices_array = np.array(prices)
+        
+        return {
+            'min': float(np.min(prices_array)),
+            'max': float(np.max(prices_array)),
+            'mean': float(np.mean(prices_array)),
+            'std': float(np.std(prices_array)),
+            'p5': float(np.percentile(prices_array, 5)),
+            'p25': float(np.percentile(prices_array, 25)),
+            'p50': float(np.percentile(prices_array, 50)),
+            'p75': float(np.percentile(prices_array, 75)),
+            'p95': float(np.percentile(prices_array, 95)),
+            'count': len(prices)
+        }
+    
+    def _detect_multimodal_distribution(self, prices: List[float]) -> bool:
+        """
+        Detect if the price distribution has multiple distinct modes
+        (e.g., accessories at $20-100 and bikes at $1000-5000)
+        """
+        if len(prices) < 20:
+            return False
+        
+        # Use log scale to detect gaps
+        log_prices = np.log10([p for p in prices if p > 0])
+        
+        # Sort and find gaps
+        sorted_log_prices = np.sort(log_prices)
+        gaps = np.diff(sorted_log_prices)
+        
+        # If we have gaps > 0.5 in log scale (>3x price difference), it's likely multimodal
+        large_gaps = gaps > 0.5
+        
+        # Need at least one significant gap with data on both sides
+        if np.any(large_gaps):
+            gap_positions = np.where(large_gaps)[0]
+            for gap_pos in gap_positions:
+                # Check if we have meaningful data on both sides of the gap
+                if gap_pos > len(prices) * 0.1 and gap_pos < len(prices) * 0.9:
+                    return True
+        
+        return False
+    
+    def _cluster_prices(self, prices: List[float], max_clusters: int = 4) -> List[Dict[str, float]]:
+        """
+        Cluster prices into natural groups using gap detection
+        """
+        if len(prices) < 10:
+            return [{'min': min(prices), 'max': max(prices), 'mean': np.mean(prices), 'count': len(prices)}]
+        
+        # Sort prices
+        sorted_prices = np.sort(prices)
+        
+        # Find natural breaks using log scale gaps
+        log_prices = np.log10(sorted_prices)
+        gaps = np.diff(log_prices)
+        
+        # Find significant gaps (> 0.3 in log scale = 2x price difference)
+        significant_gaps = np.where(gaps > 0.3)[0]
+        
+        # Create clusters
+        clusters = []
+        start_idx = 0
+        
+        for gap_idx in significant_gaps[:max_clusters-1]:
+            end_idx = gap_idx + 1
+            cluster_prices = sorted_prices[start_idx:end_idx]
+            
+            if len(cluster_prices) > 0:
+                clusters.append({
+                    'min': float(np.min(cluster_prices)),
+                    'max': float(np.max(cluster_prices)),
+                    'mean': float(np.mean(cluster_prices)),
+                    'count': len(cluster_prices)
+                })
+            
+            start_idx = end_idx
+        
+        # Add final cluster
+        final_cluster = sorted_prices[start_idx:]
+        if len(final_cluster) > 0:
+            clusters.append({
+                'min': float(np.min(final_cluster)),
+                'max': float(np.max(final_cluster)),
+                'mean': float(np.mean(final_cluster)),
+                'count': len(final_cluster)
+            })
+        
+        return clusters
+    
+    def _categorize_products_by_sophisticated_tiers(self, product_data: List[Dict], price_analysis: Dict[str, Any]) -> Dict[str, List[Dict]]:
+        """
+        Categorize products into tiers using sophisticated statistical boundaries
+        """
+        if not price_analysis or 'overall' not in price_analysis:
+            # Fallback to simple sorting if analysis failed
+            product_data.sort(key=lambda x: x['price'], reverse=True)
+            total_products = len(product_data)
+            sample_size = max(1, min(15, total_products // 4))
+            
+            return {
+                'premium': product_data[:sample_size],
+                'mid_high': product_data[sample_size:sample_size*2],
+                'mid_low': product_data[sample_size*2:sample_size*3],
+                'budget': product_data[sample_size*3:sample_size*4]
+            }
+        
+        overall_stats = price_analysis['overall']
+        tier_samples = {
+            'premium': [],
+            'mid_high': [],
+            'mid_low': [],
+            'budget': []
+        }
+        
+        # Use sophisticated tier boundaries
+        budget_threshold = overall_stats.get('budget_threshold', overall_stats.get('p25', 0))
+        mid_low_threshold = overall_stats.get('mid_low_threshold', overall_stats.get('p50', 0))
+        mid_high_threshold = overall_stats.get('mid_high_threshold', overall_stats.get('p75', 0))
+        premium_threshold = overall_stats.get('premium_threshold', overall_stats.get('p95', float('inf')))
+        
+        # Categorize each product based on sophisticated boundaries
+        for product in product_data:
+            price = product['price']
+            if price >= premium_threshold:
+                tier_samples['premium'].append(product)
+            elif price >= mid_high_threshold:
+                tier_samples['mid_high'].append(product)
+            elif price >= mid_low_threshold:
+                tier_samples['mid_low'].append(product)
+            else:
+                tier_samples['budget'].append(product)
+        
+        # Ensure we have samples in each tier by redistributing if necessary
+        # and limit to reasonable sample sizes for LLM analysis
+        max_samples_per_tier = 15
+        
+        for tier_name, tier_products in tier_samples.items():
+            if len(tier_products) > max_samples_per_tier:
+                # Sort by price within tier and take a representative sample
+                tier_products.sort(key=lambda x: x['price'], reverse=(tier_name in ['premium', 'mid_high']))
+                tier_samples[tier_name] = tier_products[:max_samples_per_tier]
+            elif len(tier_products) == 0 and len(product_data) > 4:
+                # If a tier is empty but we have products, redistribute
+                # This handles edge cases where thresholds might not align perfectly
+                self._redistribute_empty_tiers(tier_samples, product_data, tier_name)
+        
+        return tier_samples
+    
+    def _redistribute_empty_tiers(self, tier_samples: Dict[str, List[Dict]], product_data: List[Dict], empty_tier: str):
+        """Redistribute products to ensure all tiers have at least one sample"""
+        # Simple redistribution logic for edge cases
+        all_products = sorted(product_data, key=lambda x: x['price'], reverse=True)
+        total_products = len(all_products)
+        
+        if total_products < 4:
+            return  # Not enough products to redistribute
+        
+        # Calculate equal distribution
+        per_tier = total_products // 4
+        
+        tier_names = ['premium', 'mid_high', 'mid_low', 'budget']
+        
+        # Clear and redistribute
+        for i, tier_name in enumerate(tier_names):
+            start_idx = i * per_tier
+            end_idx = (i + 1) * per_tier if i < 3 else total_products
+            tier_samples[tier_name] = all_products[start_idx:end_idx]
+    
+    async def _llm_analyze_product_patterns(self, tier_samples: Dict[str, List[Dict]], price_analysis: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Use LLM to analyze product naming patterns across price tiers with sophisticated statistical context"""
+        
+        # Build sophisticated tier descriptions with statistical context
         tier_descriptions = []
+        statistical_context = ""
+        
+        # Include statistical analysis context if available
+        if price_analysis and 'overall' in price_analysis:
+            overall_stats = price_analysis['overall']
+            distribution_type = price_analysis.get('distribution_type', 'unknown')
+            
+            statistical_context = f"""
+## Statistical Analysis Context
+
+- **Distribution Type**: {distribution_type.title()}
+- **Price Range**: ${overall_stats.get('min', 0):.2f} - ${overall_stats.get('max', 0):.2f}
+- **Statistical Thresholds**:
+  - Budget threshold (p25): ${overall_stats.get('budget_threshold', overall_stats.get('p25', 0)):.2f}
+  - Mid-low threshold (p50): ${overall_stats.get('mid_low_threshold', overall_stats.get('p50', 0)):.2f}
+  - Mid-high threshold (p75): ${overall_stats.get('mid_high_threshold', overall_stats.get('p75', 0)):.2f}
+  - Premium threshold (p95): ${overall_stats.get('premium_threshold', overall_stats.get('p95', 0)):.2f}
+
+{f"- **Price Clusters Detected**: {len(overall_stats.get('price_clusters', []))}" if overall_stats.get('price_clusters') else ""}
+"""
+            
+            # Include cluster information if available
+            if overall_stats.get('price_clusters'):
+                cluster_descriptions = []
+                for i, cluster in enumerate(overall_stats['price_clusters']):
+                    desc = f"  Cluster {i+1}: ${cluster['min']:.0f} - ${cluster['max']:.0f} ({cluster['count']} products, avg ${cluster['mean']:.0f})"
+                    cluster_descriptions.append(desc)
+                statistical_context += f"- **Natural Price Clusters**:\n" + "\n".join(cluster_descriptions) + "\n"
+        
+        # Format tier samples with enhanced context
         for tier, products in tier_samples.items():
             if products:
                 avg_price = sum(p['price'] for p in products) / len(products)
+                price_range = f"${min(p['price'] for p in products):.2f} - ${max(p['price'] for p in products):.2f}"
                 product_list = '\n'.join([f"  - {p['name']} (${p['price']:.2f})" for p in products])
-                tier_descriptions.append(f"{tier.upper()} TIER (avg ${avg_price:.2f}):\n{product_list}")
+                
+                tier_descriptions.append(f"""**{tier.upper()} TIER** ({len(products)} products)
+- Price Range: {price_range}
+- Average Price: ${avg_price:.2f}
+- Products:
+{product_list}""")
         
         samples_text = '\n\n'.join(tier_descriptions)
         
-        prompt = f"""Analyze these product samples from different price tiers to identify naming patterns and tier indicators.
+        prompt = f"""Analyze these product samples from different price tiers to identify naming patterns and tier indicators. The tiers are based on sophisticated statistical analysis of the entire product catalog.
+
+{statistical_context}
+
+## Product Samples by Tier
 
 {samples_text}
 
+## Analysis Instructions
+
 Please identify:
-1. Specific words, prefixes, or suffixes that appear predominantly in premium products
-2. Terms that indicate mid-tier products (combine patterns from MID_HIGH and MID_LOW tiers)
-3. Terms that indicate budget/entry-level products
-4. Any clear naming patterns or hierarchies (e.g., "Pro" > "Sport" > "Base")
+1. **Premium indicators**: Specific words, prefixes, or suffixes that appear predominantly in premium products
+2. **Mid-tier indicators**: Terms that indicate mid-tier products (combine patterns from MID_HIGH and MID_LOW tiers)
+3. **Budget indicators**: Terms that indicate budget/entry-level products
+4. **Naming hierarchy**: Any clear naming patterns or hierarchies (e.g., "Pro" > "Sport" > "Base")
 
-IMPORTANT: The MID_HIGH and MID_LOW tiers should both be considered as mid-tier products. Look for terms that appear in either or both of these middle tiers.
+## Important Guidelines
 
-IMPORTANT FILTERING RULES:
-- EXCLUDE any terms related to crashes, accidents, injuries, or death
-- EXCLUDE profanity, offensive language, or derogatory terms
-- EXCLUDE terms that could be considered inappropriate or unprofessional
-- ONLY include terms that are appropriate for a professional product catalog
-- Focus on terms that relate to products, features, performance, or technical aspects
+- **Statistical Context**: The tiers are determined using sophisticated statistical analysis (percentiles, clustering)
+- **Mid-tier Definition**: MID_HIGH and MID_LOW should both be considered as mid-tier products
+- **Quality Focus**: Look for terms that correlate with the statistically-determined price ranges
+
+## Filtering Rules
+
+- **EXCLUDE**: Terms related to crashes, accidents, injuries, or death
+- **EXCLUDE**: Profanity, offensive language, or derogatory terms
+- **EXCLUDE**: Inappropriate or unprofessional terms
+- **INCLUDE ONLY**: Terms appropriate for a professional product catalog
+- **FOCUS ON**: Product features, performance, technical aspects, and quality indicators
+
+## Response Format
 
 Respond with a JSON object in this format:
 {{
@@ -815,10 +1089,11 @@ Respond with a JSON object in this format:
     "mid_tier_indicators": ["term1", "term2", ...],
     "budget_indicators": ["term1", "term2", ...],
     "naming_hierarchy": "Description of any clear hierarchy in naming",
-    "insights": "Key observations about the naming patterns"
+    "insights": "Key observations about the naming patterns and their correlation with statistical price tiers",
+    "statistical_alignment": "How well the naming patterns align with the statistical tier boundaries"
 }}
 
-Focus on extracting actual terms used in product names, not generic descriptions."""
+Focus on extracting actual terms used in product names that correlate with the statistically-determined price tiers."""
 
         try:
             response = await LLMFactory.chat_completion(
@@ -839,11 +1114,20 @@ Focus on extracting actual terms used in product names, not generic descriptions
                 'budget_indicators': [t.lower().strip() for t in result.get('budget_indicators', [])]
             }
             
+            # Log enhanced analysis results
             if 'naming_hierarchy' in result:
                 logger.info(f"LLM found naming hierarchy: {result['naming_hierarchy']}")
             
             if 'insights' in result:
                 logger.info(f"LLM product analysis insights: {result['insights']}")
+                
+            if 'statistical_alignment' in result:
+                logger.info(f"Statistical alignment analysis: {result['statistical_alignment']}")
+            
+            # Include price analysis context in the result
+            if price_analysis:
+                tier_indicators['price_analysis'] = price_analysis
+                tier_indicators['statistical_alignment'] = result.get('statistical_alignment', '')
             
             return tier_indicators
             
