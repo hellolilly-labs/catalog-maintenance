@@ -1532,23 +1532,37 @@ Each definition should be concise (under 100 characters) and explain what the te
         performance_indicators = set()
         
         for product in products[:50]:  # Analyze first 50 products for patterns
-            product_dict = product.to_dict()
+            # Handle both Product objects and dictionaries
+            if hasattr(product, 'to_dict'):
+                # Product object
+                product_dict = product.to_dict()
+                product_name = product.name or ""
+                product_description = product.description or ""
+                product_highlights = getattr(product, 'highlights', []) or []
+                product_categories = getattr(product, 'categories', []) or []
+            else:
+                # Already a dictionary
+                product_dict = product
+                product_name = product_dict.get('name', '') or ""
+                product_description = product_dict.get('description', '') or ""
+                product_highlights = product_dict.get('highlights', []) or []
+                product_categories = product_dict.get('categories', []) or []
             
             # Extract from product names and descriptions
             text_fields = [
-                product.name or "",
-                product.description or "",
+                product_name,
+                product_description,
                 str(product_dict.get('long_description', '')),
                 str(product_dict.get('title', ''))
             ]
             
             # Extract from highlights/features
-            if hasattr(product, 'highlights') and product.highlights:
-                text_fields.extend(product.highlights)
+            if product_highlights:
+                text_fields.extend(product_highlights)
             
             # Extract from categories
-            if product.categories:
-                text_fields.extend(product.categories)
+            if product_categories:
+                text_fields.extend(product_categories)
             
             # Analyze text for patterns
             for text in text_fields:
