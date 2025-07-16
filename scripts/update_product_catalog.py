@@ -358,8 +358,8 @@ class ProductCatalogUpdater:
         
         # For backward compatibility, also check legacy color/size fields
         if not variant_attributes:
-            colors = product.get_available_colors() if hasattr(product, 'get_available_colors') else []
-            sizes = product.get_available_sizes() if hasattr(product, 'get_available_sizes') else []
+            colors = product.colors if hasattr(product, 'colors') else []
+            sizes = product.sizes if hasattr(product, 'sizes') else []
             if colors:
                 variant_attributes['color'] = set(colors)
             if sizes:

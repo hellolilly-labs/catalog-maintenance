@@ -25,6 +25,9 @@ from liddy_intelligence.catalog.price_statistics_analyzer import PriceStatistics
 # SearchResult import removed - now using SearchResponse
 from liddy.llm import LLMFactory
 
+# Import relevance guardrails
+from liddy_intelligence.constants.prompt_blocks import RELEVANCE_GUARDRAILS, SENTINEL, TERMINOLOGY_SELECTION_CRITERIA
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,6 +42,39 @@ class IndustryTerminologyResearcher(BaseResearcher):
             researcher_name="industry_terminology",
             step_type=StepType.INDUSTRY_TERMINOLOGY
         )
+        self.detected_industry = None  # Will be detected during research
+    
+    async def _llm_call_with_sentinel(self, messages: List[Dict[str, str]], 
+                                     model: str = "openai/o3",
+                                     initial_temperature: float = 0.3,
+                                     response_format: Optional[Dict] = None) -> Dict[str, Any]:
+        """Make LLM call with retry logic for sentinel verification"""
+        max_attempts = 3
+        temperature = initial_temperature
+        
+        for attempt in range(max_attempts):
+            response = await LLMFactory.chat_completion(
+                messages=messages,
+                model=model,
+                temperature=temperature,
+                response_format=response_format
+            )
+            
+            content = response.get('content', '')
+            if SENTINEL in content:
+                # Remove sentinel before returning
+                content = content.replace(SENTINEL, '').strip()
+                response['content'] = content
+                return response
+            else:
+                logger.warning(f"LLM response attempt {attempt + 1}: Missing sentinel, retrying...")
+                temperature = min(temperature + 0.1, 0.7)
+                
+                if attempt == max_attempts - 1:
+                    logger.error("Failed to get response with sentinel after max attempts")
+                    return response  # Return last attempt even without sentinel
+        
+        return response
         
     async def _gather_data(self) -> Dict[str, Any]:
         """
@@ -1540,7 +1576,15 @@ Extract only actual product/model names and tier indicators, not generic descrip
                 for result in search_results
             ])
         
+        # Add relevance guardrails
+        guardrails = RELEVANCE_GUARDRAILS.replace("{{industry}}", industry)
+        selection_criteria = TERMINOLOGY_SELECTION_CRITERIA.replace("{{industry}}", industry)
+        
         prompt = f"""You are analyzing search results about {brand} in the {industry} industry to identify price tier terminology.
+
+{guardrails}
+
+{selection_criteria}
 
 Please extract terms that indicate different price/quality tiers, and provide a brief definition for each term.
 
@@ -1583,17 +1627,41 @@ Please respond with a JSON object in this exact format:
     "insights": "Brief summary of pricing tier patterns found"
 }}
 
-Each definition should be concise (under 100 characters) and explain what the term means in the context of product pricing/quality."""
+Each definition should be concise (under 100 characters) and explain what the term means in the context of product pricing/quality.
+
+For each term, include:
+- "catalog_occurrences": number of times it appears in the catalog (minimum 3 to include)
+- "citations": list of sources where the term was found (need at least 2 {industry} sources)
+
+Final line: {SENTINEL}"""
 
         try:
-            response = await LLMFactory.chat_completion(
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                model="openai/o3",
-                temperature=0.3,
-                response_format={"type": "json_object"}
-            )
+            # Retry logic for sentinel
+            max_attempts = 3
+            temperature = 0.3
+            
+            for attempt in range(max_attempts):
+                response = await LLMFactory.chat_completion(
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ],
+                    model="openai/o3",
+                    temperature=temperature,
+                    response_format={"type": "json_object"}
+                )
+                
+                content = response.get('content', '')
+                if SENTINEL in content:
+                    # Remove sentinel before parsing JSON
+                    content = content.replace(SENTINEL, '').strip()
+                    response['content'] = content
+                    break
+                else:
+                    logger.warning(f"Terminology extraction attempt {attempt + 1}: Missing sentinel, retrying...")
+                    temperature = min(temperature + 0.1, 0.7)
+                    
+                    if attempt == max_attempts - 1:
+                        logger.error("Failed to get response with sentinel")
             
             result = json.loads(response.get('content'))
             
@@ -1782,15 +1850,14 @@ Each definition should be concise (under 100 characters) and explain what the te
                         if context:
                             performance_indicators.update(context)
         
-        # Convert sets to lists and filter out common words
-        stop_words = {'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'a', 'an'}
-        
-        patterns["use_cases"] = [term for term in use_case_indicators if term not in stop_words and len(term) > 2][:10]
-        patterns["materials"] = [term for term in material_indicators if term not in stop_words and len(term) > 2][:10]
-        patterns["key_features"] = [term for term in feature_indicators if term not in stop_words and len(term) > 2][:10]
-        patterns["style_type"] = [term for term in style_indicators if term not in stop_words and len(term) > 2][:10]
-        patterns["target_user"] = [term for term in user_indicators if term not in stop_words and len(term) > 2][:10]
-        patterns["performance_traits"] = [term for term in performance_indicators if term not in stop_words and len(term) > 2][:10]
+        # Convert sets to lists - filtering now handled by guardrails
+        # Length check remains for basic quality control
+        patterns["use_cases"] = [term for term in use_case_indicators if len(term) > 2][:10]
+        patterns["materials"] = [term for term in material_indicators if len(term) > 2][:10]
+        patterns["key_features"] = [term for term in feature_indicators if len(term) > 2][:10]
+        patterns["style_type"] = [term for term in style_indicators if len(term) > 2][:10]
+        patterns["target_user"] = [term for term in user_indicators if len(term) > 2][:10]
+        patterns["performance_traits"] = [term for term in performance_indicators if len(term) > 2][:10]
         
         return patterns
     

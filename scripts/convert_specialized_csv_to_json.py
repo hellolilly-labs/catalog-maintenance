@@ -86,8 +86,8 @@ def convert_csv_to_json(csv_path: str, output_path: str, account: str = "special
             logger.info(f"     Variants: {len(sample.variants)}")
             logger.info(f"     Price range: ${sample.price_range()[0]:.2f} - ${sample.price_range()[1]:.2f}")
             logger.info(f"     Total inventory: {sample.get_total_inventory()}")
-            logger.info(f"     Sizes: {sample.get_available_sizes()}")
-            logger.info(f"     Colors: {sample.get_available_colors()}")
+            logger.info(f"     Sizes: {sample.sizes}")
+            logger.info(f"     Colors: {sample.colors}")
         
         # Convert to dict format
         logger.info(f"\n  💾 Converting to JSON format...")

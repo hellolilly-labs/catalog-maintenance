@@ -104,10 +104,10 @@ def test_product_with_variants():
     assert product.is_in_stock() == True
     
     # Test available options
-    sizes = product.get_available_sizes()
+    sizes = product.sizes
     assert set(sizes) == {"Small", "Medium", "Large"}
     
-    colors = product.get_available_colors()
+    colors = product.colors
     assert set(colors) == {"Red", "Blue"}
     
     print("  ✅ Product with variants tests passed")

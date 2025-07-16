@@ -28,6 +28,10 @@ from liddy_intelligence.research.product_catalog_research import get_product_cat
 # Import descriptor module system
 from liddy_intelligence.catalog.descriptors import DescriptorModuleManager
 from liddy_intelligence.catalog.price_statistics_analyzer import PriceStatisticsAnalyzer
+from liddy_intelligence.catalog.price_descriptor_updater import PriceDescriptorUpdater
+
+# Import relevance guardrails
+from liddy_intelligence.constants.prompt_blocks import RELEVANCE_GUARDRAILS, SENTINEL
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +86,7 @@ class UnifiedDescriptorGenerator:
         # Cache for product catalog research
         self.product_catalog_intelligence = ""
         self.terminology_research_cache = None
+        self.detected_industry = None  # Will be detected from research or products
         
         logger.info(f"🔧 Initialized RAG-Optimized Descriptor Generator for {brand_domain}")
         logger.info(f"   Research: {'enabled' if self.config.use_research else 'disabled'}")
@@ -254,6 +259,39 @@ class UnifiedDescriptorGenerator:
         
         return None
     
+    async def _detect_industry(self) -> str:
+        """Detect the industry from research or product data"""
+        # First try to get from foundation research
+        try:
+            foundation_research = await self.storage.get_research_data(
+                account=self.brand_domain,
+                research_type="foundation"
+            )
+            if foundation_research:
+                # Simple heuristic: look for common industry keywords
+                industry_keywords = {
+                    "cycling": ["bike", "bicycle", "cycling", "cyclist"],
+                    "outdoor": ["outdoor", "hiking", "camping", "backpack"],
+                    "electronics": ["electronic", "tech", "gadget", "device"],
+                    "apparel": ["clothing", "apparel", "fashion", "wear"],
+                    "sports": ["sport", "athletic", "fitness", "exercise"],
+                    "automotive": ["car", "auto", "vehicle", "motor"],
+                    "home": ["home", "furniture", "decor", "household"],
+                    "beauty": ["beauty", "cosmetic", "skincare", "makeup"]
+                }
+                
+                research_lower = foundation_research.lower()
+                for industry, keywords in industry_keywords.items():
+                    if any(keyword in research_lower for keyword in keywords):
+                        logger.info(f"Detected industry: {industry}")
+                        return industry
+        except Exception as e:
+            logger.debug(f"Could not load foundation research: {e}")
+        
+        # Fallback to general retail
+        logger.info("Using default industry: retail")
+        return "retail"
+    
     async def _generate_descriptor(self, product: Product, price_statistics: Optional[Dict[str, Any]] = None, model: Optional[str] = None):
         """Generate descriptor based on configured mode"""
         
@@ -266,15 +304,32 @@ class UnifiedDescriptorGenerator:
         prompt_messages = await self._build_versioned_prompt(product_info, prompt_key)
         
         try:
-            # Generate via LLM
-            response = await LLMFactory.chat_completion(
-                task="rag_descriptor_generation",
-                messages=prompt_messages,
-                model=model
-            )
+            # Generate via LLM with retry logic for sentinel
+            max_attempts = 3
+            temperature = 0.0
             
-            # Parse response based on mode
-            result = self._parse_response(response.get('content', ''), product)
+            for attempt in range(max_attempts):
+                response = await LLMFactory.chat_completion(
+                    task="rag_descriptor_generation",
+                    messages=prompt_messages,
+                    model=model,
+                    temperature=temperature
+                )
+                
+                content = response.get('content', '')
+                
+                # Check for sentinel
+                if SENTINEL in content:
+                    # Parse response based on mode
+                    result = self._parse_response(content, product)
+                    break
+                else:
+                    logger.warning(f"Attempt {attempt + 1}: Response missing sentinel. Retrying with higher temperature.")
+                    temperature = min(temperature + 0.1, 0.7)
+                    
+                    if attempt == max_attempts - 1:
+                        logger.error("Failed to get response with sentinel after 3 attempts. Using fallback.")
+                        result = self._generate_fallback(product)
             
         except Exception as e:
             logger.error(f"Generation failed: {e}")
@@ -346,11 +401,19 @@ class UnifiedDescriptorGenerator:
         except Exception as e:
             logger.warning(f"Langfuse prompt retrieval failed: {e}")
                 
+        # Detect industry if not already detected
+        if not self.detected_industry:
+            self.detected_industry = await self._detect_industry()
+        
         # Fill in template parameters using ProductCatalogResearcher output
         research_context = ""
         if self.config.use_research and self.product_catalog_intelligence:
             # Use the comprehensive product catalog intelligence that synthesizes all research phases
             research_context = f"\n# PRODUCT CATALOG INTELLIGENCE\n\n{self.product_catalog_intelligence[:8000]}\n"
+        
+        # Add relevance guardrails after research context
+        guardrails = RELEVANCE_GUARDRAILS.replace("{{industry}}", self.detected_industry)
+        research_context += f"\n{guardrails}\n"
         
         # Replace template parameters
         system_content = system_prompt.replace("{{mode}}", "rag")
@@ -359,6 +422,7 @@ class UnifiedDescriptorGenerator:
         system_content = system_content.replace("{{product_info}}", product_info)
         system_content = system_content.replace("{{min_length}}", str(self.config.descriptor_length[0]))
         system_content = system_content.replace("{{max_length}}", str(self.config.descriptor_length[1]))
+        system_content = system_content.replace("{{sentinel}}", SENTINEL)
         
         # Build user prompt with structured output format
         user_content = user_prompt.replace("{{research_context}}", research_context)
@@ -404,7 +468,8 @@ Requirements:
 - {{min_length}}-{{max_length}} words for main descriptor
 - Natural search query matching
 - Extract key selling points and search terms
-- Provide concise voice summary"""
+- Provide concise voice summary
+- Final line: {{sentinel}}"""
     
     def _get_focus_instructions(self, mode: str) -> str:
         """Get RAG-specific focus instructions"""
@@ -604,7 +669,10 @@ IMPORTANT:
     #     return "\n".join(sections)
     
     def _parse_response(self, content: str, product: Product) -> Dict[str, Any]:
-        """Parse LLM response"""
+        """Parse LLM response and remove sentinel"""
+        # Remove sentinel from content before parsing
+        content = content.replace(SENTINEL, "").strip()
+        
         result = {
             "descriptor": "",
             "search_terms": [],
@@ -949,9 +1017,9 @@ JUSTIFICATION: [brief explanation]"""
         # From descriptor
         terms.update(re.findall(r'\b\w{4,}\b', descriptor.lower()))
         
-        # Remove common words
-        stop_words = {'the', 'and', 'for', 'with', 'this', 'that', 'from', 'have', 'been', 'your', 'will', 'can', 'are'}
-        terms = terms - stop_words
+        # Filtering now handled by relevance guardrails
+        # Basic length filtering remains
+        terms = {term for term in terms if len(term) >= 3}
         
         return sorted(list(terms))[:self.config.max_search_terms]
     
