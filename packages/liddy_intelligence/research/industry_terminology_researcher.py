@@ -14,9 +14,14 @@ The output is used for:
 
 import logging
 import json
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Set
 from datetime import datetime
 import re
+import unicodedata
+from functools import lru_cache
+import numpy as np
+from pathlib import Path
+import csv
 
 from liddy_intelligence.research.base_researcher import BaseResearcher
 from liddy.models.product import Product
@@ -24,9 +29,22 @@ from liddy_intelligence.progress_tracker import StepType
 from liddy_intelligence.catalog.price_statistics_analyzer import PriceStatisticsAnalyzer
 # SearchResult import removed - now using SearchResponse
 from liddy.llm import LLMFactory
+from liddy.prompt_manager import PromptManager
+from liddy_intelligence.research.result_types import Term, PriceTerminology
+from liddy_intelligence.research.search_helpers import (
+    run_search, _extract_terms_from_tavily_answer, _extract_terms_from_tavily_answers_batch,
+    diversity_filter, domain_diversity, fallback_search, is_stopword
+)
 
 # Import relevance guardrails
 from liddy_intelligence.constants.prompt_blocks import RELEVANCE_GUARDRAILS, SENTINEL, TERMINOLOGY_SELECTION_CRITERIA
+
+# Import new types and helpers
+from liddy_intelligence.research.result_types import PriceTerminology, Term
+from liddy_intelligence.research.search_helpers import (
+    run_search, _extract_terms_from_tavily_answer, _extract_terms_from_tavily_answers_batch,
+    diversity_filter, domain_diversity, fallback_search, is_stopword, SEARCH_TEMPLATES
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +54,21 @@ class IndustryTerminologyResearcher(BaseResearcher):
     Researches industry-specific terminology for better search and understanding
     """
     
-    def __init__(self, brand_domain: str):
+    def __init__(self, brand_domain: str, debug_dump: bool = False):
         super().__init__(
             brand_domain=brand_domain,
             researcher_name="industry_terminology",
             step_type=StepType.INDUSTRY_TERMINOLOGY
         )
         self.detected_industry = None  # Will be detected during research
+        self.prompt_manager = PromptManager()  # Initialize Langfuse prompt manager
+        self._result: Optional[PriceTerminology] = None  # Structured result storage
+        self._answer_provenance_cache = {}  # Track term sources for confidence
+        self.debug_dump = debug_dump  # Whether to dump CSV debug data
+        
+        # Install redacting filter for first-use safety
+        from liddy_intelligence import install_redacting_filter
+        install_redacting_filter()
     
     async def _llm_call_with_sentinel(self, messages: List[Dict[str, str]], 
                                      model: str = "openai/o3",
@@ -75,6 +101,79 @@ class IndustryTerminologyResearcher(BaseResearcher):
                     return response  # Return last attempt even without sentinel
         
         return response
+    
+    async def _llm_call_with_json_retry(self, messages: List[Dict[str, str]], 
+                                       model: str = "openai/o3",
+                                       initial_temperature: float = 0.3,
+                                       response_format: Optional[Dict] = None,
+                                       max_attempts: int = 3,
+                                       fallback_result: Optional[Dict] = None) -> Dict[str, Any]:
+        """Make LLM call with retry logic for both sentinel verification and JSON parsing"""
+        
+        if fallback_result is None:
+            fallback_result = {}
+        
+        temperature = initial_temperature
+        
+        for attempt in range(max_attempts):
+            try:
+                # Make the LLM call with sentinel verification
+                response = await self._llm_call_with_sentinel(
+                    messages=messages,
+                    model=model,
+                    initial_temperature=temperature,
+                    response_format=response_format
+                )
+                
+                # Try to parse JSON
+                content = response.get('content', '')
+                if content:
+                    result = json.loads(content)
+                    logger.info(f"Successfully parsed JSON on attempt {attempt + 1}")
+                    return result
+                else:
+                    raise ValueError("Empty response content")
+                    
+            except json.JSONDecodeError as e:
+                logger.warning(f"JSON parsing failed on attempt {attempt + 1}: {e}")
+                if attempt < max_attempts - 1:
+                    # Increase temperature for next attempt to get more varied response
+                    temperature = min(temperature + 0.15, 0.8)
+                    logger.info(f"Retrying with higher temperature: {temperature}")
+                else:
+                    logger.error(f"Failed to parse JSON after {max_attempts} attempts")
+                    
+            except Exception as e:
+                logger.warning(f"LLM call failed on attempt {attempt + 1}: {e}")
+                if attempt < max_attempts - 1:
+                    temperature = min(temperature + 0.1, 0.7)
+                else:
+                    logger.error(f"LLM call failed after {max_attempts} attempts")
+        
+        # Return fallback result if all attempts failed
+        logger.warning(f"Returning fallback result after {max_attempts} failed attempts")
+        return fallback_result
+    
+    async def _build_versioned_prompt(self, prompt_key: str, default_prompt: str, 
+                                     template_vars: Dict[str, str]) -> str:
+        """Build versioned prompt using Langfuse with fallback to default"""
+        try:
+            # Try to get versioned prompt from Langfuse
+            prompt_template = await self.prompt_manager.get_prompt(
+                prompt_name=prompt_key,
+                prompt_type="text",
+                prompt=default_prompt
+            )
+            prompt_content = prompt_template.prompt
+        except Exception as e:
+            logger.warning(f"Langfuse prompt retrieval failed for {prompt_key}: {e}")
+            prompt_content = default_prompt
+        
+        # Replace template variables
+        for key, value in template_vars.items():
+            prompt_content = prompt_content.replace(f"{{{{{key}}}}}", str(value))
+        
+        return prompt_content
         
     async def _gather_data(self) -> Dict[str, Any]:
         """
@@ -148,6 +247,11 @@ class IndustryTerminologyResearcher(BaseResearcher):
         """
         Synthesize the final research results
         """
+        # Store the structured result for accessor methods
+        # The cached_price_terminology is already set in _research_price_terminology
+        if hasattr(self, '_cached_price_terminology'):
+            self._result = self._cached_price_terminology
+        
         # Generate the research report
         research_content = self._generate_research_report(
             analysis["brand_name"],
@@ -248,114 +352,254 @@ class IndustryTerminologyResearcher(BaseResearcher):
     
     async def _research_price_terminology(self, brand: str, industry: str, 
                                         products: List[Product]) -> Dict[str, Any]:
-        """Research industry-specific price tier terminology using LLM analysis"""
+        """Research industry-specific price tier terminology using quality pipeline."""
         
-        terminology = {
-            'premium_terms': [],
-            'mid_tier_terms': [],
-            'budget_terms': [],
-            'brand_specific_tiers': {}
+        # Initialize tier collections for quality pipeline
+        tier_terms = {
+            'premium': {},  # term -> {confidence, web_hits, product_hits, has_answer}
+            'mid': {},
+            'budget': {}
         }
         
-        # First, extract terminology from existing brand research
-        existing_terms = await self._extract_terms_from_existing_research()
-        if existing_terms:
-            terminology['premium_terms'].extend(existing_terms.get('premium_terms', []))
-            terminology['mid_tier_terms'].extend(existing_terms.get('mid_tier_terms', []))
-            terminology['budget_terms'].extend(existing_terms.get('budget_terms', []))
+        # Use improved search templates with full domain for disambiguation
+        queries = []
+        for template in SEARCH_TEMPLATES[:4]:  # Use first 4 templates
+            query = template.format(industry=industry, domain=self.brand_domain, term="")
+            queries.append(query)
         
-        # Then supplement with targeted web searches analyzed by LLM
-        queries = [
-            f"{industry} premium vs budget terminology",
-            f"{brand} product tier names explained",
-            f"what does pro mean in {industry}",
-            f"{industry} product naming conventions price levels",
-            f"{brand} model hierarchy explained"
-        ]
-        
-        # Collect all search results and answers
-        all_search_content = []
-        tavily_answers = []
+        # Process all queries and collect responses for efficient batching
+        search_responses = []
         for query in queries:
             try:
-                response = await self.web_search.search(query=query)
-                
-                # Collect the Tavily synthesized answer if available
-                if response.answer:
-                    tavily_answers.append({
-                        'query': query,
-                        'answer': response.answer
-                    })
-                
-                # Also collect individual search results
-                for result in response.results[:5]:
-                    all_search_content.append({
-                        'query': query,
-                        'url': result.url,
-                        'content': result.content[:2000]  # Limit content length
-                    })
+                # Use enhanced search with depth-2 capability
+                response = await run_search(query, self.web_search)
+                search_responses.append(response)
             except Exception as e:
-                logger.warning(f"Search failed for '{query}': {e}")
+                logger.warning(f"Search failed for query '{query}': {e}")
+                continue
         
-        # Use LLM to analyze all search results at once
-        if all_search_content or tavily_answers:
-            llm_extracted_terms = await self._llm_extract_terminology(
-                search_results=all_search_content,
-                tavily_answers=tavily_answers,
-                brand=brand,
-                industry=industry
+        # Extract terms from all Tavily answers in a single efficient batch call
+        tavily_answers = [resp.answer for resp in search_responses if resp.answer]
+        search_queries = [queries[i] for i, resp in enumerate(search_responses) if resp.answer]
+        terms_per_answer = []
+        if tavily_answers:
+            terms_per_answer = await _extract_terms_from_tavily_answers_batch(
+                tavily_answers, self.brand_domain, industry, search_intents=search_queries
             )
+            total_terms = sum(len(terms) for terms in terms_per_answer)
+            logger.info(f"Batch extracted {total_terms} terms from {len(tavily_answers)} Tavily answers with search intent awareness")
+        
+        # Process each answer's terms with their specific search context (preserves attribution)
+        answer_index = 0
+        for i, response in enumerate(search_responses):
+            if not response.answer:
+                continue  # Skip responses without Tavily answers
+                
+            # Get terms specific to this answer
+            answer_terms_provenance = terms_per_answer[answer_index] if answer_index < len(terms_per_answer) else {}
+            answer_index += 1
             
-            # Merge LLM extracted terms - now these are tuples with definitions
-            if llm_extracted_terms:
-                terminology['premium_terms'] = llm_extracted_terms.get('premium_terms', [])
-                terminology['mid_tier_terms'] = llm_extracted_terms.get('mid_tier_terms', [])
-                terminology['budget_terms'] = llm_extracted_terms.get('budget_terms', [])
+            # Apply diversity filter to results for this specific query
+            filtered_results = diversity_filter(response.results)
+            
+            # Process this answer's terms with correct attribution to its query
+            for term, source_sentence in answer_terms_provenance.items():
+                # Normalize and validate term
+                normalized_term = self._normalize_term(term)
+                if len(normalized_term) < 2 or is_stopword(normalized_term):
+                    continue
+                
+                # Calculate product coverage
+                product_coverage = self._get_product_coverage(normalized_term, products)
+                
+                # Determine tier from context
+                tier = self._determine_tier_from_context(term, source_sentence, products)
+                
+                # Calculate confidence with proper attribution to this specific query/answer
+                confidence = self._calculate_confidence(
+                    normalized_term,
+                    web_hits=len(filtered_results),  # Specific to this query
+                    product_coverage=product_coverage,
+                    has_answer_provenance=True,
+                    domain_quality=domain_diversity(filtered_results) / max(len(filtered_results), 1)
+                )
+                
+                # Store or update term
+                if normalized_term not in tier_terms[tier] or confidence > tier_terms[tier][normalized_term]['confidence']:
+                    tier_terms[tier][normalized_term] = {
+                        'confidence': confidence,
+                        'web_hits': len(filtered_results),
+                        'product_hits': product_coverage,
+                        'has_answer': True,
+                        'source': source_sentence
+                    }
         
-        # Add terms from existing research (these are just strings, so convert to tuples)
-        if existing_terms:
-            for term in existing_terms.get('premium_terms', []):
-                terminology['premium_terms'].append((term, "Premium/professional tier indicator"))
-            for term in existing_terms.get('mid_tier_terms', []):
-                terminology['mid_tier_terms'].append((term, "Mid-range tier indicator"))
-            for term in existing_terms.get('budget_terms', []):
-                terminology['budget_terms'].append((term, "Budget/entry-level tier indicator"))
+        # If batch extraction yielded sufficient results, skip individual processing
+        total_batch_terms = sum(len(terms) for terms in terms_per_answer)
+        if total_batch_terms >= 15:
+            logger.info(f"Batch extraction found sufficient terms ({total_batch_terms}), skipping individual processing")
+        else:
+            # Process each query response individually for additional term extraction
+            for query, response in zip(queries, search_responses):
+                try:
+                    # Apply diversity filter to results
+                    filtered_results = diversity_filter(response.results)
+                    
+                    # Skip if not enough results for meaningful analysis
+                    if len(filtered_results) < 3:
+                        logger.info(f"Skipping individual processing for '{query}' - insufficient results")
+                        continue
+                        
+                    # Individual LLM extraction for deeper analysis
+                    context_text = "\n\n".join([
+                        f"From {r.url}:\n{r.content[:500]}..."
+                        for r in filtered_results[:5]
+                    ])
+                    
+                    # Extract additional terms via LLM analysis
+                    llm_terms = await self._llm_extract_terminology(
+                        search_results=filtered_results,
+                        tavily_answers=[response.answer] if response.answer else [],
+                        brand=self.brand_domain.split('.')[0],
+                        industry=industry
+                    )
+                    
+                    # Process LLM-extracted terms
+                    for tier_key, tier_list in llm_terms.items():
+                        for term, definition in tier_list:
+                            normalized_term = self._normalize_term(term)
+                            if len(normalized_term) < 2 or is_stopword(normalized_term):
+                                continue
+                            
+                            # Calculate product coverage
+                            product_coverage = self._get_product_coverage(normalized_term, products)
+                            
+                            # Calculate confidence for LLM-extracted terms
+                            confidence = self._calculate_confidence(
+                                normalized_term,
+                                web_hits=len(filtered_results),
+                                product_coverage=product_coverage,
+                                has_answer_provenance=bool(response.answer),
+                                domain_quality=domain_diversity(filtered_results) / max(len(filtered_results), 1)
+                            )
+                            
+                            # Store if new or better confidence
+                            if normalized_term not in tier_terms[tier_key] or confidence > tier_terms[tier_key][normalized_term]['confidence']:
+                                tier_terms[tier_key][normalized_term] = {
+                                    'confidence': confidence,
+                                    'web_hits': len(filtered_results),
+                                    'product_hits': product_coverage,
+                                    'has_answer': bool(response.answer),
+                                    'definition': definition
+                                }
+                
+                except Exception as e:
+                    logger.warning(f"Search failed for '{query}': {e}")
+                    continue
         
-        # Analyze actual product names for tier patterns
+        # Apply proof-of-use validation
+        validated_tiers = {'premium': [], 'mid': [], 'budget': []}
+        
+        for tier, terms in tier_terms.items():
+            for term, data in terms.items():
+                if self._proof_of_use(term, data['product_hits'], data['web_hits'], tier):
+                    validated_tiers[tier].append((term, data['confidence']))
+        
+        # Sort by confidence and apply tier exclusivity
+        for tier in validated_tiers:
+            validated_tiers[tier].sort(key=lambda x: x[1], reverse=True)
+        
+        # Deduplicate across tiers using price analysis
+        exclusive_tiers = self._dedupe_tiers_with_context(validated_tiers, products)
+        
+        # Check if any tier has too few terms and run fallback search
+        for tier in ['premium', 'mid', 'budget']:
+            current_terms = [t for t, _ in exclusive_tiers[tier]]
+            if len(current_terms) < 10:
+                additional_terms = await fallback_search(
+                    tier, current_terms, self.web_search, 
+                    self.brand_domain, industry
+                )
+                for new_term in additional_terms:
+                    normalized = self._normalize_term(new_term)
+                    if normalized not in current_terms:
+                        # Add with moderate confidence
+                        exclusive_tiers[tier].append((normalized, 0.5))
+        
+        # Apply embedding-based sanity check with known good reference terms
+        reference_terms = {
+            'premium': ['pro', 'professional', 'elite', 's-works', 'carbon'],
+            'mid': ['comp', 'sport', 'active', 'alloy'],
+            'budget': ['base', 'entry', 'starter', 'recreational']
+        }
+        
+        for tier in exclusive_tiers:
+            if tier in reference_terms:
+                exclusive_tiers[tier] = self._embedding_sanity_check(
+                    exclusive_tiers[tier], 
+                    reference_terms[tier]
+                )
+        
+        # Cache structured result for accessor methods
+        self._cached_price_terminology = PriceTerminology(
+            premium_terms=tuple(exclusive_tiers['premium'][:30]),  # Top 30 terms
+            mid_terms=tuple(exclusive_tiers['mid'][:30]),
+            budget_terms=tuple(exclusive_tiers['budget'][:30])
+        )
+        
+        # Debug CSV dump if enabled
+        if self.debug_dump:
+            self._dump_terminology_csv(exclusive_tiers)
+        
+        # Analyze actual product names for brand-specific patterns
+        brand_specific_tiers = {}
         if products:
             product_analysis = await self._analyze_product_tiers(products)
-            terminology['brand_specific_tiers'] = product_analysis
+            brand_specific_tiers = product_analysis
         
-        # Deduplicate terms by term name while preserving definitions
-        for tier in ['premium_terms', 'mid_tier_terms', 'budget_terms']:
-            seen = set()
-            unique_terms = []
-            for item in terminology[tier]:
-                if isinstance(item, tuple) and len(item) == 2:
-                    term, definition = item
-                    if term not in seen:
-                        seen.add(term)
-                        unique_terms.append((term, definition))
-                elif isinstance(item, str) and item not in seen:
-                    # Handle legacy string format
-                    seen.add(item)
-                    unique_terms.append((item, f"{tier.replace('_', ' ').title()} indicator"))
-            terminology[tier] = unique_terms
+        # Convert to legacy format for backward compatibility
+        terminology = {
+            'premium_terms': [(t, "Premium tier indicator") for t, _ in exclusive_tiers['premium']],
+            'mid_tier_terms': [(t, "Mid-tier indicator") for t, _ in exclusive_tiers['mid']],
+            'budget_terms': [(t, "Budget tier indicator") for t, _ in exclusive_tiers['budget']],
+            'brand_specific_tiers': brand_specific_tiers
+        }
         
-        # Log the final counts
-        logger.info(f"Price terminology final counts - Premium: {len(terminology['premium_terms'])}, "
-                   f"Mid-tier: {len(terminology['mid_tier_terms'])}, "
-                   f"Budget: {len(terminology['budget_terms'])}")
-        
-        # Log brand-specific tier indicators if available
-        if terminology.get('brand_specific_tiers'):
-            bst = terminology['brand_specific_tiers']
-            logger.info(f"Brand-specific tier indicators - "
-                       f"Premium: {len(bst.get('premium_indicators', []))}, "
-                       f"Mid: {len(bst.get('mid_indicators', []))}, "
-                       f"Budget: {len(bst.get('budget_indicators', []))}")
+        logger.info(f"Price terminology research complete:")
+        logger.info(f"  Premium: {len(exclusive_tiers['premium'])} terms")
+        logger.info(f"  Mid-tier: {len(exclusive_tiers['mid'])} terms")  
+        logger.info(f"  Budget: {len(exclusive_tiers['budget'])} terms")
         
         return terminology
+    
+    async def _extract_terminology_from_search(self, search_content: str, industry: str) -> Dict[str, List[Tuple[str, str]]]:
+        """
+        Extract terminology from search content using LLM.
+        
+        This is a simplified wrapper that converts raw search content into the format
+        expected by _llm_extract_terminology.
+        
+        Args:
+            search_content: Raw concatenated search result content
+            industry: Industry context
+            
+        Returns:
+            Dict with premium_terms, mid_tier_terms, and budget_terms
+        """
+        # Convert raw content into search results format
+        search_results = [{
+            'query': f'{industry} terminology',
+            'url': 'aggregated',
+            'content': search_content
+        }]
+        
+        # Use the existing LLM extraction method
+        return await self._llm_extract_terminology(
+            search_results=search_results,
+            tavily_answers=[],  # No Tavily answers in this context
+            brand=self.brand_domain.split('.')[0],
+            industry=industry
+        )
     
     async def _research_industry_slang(self, brand: str, industry: str) -> Dict[str, List[Tuple[str, str, str]]]:
         """Research industry slang and synonyms using LLM analysis
@@ -370,10 +614,10 @@ class IndustryTerminologyResearcher(BaseResearcher):
         }
         
         queries = [
-            f"{industry} slang dictionary glossary",
-            f"{industry} terminology for beginners",
-            f"common {industry} jargon explained",
-            f"{brand} community forum terminology"
+            f"{self.brand_domain} {industry} slang dictionary glossary",
+            f"{self.brand_domain} {industry} terminology for beginners",
+            f"common {self.brand_domain} {industry} jargon explained",
+            f"{self.brand_domain} community forum terminology {industry}"
         ]
         
         # Collect search results and answers
@@ -443,14 +687,15 @@ class IndustryTerminologyResearcher(BaseResearcher):
                 for result in search_results
             ])
         
-        prompt = f"""You are analyzing web search results about {brand} in the {industry} industry to identify slang, colloquial terms, and community jargon.
+        # Default prompt template
+        default_prompt = """You are analyzing web search results about {{brand}} in the {{industry}} industry to identify slang, colloquial terms, and community jargon.
 
 Please extract ALL terms that are:
 1. Industry-specific slang or colloquialisms (informal terms used by enthusiasts)
 2. Technical slang (shortened or informal versions of technical terms)
 3. Community-specific terms (terms used in forums, social media, or by enthusiasts)
 
-IMPORTANT: Extract ALL relevant terms, including those related to sexual health, bodily functions, or mature topics if they are relevant to the {industry} industry and {brand} products.
+IMPORTANT: Extract ALL relevant terms, including those related to sexual health, bodily functions, or mature topics if they are relevant to the {{industry}} industry and {{brand}} products.
 
 For each term, provide:
 1. The term itself
@@ -462,11 +707,10 @@ For each term, provide:
 
 Search Results to Analyze (pay special attention to the Tavily AI-generated answers):
 
-{answers_content}
-{search_content}
+{{search_data}}
 
 Please respond with a JSON object in this exact format:
-{{
+{
     "general_slang": [
         ["term1", "definition1", "classification1"],
         ["term2", "definition2", "classification2"],
@@ -483,29 +727,78 @@ Please respond with a JSON object in this exact format:
         ...
     ],
     "insights": "Brief explanation of the slang patterns you found"
-}}
+}
 
 Focus on extracting actual slang terms that real users might use when searching for products.
-For sexual health brands, include relevant anatomical and sexual terms as "safe" or "understand_only" based on professional usage."""
+For sexual health brands, include relevant anatomical and sexual terms as "safe" or "understand_only" based on professional usage.
+
+Final line: {{sentinel}}"""
+
+        # Build versioned prompt using Langfuse
+        template_vars = {
+            "brand": brand,
+            "industry": industry,
+            "search_data": f"{answers_content}{search_content}",
+            "sentinel": SENTINEL
+        }
+        
+        prompt = await self._build_versioned_prompt(
+            prompt_key="liddy/terminology/slang_extractor",
+            default_prompt=default_prompt,
+            template_vars=template_vars
+        )
 
         try:
-            response = await LLMFactory.chat_completion(
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                model="openai/o3",
-                temperature=0.3,
-                response_format={"type": "json_object"},
-                max_tokens=10000
-            )
+            # Use retry logic for both LLM call and JSON parsing
+            fallback_result = {
+                'general_slang': [],
+                'technical_slang': [],
+                'community_terms': [],
+                'insights': 'Failed to extract slang due to parsing errors'
+            }
             
-            content = response.get('content')
-            if content:
-                content = content.replace('```json', '').replace('```', '')
-                content = content.strip()
-                result = json.loads(content)
-            else:
-                result = {}
+            # Custom JSON parsing with markdown cleanup for slang extractor
+            max_attempts = 3
+            temperature = 0.3
+            
+            for attempt in range(max_attempts):
+                try:
+                    response = await self._llm_call_with_sentinel(
+                        messages=[
+                            {"role": "user", "content": prompt}
+                        ],
+                        model="openai/o3",
+                        initial_temperature=temperature,
+                        response_format={"type": "json_object"}
+                    )
+                    
+                    content = response.get('content')
+                    if content:
+                        # Clean up markdown code blocks
+                        content = content.replace('```json', '').replace('```', '')
+                        content = content.strip()
+                        result = json.loads(content)
+                        logger.info(f"Successfully parsed slang JSON on attempt {attempt + 1}")
+                        break
+                    else:
+                        raise ValueError("Empty response content")
+                        
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Slang JSON parsing failed on attempt {attempt + 1}: {e}")
+                    if attempt < max_attempts - 1:
+                        temperature = min(temperature + 0.15, 0.8)
+                        logger.info(f"Retrying slang extraction with higher temperature: {temperature}")
+                    else:
+                        logger.error(f"Failed to parse slang JSON after {max_attempts} attempts")
+                        result = fallback_result
+                        
+                except Exception as e:
+                    logger.warning(f"Slang LLM call failed on attempt {attempt + 1}: {e}")
+                    if attempt < max_attempts - 1:
+                        temperature = min(temperature + 0.1, 0.7)
+                    else:
+                        logger.error(f"Slang LLM call failed after {max_attempts} attempts")
+                        result = fallback_result
             
             # Clean and validate the extracted slang
             cleaned_result = {
@@ -550,9 +843,9 @@ For sexual health brands, include relevant anatomical and sexual terms as "safe"
         }
         
         queries = [
-            f"{industry} technical specifications explained",
-            f"{brand} technology features glossary",
-            f"understanding {industry} product specifications"
+            f"{self.brand_domain} {industry} technical specifications explained",
+            f"{self.brand_domain} technology features glossary {industry}",
+            f"understanding {self.brand_domain} {industry} product specifications"
         ]
         
         # Collect search results and answers
@@ -618,7 +911,8 @@ For sexual health brands, include relevant anatomical and sexual terms as "safe"
                 for result in search_results
             ])
         
-        prompt = f"""You are analyzing web search results about {brand} in the {industry} industry to identify technical terminology.
+        # Default prompt template
+        default_prompt = """You are analyzing web search results about {{brand}} in the {{industry}} industry to identify technical terminology.
 
 Please extract:
 1. **Specifications**: Technical specifications and measurements with their meanings
@@ -636,11 +930,10 @@ IMPORTANT FILTERING RULES:
 
 Search Results to Analyze (pay special attention to the Tavily AI-generated answers):
 
-{answers_content}
-{search_content}
+{{search_data}}
 
 Please respond with a JSON object in this exact format:
-{{
+{
     "specifications": [
         ["term1", "definition1"],
         ["term2", "definition2"],
@@ -657,22 +950,45 @@ Please respond with a JSON object in this exact format:
         ...
     ],
     "insights": "Brief explanation of the technical terminology patterns you found"
-}}
+}
 
 Focus on extracting actual technical terms that would help users understand and search for products.
-Include only terms that are specific to the {industry} industry."""
+Include only terms that are specific to the {{industry}} industry.
+
+Final line: {{sentinel}}"""
+
+        # Build versioned prompt using Langfuse
+        template_vars = {
+            "brand": brand,
+            "industry": industry,
+            "search_data": f"{answers_content}{search_content}",
+            "sentinel": SENTINEL
+        }
+        
+        prompt = await self._build_versioned_prompt(
+            prompt_key="liddy/terminology/technical_terms_extractor",
+            default_prompt=default_prompt,
+            template_vars=template_vars
+        )
 
         try:
-            response = await LLMFactory.chat_completion(
+            # Use retry logic for both LLM call and JSON parsing
+            fallback_result = {
+                'specifications': [],
+                'features': [],
+                'technologies': [],
+                'insights': 'Failed to extract technical terms due to parsing errors'
+            }
+            
+            result = await self._llm_call_with_json_retry(
                 messages=[
                     {"role": "user", "content": prompt}
                 ],
                 model="openai/o3",
-                temperature=0.3,
-                response_format={"type": "json_object"}
+                initial_temperature=0.3,
+                response_format={"type": "json_object"},
+                fallback_result=fallback_result
             )
-            
-            result = json.loads(response.get('content'))
             
             # Clean and validate the extracted terms
             cleaned_result = {
@@ -920,13 +1236,14 @@ Include only terms that are specific to the {industry} industry."""
         
         samples_text = '\n\n'.join(tier_descriptions)
         
-        prompt = f"""Analyze these product samples from different price tiers to identify naming patterns and tier indicators. The tiers are based on sophisticated statistical analysis of the entire product catalog.
+        # Default prompt template
+        default_prompt = """Analyze these product samples from different price tiers to identify naming patterns and tier indicators. The tiers are based on sophisticated statistical analysis of the entire product catalog.
 
-{statistical_context}
+{{statistical_context}}
 
 ## Product Samples by Tier
 
-{samples_text}
+{{samples_text}}
 
 ## Analysis Instructions
 
@@ -953,28 +1270,50 @@ Please identify:
 ## Response Format
 
 Respond with a JSON object in this format:
-{{
+{
     "premium_indicators": ["term1", "term2", ...],
     "mid_tier_indicators": ["term1", "term2", ...],
     "budget_indicators": ["term1", "term2", ...],
     "naming_hierarchy": "Description of any clear hierarchy in naming",
     "insights": "Key observations about the naming patterns and their correlation with statistical price tiers",
     "statistical_alignment": "How well the naming patterns align with the statistical tier boundaries"
-}}
+}
 
-Focus on extracting actual terms used in product names that correlate with the statistically-determined price tiers."""
+Focus on extracting actual terms used in product names that correlate with the statistically-determined price tiers.
+
+Final line: {{sentinel}}"""
+
+        # Build versioned prompt using Langfuse
+        template_vars = {
+            "statistical_context": statistical_context,
+            "samples_text": samples_text,
+            "sentinel": SENTINEL
+        }
+        
+        prompt = await self._build_versioned_prompt(
+            prompt_key="liddy/terminology/product_patterns_analyzer",
+            default_prompt=default_prompt,
+            template_vars=template_vars
+        )
 
         try:
-            response = await LLMFactory.chat_completion(
+            # Use retry logic for both LLM call and JSON parsing
+            fallback_result = {
+                'premium_indicators': [],
+                'mid_tier_indicators': [],
+                'budget_indicators': [],
+                'insights': 'Failed to extract price terminology due to parsing errors'
+            }
+            
+            result = await self._llm_call_with_json_retry(
                 messages=[
                     {"role": "user", "content": prompt}
                 ],
                 model="openai/o3",
-                temperature=0.3,
+                initial_temperature=0.3,
                 response_format={"type": "json_object"},
+                fallback_result=fallback_result
             )
-            
-            result = json.loads(response.get('content'))
             
             # Clean and structure the result
             tier_indicators = {
@@ -1505,7 +1844,8 @@ Generated: {datetime.now().isoformat()}
             for snippet in research_snippets
         ])
         
-        prompt = f"""You are analyzing existing brand research to identify product tier terminology and model names.
+        # Default prompt template
+        default_prompt = """You are analyzing existing brand research to identify product tier terminology and model names.
 
 Please extract specific terms, model names, or series names that indicate different price/quality tiers from the research excerpts below.
 
@@ -1515,29 +1855,50 @@ Focus on:
 3. Any patterns in how products are categorized by price/quality
 
 Research Excerpts:
-{research_content}
+{{research_content}}
 
 Please respond with a JSON object in this exact format:
-{{
+{
     "premium_terms": ["term1", "term2", ...],
     "mid_tier_terms": ["term1", "term2", ...], 
     "budget_terms": ["term1", "term2", ...],
     "patterns_found": "Brief description of naming patterns you identified"
-}}
+}
 
-Extract only actual product/model names and tier indicators, not generic descriptive words."""
+Extract only actual product/model names and tier indicators, not generic descriptive words.
+
+Final line: {{sentinel}}"""
+
+        # Build versioned prompt using Langfuse
+        template_vars = {
+            "research_content": research_content,
+            "sentinel": SENTINEL
+        }
+        
+        prompt = await self._build_versioned_prompt(
+            prompt_key="liddy/terminology/research_extractor",
+            default_prompt=default_prompt,
+            template_vars=template_vars
+        )
 
         try:
-            response = await LLMFactory.chat_completion(
+            # Use retry logic for both LLM call and JSON parsing
+            fallback_result = {
+                'premium_terms': [],
+                'mid_tier_terms': [],
+                'budget_terms': [],
+                'insights': 'Failed to extract terms from research due to parsing errors'
+            }
+            
+            result = await self._llm_call_with_json_retry(
                 messages=[
                     {"role": "user", "content": prompt}
                 ],
                 model="openai/o3",
-                temperature=0.3,
-                response_format={"type": "json_object"}
+                initial_temperature=0.3,
+                response_format={"type": "json_object"},
+                fallback_result=fallback_result
             )
-            
-            result = json.loads(response.get('content'))
             
             # Clean and validate terms
             cleaned_result = {
@@ -1580,11 +1941,12 @@ Extract only actual product/model names and tier indicators, not generic descrip
         guardrails = RELEVANCE_GUARDRAILS.replace("{{industry}}", industry)
         selection_criteria = TERMINOLOGY_SELECTION_CRITERIA.replace("{{industry}}", industry)
         
-        prompt = f"""You are analyzing search results about {brand} in the {industry} industry to identify price tier terminology.
+        # Default prompt template with quality improvements
+        default_prompt = """You are analyzing search results about {{brand}} in the {{industry}} industry to identify price tier terminology.
 
-{guardrails}
+{{guardrails}}
 
-{selection_criteria}
+{{selection_criteria}}
 
 Please extract terms that indicate different price/quality tiers, and provide a brief definition for each term.
 
@@ -1593,22 +1955,26 @@ Focus on:
 2. Terms that indicate mid-range products
 3. Terms that indicate budget/entry-level products
 
-For each term, provide its meaning in the context of {industry} products.
+For each term, provide its meaning in the context of {{industry}} products.
 
 IMPORTANT FILTERING RULES:
 - EXCLUDE any terms related to crashes, accidents, injuries, or death
 - EXCLUDE profanity, offensive language, or derogatory terms
 - EXCLUDE terms that could be considered inappropriate or unprofessional
+- EXCLUDE vague intensifiers like "ultimate", "best", "amazing", "super" unless they are part of official product model names
+- EXCLUDE generic quality descriptors like "good", "great", "nice", "excellent" unless brand-specific
+- EXCLUDE color descriptors (black, white, red, etc.) unless part of a tier name
+- EXCLUDE size descriptors (small, large, etc.) unless indicating product tier
 - ONLY include terms that are appropriate for a professional product catalog
 - Focus on terms that relate to products, features, performance, or technical aspects
+- ALL TERMS MUST BE LOWERCASE (except acronyms like "SL" or "S-Works")
 
 Search Results to Analyze (pay special attention to the Tavily AI-generated answers):
 
-{answers_content}
-{search_content}
+{{search_data}}
 
 Please respond with a JSON object in this exact format:
-{{
+{
     "premium_terms": [
         ["term1", "definition of what this means for premium products"],
         ["term2", "definition2"],
@@ -1625,45 +1991,55 @@ Please respond with a JSON object in this exact format:
         ...
     ],
     "insights": "Brief summary of pricing tier patterns found"
-}}
+}
 
 Each definition should be concise (under 100 characters) and explain what the term means in the context of product pricing/quality.
 
+QUANTITY REQUIREMENTS:
+- Aim for 30 terms per tier (premium, mid, budget)
+- Include only the most relevant and specific terms
+- Quality over quantity - better to have 20 excellent terms than 30 mediocre ones
+
 For each term, include:
 - "catalog_occurrences": number of times it appears in the catalog (minimum 3 to include)
-- "citations": list of sources where the term was found (need at least 2 {industry} sources)
+- "citations": list of sources where the term was found (need at least 2 {{industry}} sources)
 
-Final line: {SENTINEL}"""
+Final line: {{sentinel}}"""
+
+        # Build versioned prompt using Langfuse
+        template_vars = {
+            "brand": brand,
+            "industry": industry,
+            "guardrails": guardrails,
+            "selection_criteria": selection_criteria,
+            "search_data": f"{answers_content}{search_content}",
+            "sentinel": SENTINEL
+        }
+        
+        prompt = await self._build_versioned_prompt(
+            prompt_key="liddy/terminology/terminology_extractor",
+            default_prompt=default_prompt,
+            template_vars=template_vars
+        )
 
         try:
-            # Retry logic for sentinel
-            max_attempts = 3
-            temperature = 0.3
+            # Use retry logic for both LLM call and JSON parsing
+            fallback_result = {
+                'premium_terms': [],
+                'mid_tier_terms': [],
+                'budget_terms': [],
+                'insights': 'Failed to extract terminology due to parsing errors'
+            }
             
-            for attempt in range(max_attempts):
-                response = await LLMFactory.chat_completion(
-                    messages=[
-                        {"role": "user", "content": prompt}
-                    ],
-                    model="openai/o3",
-                    temperature=temperature,
-                    response_format={"type": "json_object"}
-                )
-                
-                content = response.get('content', '')
-                if SENTINEL in content:
-                    # Remove sentinel before parsing JSON
-                    content = content.replace(SENTINEL, '').strip()
-                    response['content'] = content
-                    break
-                else:
-                    logger.warning(f"Terminology extraction attempt {attempt + 1}: Missing sentinel, retrying...")
-                    temperature = min(temperature + 0.1, 0.7)
-                    
-                    if attempt == max_attempts - 1:
-                        logger.error("Failed to get response with sentinel")
-            
-            result = json.loads(response.get('content'))
+            result = await self._llm_call_with_json_retry(
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                model="openai/o3",
+                initial_temperature=0.3,
+                response_format={"type": "json_object"},
+                fallback_result=fallback_result
+            )
             
             # Clean and validate the extracted terms with definitions
             cleaned_result = {
@@ -1907,11 +2283,11 @@ Final line: {SENTINEL}"""
         try:
             # Search for industry-specific terminology
             queries = [
-                f"{industry} product categories types classification",
-                f"{industry} materials construction components",
-                f"{industry} features technology specifications",
-                f"{industry} user levels beginner professional expert",
-                f"{industry} product styles designs types"
+                f"{self.brand_domain} {industry} product categories types classification",
+                f"{self.brand_domain} {industry} materials construction components",
+                f"{self.brand_domain} {industry} features technology specifications",
+                f"{self.brand_domain} {industry} user levels beginner professional expert",
+                f"{self.brand_domain} {industry} product styles designs types"
             ]
             
             all_results = []
@@ -1970,35 +2346,82 @@ Final line: {SENTINEL}"""
                 "performance_traits": []
             }
         
-        prompt = f"""
-        Analyze the following text about the {industry} industry and extract categorization patterns.
+        # Default prompt template
+        default_prompt = """Analyze the following text about the {{industry}} industry and extract categorization patterns.
         
-        Extract terms that would help categorize products in these areas:
-        1. Use cases (how products are used, activities, applications)
-        2. Materials (what products are made from, construction)
-        3. Key features (product features, technologies, capabilities)
-        4. Style types (design styles, aesthetics, appearances)
-        5. Target users (user levels, expertise, demographics)
-        6. Performance traits (quality indicators, performance characteristics)
+Extract terms that would help categorize products in these areas:
+1. Use cases (how products are used, activities, applications)
+2. Materials (what products are made from, construction)
+3. Key features (product features, technologies, capabilities)
+4. Style types (design styles, aesthetics, appearances)
+5. Target users (user levels, expertise, demographics)
+6. Performance traits (quality indicators, performance characteristics)
+
+Text: {{text}}
+
+Return a JSON object with these categories as keys and lists of relevant terms as values.
+Focus on industry-specific terms that would be useful for product categorization.
+
+Final line: {{sentinel}}"""
+
+        # Build versioned prompt using Langfuse
+        template_vars = {
+            "industry": industry,
+            "text": combined_text[:2000],
+            "sentinel": SENTINEL
+        }
         
-        Text: {combined_text[:2000]}
-        
-        Return a JSON object with these categories as keys and lists of relevant terms as values.
-        Focus on industry-specific terms that would be useful for product categorization.
-        """
+        prompt = await self._build_versioned_prompt(
+            prompt_key="liddy/terminology/categorization_patterns_extractor",
+            default_prompt=default_prompt,
+            template_vars=template_vars
+        )
         
         try:
-            response = await LLMFactory.chat_completion(
-                task="extract_categorization_patterns",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1
-            )
+            # Use retry logic for both LLM call and JSON parsing
+            fallback_result = {
+                "use_cases": [],
+                "materials": [],
+                "key_features": [],
+                "style_type": [],
+                "target_user": [],
+                "performance_traits": []
+            }
             
-            content = response.get('content', '{}')
+            max_attempts = 3
+            temperature = 0.1
             
-            # Try to parse JSON
-            try:
-                result = json.loads(content)
+            for attempt in range(max_attempts):
+                try:
+                    response = await self._llm_call_with_sentinel(
+                        messages=[{"role": "user", "content": prompt}],
+                        model="openai/o3",
+                        initial_temperature=temperature
+                    )
+                    
+                    content = response.get('content', '{}')
+                    
+                    # Try to parse JSON
+                    result = json.loads(content)
+                    logger.info(f"Successfully parsed categorization JSON on attempt {attempt + 1}")
+                    break
+                    
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Categorization JSON parsing failed on attempt {attempt + 1}: {e}")
+                    if attempt < max_attempts - 1:
+                        temperature = min(temperature + 0.1, 0.5)
+                        logger.info(f"Retrying categorization with higher temperature: {temperature}")
+                    else:
+                        logger.error(f"Failed to parse categorization JSON after {max_attempts} attempts")
+                        result = fallback_result
+                        
+                except Exception as e:
+                    logger.warning(f"Categorization LLM call failed on attempt {attempt + 1}: {e}")
+                    if attempt < max_attempts - 1:
+                        temperature = min(temperature + 0.1, 0.5)
+                    else:
+                        logger.error(f"Categorization LLM call failed after {max_attempts} attempts")
+                        result = fallback_result
                 
                 # Validate and clean result
                 cleaned_result = {
@@ -2017,17 +2440,6 @@ Final line: {SENTINEL}"""
                         cleaned_result[category] = [term for term in terms if len(term) > 1 and len(term) < 30]
                 
                 return cleaned_result
-                
-            except json.JSONDecodeError:
-                logger.warning("Failed to parse LLM categorization response as JSON")
-                return {
-                    "use_cases": [],
-                    "materials": [],
-                    "key_features": [],
-                    "style_type": [],
-                    "target_user": [],
-                    "performance_traits": []
-                }
                 
         except Exception as e:
             logger.error(f"LLM categorization extraction failed: {e}")
@@ -2049,3 +2461,440 @@ Final line: {SENTINEL}"""
             "Clarity of tier classifications",
             "Actionability of recommendations for implementation"
         ]
+    
+    # ========== Quality Pipeline Methods ==========
+    
+    def _normalize_term(self, term: str) -> str:
+        """
+        Normalize a term for consistent comparison.
+        
+        - Lowercase
+        - Strip whitespace
+        - ASCII-fold (remove accents)
+        - Remove special characters except hyphens
+        """
+        # ASCII fold to remove accents
+        normalized = unicodedata.normalize('NFKD', term.lower().strip())
+        normalized = ''.join(c for c in normalized if not unicodedata.combining(c))
+        
+        # Keep only alphanumeric and hyphens
+        normalized = re.sub(r'[^a-z0-9\-]', '', normalized)
+        
+        return normalized
+    
+    def _proof_of_use(self, term: str, product_hits: int, web_hits: int, tier: str) -> bool:
+        """
+        Tier-aware proof-of-use validation.
+        
+        Different tiers have different thresholds:
+        - Premium: Needs stronger web presence (1 product OR 3 web)
+        - Mid: Balanced requirements (2 products OR 2 web)  
+        - Budget: Needs product evidence (3 products OR 1 web)
+        """
+        if tier == "premium":
+            return product_hits >= 1 or web_hits >= 3
+        elif tier == "mid":
+            return product_hits >= 2 or web_hits >= 2
+        else:  # budget
+            return product_hits >= 3 or web_hits >= 1
+    
+    def _get_product_coverage(self, term: str, products: List[Product]) -> int:
+        """
+        Calculate how many products contain this term in their name or description.
+        
+        Args:
+            term: Normalized term to search for
+            products: List of Product objects
+            
+        Returns:
+            Number of products containing the term
+        """
+        count = 0
+        term_lower = term.lower()
+        
+        for product in products:
+            # Check product name
+            product_name = self._get_product_attribute(product, 'name', '')
+            if product_name and term_lower in product_name.lower():
+                count += 1
+                continue
+            
+            # Check product description
+            product_desc = self._get_product_attribute(product, 'description', '')
+            if product_desc and term_lower in product_desc.lower():
+                count += 1
+                continue
+            
+            # Check model field if available
+            product_model = self._get_product_attribute(product, 'model', '')
+            if product_model and term_lower in product_model.lower():
+                count += 1
+        
+        return count
+    
+    def _determine_tier_from_context(self, term: str, source_sentence: str, products: List[Product]) -> str:
+        """
+        Determine which tier a term belongs to based on context clues.
+        
+        Args:
+            term: The term to classify
+            source_sentence: The sentence where the term was found
+            products: List of products for price analysis
+            
+        Returns:
+            'premium', 'mid', or 'budget'
+        """
+        # Check for explicit tier indicators in the source sentence
+        sentence_lower = source_sentence.lower()
+        
+        premium_indicators = {'premium', 'professional', 'high-end', 'flagship', 'top', 'elite', 'pro'}
+        budget_indicators = {'budget', 'entry', 'basic', 'starter', 'beginner', 'base', 'value'}
+        mid_indicators = {'mid', 'middle', 'intermediate', 'standard', 'regular'}
+        
+        # Check sentence for tier indicators
+        for indicator in premium_indicators:
+            if indicator in sentence_lower:
+                return 'premium'
+        
+        for indicator in budget_indicators:
+            if indicator in sentence_lower:
+                return 'budget'
+        
+        for indicator in mid_indicators:
+            if indicator in sentence_lower:
+                return 'mid'
+        
+        # If no explicit indicators, check product prices containing this term
+        term_products = []
+        for product in products:
+            product_name = self._get_product_attribute(product, 'name', '')
+            if product_name and term.lower() in product_name.lower():
+                term_products.append(product)
+        
+        if term_products:
+            # Get price statistics for products with this term
+            prices = []
+            for product in term_products:
+                price_str = self._get_product_attribute(product, 'salePrice', None)
+                if not price_str:
+                    price_str = self._get_product_attribute(product, 'originalPrice', None)
+                if price_str:
+                    try:
+                        price = float(price_str.replace('$', '').replace(',', ''))
+                        if price > 0:
+                            prices.append(price)
+                    except:
+                        pass
+            
+            if prices:
+                avg_price = sum(prices) / len(prices)
+                # Compare to overall catalog statistics
+                # This is a simplified heuristic - ideally use PriceStatisticsAnalyzer
+                if avg_price > 1000:  # High price threshold
+                    return 'premium'
+                elif avg_price < 300:  # Low price threshold
+                    return 'budget'
+        
+        # Default to mid if uncertain
+        return 'mid'
+    
+    def _calculate_confidence(self, term: str, web_hits: int, product_coverage: int, 
+                            has_answer_provenance: bool, domain_quality: float) -> float:
+        """
+        Calculate multi-factor confidence score for a term.
+        
+        Args:
+            term: The term being scored
+            web_hits: Number of search results containing the term
+            product_coverage: Number of products containing the term
+            has_answer_provenance: Whether term was found in Tavily answer
+            domain_quality: Average domain quality score (0-1)
+            
+        Returns:
+            Confidence score between 0.0 and 1.0
+        """
+        # Base confidence from web presence
+        web_confidence = min(web_hits / 10.0, 0.4)  # Max 0.4 from web
+        
+        # Product coverage confidence
+        product_confidence = min(product_coverage / 5.0, 0.3)  # Max 0.3 from products
+        
+        # Domain quality bonus
+        domain_bonus = domain_quality * 0.2  # Max 0.2 from domain quality
+        
+        # Answer provenance bonus
+        answer_bonus = 0.05 if has_answer_provenance else 0.0
+        
+        # Domain validation bonus (if term appears in brand domain)
+        domain_bonus_extra = 0.02 if self.brand_domain and term.lower() in self.brand_domain.lower() else 0.0
+        
+        # Calculate total confidence
+        confidence = web_confidence + product_confidence + domain_bonus + answer_bonus + domain_bonus_extra
+        
+        # Ensure it's between 0 and 1
+        return min(max(confidence, 0.0), 1.0)
+    
+    def _dedupe_tiers_with_context(self, tiers: Dict[str, List[Tuple[str, float]]], 
+                                   products: List[Product]) -> Dict[str, List[Tuple[str, float]]]:
+        """
+        Smart tier exclusivity using median product prices.
+        
+        If a term appears in multiple tiers, assign it to the tier that best
+        matches the median price of products containing that term.
+        
+        Args:
+            tiers: Dict of tier -> [(term, confidence)] lists
+            products: List of Product objects for price analysis
+            
+        Returns:
+            Deduped tiers with exclusive terms
+        """
+        # Build a map of term -> tiers it appears in
+        term_to_tiers = {}
+        for tier, terms in tiers.items():
+            for term, conf in terms:
+                if term not in term_to_tiers:
+                    term_to_tiers[term] = []
+                term_to_tiers[term].append((tier, conf))
+        
+        # Identify conflicting terms (appearing in multiple tiers)
+        conflicts = {term: tier_list for term, tier_list in term_to_tiers.items() if len(tier_list) > 1}
+        
+        if not conflicts:
+            return tiers  # No conflicts to resolve
+        
+        logger.info(f"Resolving {len(conflicts)} tier conflicts using price analysis")
+        
+        # Use PriceStatisticsAnalyzer to get tier thresholds
+        from liddy_intelligence.catalog.price_statistics_analyzer import PriceStatisticsAnalyzer
+        price_stats = PriceStatisticsAnalyzer.analyze_catalog_pricing(products)
+        overall_stats = price_stats.get('overall', {})
+        
+        # Get tier thresholds
+        budget_threshold = overall_stats.get('budget_threshold', 300)
+        mid_high_threshold = overall_stats.get('mid_high_threshold', 1000)
+        
+        # Resolve each conflict
+        resolved_assignments = {}
+        for term, tier_list in conflicts.items():
+            # Get products containing this term
+            term_products = []
+            for product in products:
+                product_name = self._get_product_attribute(product, 'name', '')
+                if product_name and term.lower() in product_name.lower():
+                    term_products.append(product)
+            
+            if not term_products:
+                # No products found, keep highest confidence tier
+                best_tier = max(tier_list, key=lambda x: x[1])[0]
+                resolved_assignments[term] = best_tier
+                continue
+            
+            # Calculate median price for products with this term
+            prices = []
+            for product in term_products:
+                # Handle variant products
+                if hasattr(product, 'variants') and product.variants:
+                    for variant in product.variants:
+                        price_str = variant.price if variant.price else variant.originalPrice
+                        if price_str:
+                            try:
+                                price = float(price_str.replace('$', '').replace(',', ''))
+                                if price > 0:
+                                    prices.append(price)
+                            except:
+                                pass
+                else:
+                    # Legacy product structure
+                    price_str = self._get_product_attribute(product, 'salePrice', None)
+                    if not price_str:
+                        price_str = self._get_product_attribute(product, 'originalPrice', None)
+                    if price_str:
+                        try:
+                            price = float(price_str.replace('$', '').replace(',', ''))
+                            if price > 0:
+                                prices.append(price)
+                        except:
+                            pass
+            
+            if prices:
+                median_price = sorted(prices)[len(prices) // 2]
+                
+                # Assign based on median price
+                if median_price >= mid_high_threshold:
+                    resolved_assignments[term] = 'premium'
+                elif median_price <= budget_threshold:
+                    resolved_assignments[term] = 'budget'
+                else:
+                    resolved_assignments[term] = 'mid'
+            else:
+                # No valid prices, use highest confidence
+                best_tier = max(tier_list, key=lambda x: x[1])[0]
+                resolved_assignments[term] = best_tier
+        
+        # Build new exclusive tiers
+        exclusive_tiers = {'premium': [], 'mid': [], 'budget': []}
+        
+        # Add non-conflicting terms first
+        for tier, terms in tiers.items():
+            for term, conf in terms:
+                if term not in conflicts:
+                    exclusive_tiers[tier].append((term, conf))
+        
+        # Add resolved conflicts
+        for term, assigned_tier in resolved_assignments.items():
+            # Get the confidence from the assigned tier
+            for tier, conf in term_to_tiers[term]:
+                if tier == assigned_tier:
+                    exclusive_tiers[assigned_tier].append((term, conf))
+                    break
+        
+        # Sort by confidence
+        for tier in exclusive_tiers:
+            exclusive_tiers[tier].sort(key=lambda x: x[1], reverse=True)
+        
+        return exclusive_tiers
+    
+    @lru_cache(maxsize=1000)
+    def _compute_term_embedding(self, term: str) -> np.ndarray:
+        """
+        Compute semantic embedding for a term (cached).
+        
+        This is a placeholder - in production, use a real embedding model
+        like OpenAI embeddings or sentence-transformers.
+        
+        Args:
+            term: The term to embed
+            
+        Returns:
+            Embedding vector
+        """
+        # Placeholder: simple character-based embedding
+        # In production, replace with:
+        # response = openai.Embedding.create(input=term, model="text-embedding-ada-002")
+        # return np.array(response['data'][0]['embedding'])
+        
+        # For now, create a simple hash-based vector
+        np.random.seed(hash(term) % 2**32)
+        return np.random.randn(512)
+    
+    def _embedding_sanity_check(self, terms: List[Tuple[str, float]], 
+                               reference_terms: List[str]) -> List[Tuple[str, float]]:
+        """
+        Sanity check terms using embedding similarity.
+        
+        Filters out terms that are semantically too distant from known good terms.
+        
+        Args:
+            terms: List of (term, confidence) tuples to check
+            reference_terms: Known good terms for this tier
+            
+        Returns:
+            Filtered list of terms that pass semantic check
+        """
+        if not reference_terms:
+            return terms  # No reference, return all
+        
+        # Compute reference embeddings
+        ref_embeddings = [self._compute_term_embedding(ref) for ref in reference_terms]
+        ref_centroid = np.mean(ref_embeddings, axis=0)
+        
+        # Check each term
+        filtered_terms = []
+        for term, conf in terms:
+            term_embedding = self._compute_term_embedding(term)
+            
+            # Compute cosine similarity to centroid
+            similarity = np.dot(term_embedding, ref_centroid) / (
+                np.linalg.norm(term_embedding) * np.linalg.norm(ref_centroid)
+            )
+            
+            # Keep terms with reasonable similarity (threshold: 0.3)
+            # In production, tune this threshold based on your embedding model
+            if similarity > 0.3:
+                filtered_terms.append((term, conf))
+            else:
+                logger.debug(f"Filtered out '{term}' due to low semantic similarity: {similarity:.3f}")
+        
+        return filtered_terms
+    
+    def _dump_terminology_csv(self, exclusive_tiers: Dict[str, List[Tuple[str, float]]]) -> None:
+        """
+        Dump terminology results to CSV for debugging.
+        
+        Creates a timestamped CSV file in tmp/terminology_debug/ with all terms
+        and their confidence scores organized by tier.
+        
+        Args:
+            exclusive_tiers: Dict with 'premium', 'mid', 'budget' keys containing term lists
+        """
+        try:
+            # Create debug directory using pathlib for cross-platform compatibility
+            debug_dir = Path("tmp") / "terminology_debug"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Generate timestamped filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            csv_filename = f"{self.brand_domain}_{timestamp}.csv"
+            csv_path = debug_dir / csv_filename
+            
+            # Write CSV with all terms and tiers
+            with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                
+                # Write header
+                writer.writerow(['tier', 'term', 'confidence', 'rank_in_tier'])
+                
+                # Write all terms organized by tier
+                for tier_name, terms in exclusive_tiers.items():
+                    for rank, (term, confidence) in enumerate(terms, 1):
+                        writer.writerow([tier_name, term, f"{confidence:.4f}", rank])
+            
+            logger.info(f"Debug CSV dumped to: {csv_path}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to dump terminology CSV: {e}")
+    
+    # ========== Public API Methods ==========
+    
+    async def run(self, *, write_markdown: bool = True) -> PriceTerminology:
+        """
+        Run the terminology research and return structured results.
+        
+        Args:
+            write_markdown: Whether to write traditional markdown report
+            
+        Returns:
+            PriceTerminology object with confidence-scored terms
+        """
+        # Run the existing research pipeline
+        await super().run()
+        
+        # The result should already be stored in self._result from _synthesize_results
+        if not self._result:
+            # Fallback - create empty result
+            self._result = PriceTerminology(
+                premium_terms=(),
+                mid_terms=(),
+                budget_terms=()
+            )
+        
+        return self._result
+    
+    def get_premium_terms(self) -> List[str]:
+        """Get premium tier terms without confidence scores."""
+        return [t for t, _ in self._result.premium_terms] if self._result else []
+    
+    def get_mid_terms(self) -> List[str]:
+        """Get mid-tier terms without confidence scores."""
+        return [t for t, _ in self._result.mid_terms] if self._result else []
+    
+    def get_budget_terms(self) -> List[str]:
+        """Get budget tier terms without confidence scores."""
+        return [t for t, _ in self._result.budget_terms] if self._result else []
+    
+    def get_all_price_terms(self) -> List[str]:
+        # Get all price terms across all tiers.
+        return self.get_premium_terms() + self.get_mid_terms() + self.get_budget_terms()
+
+

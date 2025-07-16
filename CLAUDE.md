@@ -216,3 +216,20 @@ These scripts provide intelligent workflow state management with "next step" rec
 3. **Runner Scripts**: Add runner scripts in `run/` for CLI access to package functionality
 4. **Testing**: Add tests in the appropriate `tests/` subdirectory
 5. **Documentation**: Update package README files when adding significant features
+
+## Quality-Copilot Rules
+
+6. **Respect Architectural Boundaries**
+   • No cross-bounded-context imports without an interface layer.
+
+7. **SOLID + SLAP**
+   • One class → one reason to change; cyclomatic complexity ≤ 10.
+
+8. **Docstring & Typing Discipline**
+   • Google-style docstrings on every public symbol; NEVER introduce bare "Any".
+
+9. **Logging & Errors**
+   • Structured logging only (extra={}); secrets masked; public APIs raise domain-specific exceptions.
+
+10. **Migration Etiquette**
+    • If a schema or file format changes, include a reversible migration *and* a downgrade test.
