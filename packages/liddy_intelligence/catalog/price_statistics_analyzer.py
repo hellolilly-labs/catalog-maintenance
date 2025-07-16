@@ -37,7 +37,7 @@ class PriceStatisticsAnalyzer:
             if hasattr(product, 'variants') and product.variants:
                 # Add all variant prices
                 for variant in product.variants:
-                    price_str = variant.price
+                    price_str = variant.price if variant.price else variant.originalPrice
                     if price_str:
                         try:
                             price = float(price_str.replace('$', '').replace(',', ''))

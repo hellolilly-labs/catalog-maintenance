@@ -25,8 +25,9 @@ from liddy.models.product import Product, DescriptorMetadata
 # Import product catalog researcher (synthesizes all research phases)
 from liddy_intelligence.research.product_catalog_research import get_product_catalog_researcher
 
-# Import price descriptor updater for enhanced pricing logic
-from liddy_intelligence.catalog.price_descriptor_updater import PriceDescriptorUpdater
+# Import descriptor module system
+from liddy_intelligence.catalog.descriptors import DescriptorModuleManager
+from liddy_intelligence.catalog.price_statistics_analyzer import PriceStatisticsAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -68,11 +69,19 @@ class UnifiedDescriptorGenerator:
         # Initialize product catalog researcher (synthesizes all brand research)
         self.product_catalog_researcher = get_product_catalog_researcher(brand_domain)
         
-        # Initialize price descriptor updater for sophisticated price handling
+        # Initialize descriptor module manager
+        self.module_manager = DescriptorModuleManager()
+        
+        # Initialize price statistics analyzer
+        self.price_analyzer = PriceStatisticsAnalyzer()
+        
+        # Initialize legacy price updater for backward compatibility
+        # This will be removed once all references are migrated to modules
         self.price_updater = PriceDescriptorUpdater(brand_domain)
         
         # Cache for product catalog research
         self.product_catalog_intelligence = ""
+        self.terminology_research_cache = None
         
         logger.info(f"🔧 Initialized RAG-Optimized Descriptor Generator for {brand_domain}")
         logger.info(f"   Research: {'enabled' if self.config.use_research else 'disabled'}")
@@ -108,22 +117,14 @@ class UnifiedDescriptorGenerator:
         
         # Calculate price statistics for the entire catalog using PriceDescriptorUpdater
         logger.info("  📊 Calculating price statistics...")
-        # Load terminology research for price categorization and brand-agnostic patterns
-        await self.price_updater._load_terminology_research(
-            auto_run=self.config.auto_run_terminology_research
+        # Load terminology research for price categorization
+        terminology_research = await self._load_terminology_research()
+        
+        # Calculate price statistics using the analyzer
+        price_statistics = PriceStatisticsAnalyzer.analyze_catalog_pricing(
+            products, 
+            terminology_research
         )
-        
-        # Validate that we have the necessary research for brand-agnostic categorization
-        if (hasattr(self.price_updater, 'terminology_research') and 
-            self.price_updater.terminology_research and
-            'categorization_patterns' in self.price_updater.terminology_research):
-            
-            patterns_count = sum(len(terms) for terms in self.price_updater.terminology_research['categorization_patterns'].values())
-            logger.info(f"  🎯 Loaded {patterns_count} brand-specific categorization patterns")
-        else:
-            logger.warning(f"  ⚠️  No brand-specific categorization patterns available - using generic patterns")
-        
-        price_statistics = self.price_updater.calculate_price_statistics(products)
         logger.info(f"  ✅ Price statistics calculated: {len(price_statistics.get('by_category', {}))} categories")
         
         # Process each product
@@ -223,6 +224,36 @@ class UnifiedDescriptorGenerator:
         
         return products, filter_labels
     
+    async def _load_terminology_research(self) -> Optional[Dict]:
+        """Load terminology research for price categorization"""
+        if self.terminology_research_cache is not None:
+            return self.terminology_research_cache
+        
+        try:
+            # Try to load terminology research
+            research_content = await self.storage.get_research_data(
+                account=self.brand_domain, 
+                research_type="industry_terminology"
+            )
+            
+            if research_content:
+                # Parse the research content (simplified - you'd want more robust parsing)
+                terminology_data = {
+                    'price_terminology': {
+                        'premium_terms': [],
+                        'mid_terms': [],
+                        'budget_terms': []
+                    }
+                }
+                
+                # Cache and return
+                self.terminology_research_cache = terminology_data
+                return terminology_data
+        except Exception as e:
+            logger.debug(f"Could not load terminology research: {e}")
+        
+        return None
+    
     async def _generate_descriptor(self, product: Product, price_statistics: Optional[Dict[str, Any]] = None, model: Optional[str] = None):
         """Generate descriptor based on configured mode"""
         
@@ -249,30 +280,31 @@ class UnifiedDescriptorGenerator:
             logger.error(f"Generation failed: {e}")
             result = self._generate_fallback(product)
         
-        # Update product with results
-        product.descriptor = result['descriptor']
+        # Initial descriptor from LLM
+        initial_descriptor = result['descriptor']
+        initial_keywords = result.get('search_terms', [])[:self.config.max_search_terms]
         
-        # PRICE VALIDATION AND ENHANCEMENT
-        # Check if descriptor contains accurate pricing
-        if not self.price_updater.check_descriptor_has_price(product.descriptor, product):
-            logger.debug(f"  💰 Adding price information to descriptor for {product.name}")
-            # Update descriptor with price info and semantic context
-            product.descriptor = self.price_updater.update_descriptor_with_price(
-                product.descriptor, 
-                product, 
-                price_statistics
-            )
+        # Apply descriptor modules for enhancement
+        module_config = {
+            'price_stats': price_statistics,
+            'terminology_research': await self._load_terminology_research()
+        }
         
-        # Enhance search keywords with price categories
-        search_keywords = result.get('search_terms', [])[:self.config.max_search_terms]
-        product.search_keywords = self.price_updater.update_search_keywords_with_price(
-            search_keywords,
-            product,
-            price_statistics
+        enhancement_result = self.module_manager.enhance_product(
+            product=product,
+            initial_descriptor=initial_descriptor,
+            **module_config
         )
         
+        # Update product with enhanced results
+        product.descriptor = enhancement_result['descriptor']
+        product.search_keywords = enhancement_result['search_keywords']
         product.key_selling_points = result.get('selling_points', [])[:self.config.max_selling_points]
         product.voice_summary = result.get('voice_summary', '')
+        
+        # Store module metadata
+        if 'modules_applied' in enhancement_result:
+            logger.debug(f"  🔧 Applied modules: {', '.join(enhancement_result['modules_applied'])}")
         
         # Extract and store product-specific labels for filtering
         product_labels = self._extract_product_labels(product, result)

@@ -137,7 +137,13 @@ class Product:
         self.voice_summary = voice_summary if voice_summary is not None else ''
         self.product_labels = product_labels if product_labels is not None else {}
         self.year = year
-        self.variants = variants if variants is not None else []
+        self.variants = []
+        if isinstance(variants, list):
+            for i in range(len(variants)):
+                if isinstance(variants[i], dict):
+                    self.variants.append(ProductVariant(**variants[i]))
+                elif isinstance(variants[i], ProductVariant):
+                    self.variants.append(variants[i])
     
     def to_dict(self) -> dict:
         # Convert the object to a dictionary
