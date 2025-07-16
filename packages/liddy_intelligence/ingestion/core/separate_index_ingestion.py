@@ -329,14 +329,24 @@ class SeparateIndexIngestion:
         """
         
         # Extract price for filtering
-        price_str = product.salePrice or product.originalPrice or getattr(product, 'price', None)
         extracted_price = 0.0
-        if price_str:
-            try:
-                # Remove $ and commas, convert to float
-                extracted_price = float(str(price_str).replace('$', '').replace(',', ''))
-            except (ValueError, TypeError):
-                extracted_price = 0.0
+        if hasattr(product, 'price_range') and product.variants:
+            # Use minimum price for filtering
+            min_price, _ = product.price_range()
+            extracted_price = min_price
+        else:
+            # Fallback for legacy products
+            price_str = product.sale_price if hasattr(product, 'sale_price') else product.salePrice
+            if not price_str:
+                price_str = product.original_price if hasattr(product, 'original_price') else product.originalPrice
+            if not price_str:
+                price_str = getattr(product, 'price', None)
+            if price_str:
+                try:
+                    # Remove $ and commas, convert to float
+                    extracted_price = float(str(price_str).replace('$', '').replace(',', ''))
+                except (ValueError, TypeError):
+                    extracted_price = 0.0
         
         # Get primary category for basic filtering
         primary_category = product.categories[0] if product.categories else 'general'
@@ -413,9 +423,21 @@ class SeparateIndexIngestion:
 
         try:
             # Only hash fields that affect what we store in Pinecone
-            price = product.salePrice or product.originalPrice or 0.0
-            if not price:
-                price = 0.0
+            if hasattr(product, 'price_range') and product.variants:
+                min_price, _ = product.price_range()
+                price = min_price
+            else:
+                # Fallback for legacy products
+                price_str = product.sale_price if hasattr(product, 'sale_price') else product.salePrice
+                if not price_str:
+                    price_str = product.original_price if hasattr(product, 'original_price') else product.originalPrice
+                if price_str:
+                    try:
+                        price = float(str(price_str).replace('$', '').replace(',', ''))
+                    except:
+                        price = 0.0
+                else:
+                    price = 0.0
             
             content = json.dumps({
                 'id': product.id,

@@ -245,17 +245,31 @@ class SparseEmbeddingGenerator:
                     weighted_tokens.append((token, 4.0))
         
         # Price range (weight: 3.0)
-        # Handle price as string (may have $ and commas)
-        price_str = product.salePrice or product.originalPrice
-        if price_str:
-            try:
-                # Remove $ and commas, convert to float
-                price = float(price_str.replace('$', '').replace(',', ''))
-                if price > 0:
-                    price_range = self._get_price_range(price)
-                    weighted_tokens.append((price_range, 3.0))
-            except (ValueError, AttributeError):
-                pass
+        # Handle variant-aware pricing
+        if hasattr(product, 'price_range') and product.variants:
+            min_price, max_price = product.price_range()
+            if min_price > 0:
+                # Add price ranges for both min and max if different
+                min_range = self._get_price_range(min_price)
+                weighted_tokens.append((min_range, 3.0))
+                if max_price != min_price:
+                    max_range = self._get_price_range(max_price)
+                    if max_range != min_range:
+                        weighted_tokens.append((max_range, 2.5))
+        else:
+            # Fallback for legacy products
+            price_str = product.sale_price if hasattr(product, 'sale_price') else product.salePrice
+            if not price_str:
+                price_str = product.original_price if hasattr(product, 'original_price') else product.originalPrice
+            if price_str:
+                try:
+                    # Remove $ and commas, convert to float
+                    price = float(price_str.replace('$', '').replace(',', ''))
+                    if price > 0:
+                        price_range = self._get_price_range(price)
+                        weighted_tokens.append((price_range, 3.0))
+                except (ValueError, AttributeError):
+                    pass
         
         # Search keywords (weight: 4.0)
         if product.search_keywords:

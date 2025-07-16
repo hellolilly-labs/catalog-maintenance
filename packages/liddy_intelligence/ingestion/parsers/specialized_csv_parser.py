@@ -40,10 +40,11 @@ class SpecializedCSVParser:
         'MPL_PRODUCT_ID': 'model_id',
         
         # Product info
-        'ITEM_DESCRIPTION': 'name',
-        'PRODUCT_TEXT': 'description',
-        'PRODUCT_URL': 'product_url',
-        'PRODUCT_CATEGORY': 'category',
+        'TITLE-DEFAULT': 'name',
+        'PRODUCT_TITLE-DEFAULT': 'product_title',
+        'DESCRIPTION-DEFAULT': 'description',
+        'LINK-DEFAULT': 'product_url',
+        'CATEGORY_STRUCTURE-DEFAULT': 'category',
         'MODEL_YEAR': 'year',
         
         # Variant attributes
@@ -59,17 +60,36 @@ class SpecializedCSVParser:
         
         # Inventory
         'AVAILABLE_QTY': 'inventory',
-        'IN_STOCK': 'in_stock',
+        'AVAILABILITY': 'in_stock',
         
         # Media
-        'PART_IMAGE_URL_VALUES': 'images',
+        'IMAGE_LINK': 'image_link',
+        'PLP_IMAGE': 'plp_image',
         'VIDEO_URL': 'video_url',
         
         # Additional data
-        'BARCODE_VALUES': 'gtin',
+        'GTIN': 'gtin',
+        'MPN': 'mpn',
         'DEFAULT_VARIANT_ID': 'default_variant_id',
         'PRODUCT_SPECIFICATION': 'specifications',
-        'BULLET_POINTS': 'highlights'
+        'web_bullets_en_all': 'highlights',
+        'FEATURES-DEFAULT': 'features',
+        
+        # Specifications
+        'FRAMEMATERIAL-DEFAULT': 'frame_material',
+        'WHEELSIZE-DEFAULT': 'wheel_size',
+        'SUSPENSION-DEFAULT': 'suspension',
+        'BRAKETYPE-DEFAULT': 'brake_type',
+        'SUSPENSION BRAND-DEFAULT': 'suspension_brand',
+        'MATERIAL-DEFAULT': 'material',
+        'TECHNOLOGY-DEFAULT': 'technology',
+        'REAR SUSPENSION TRAVEL-DEFAULT': 'rear_suspension_travel',
+        'DRIVETRAIN-DEFAULT': 'drivetrain',
+        'DRIVETRAIN BRAND-DEFAULT': 'drivetrain_brand',
+        'MOTOR TYPE-DEFAULT': 'motor_type',
+        'BATTERY SIZE-DEFAULT': 'battery_size',
+        'TORQUE-DEFAULT': 'torque',
+        'POWER-DEFAULT': 'power'
     }
     
     def __init__(self, brand_domain: str):
@@ -130,11 +150,15 @@ class SpecializedCSVParser:
         # Use model_id as the primary product grouping if available
         parent_id = model_id or product_id
         
+        # Check if this variant is the default
+        default_variant_id = mapped_data.get('default_variant_id', '').strip()
+        is_default = default_variant_id == variant_sku if default_variant_id else False
+        
         # Store variant data grouped by parent product
         self.variants_by_product[parent_id].append({
             'raw_data': mapped_data,
             'variant_sku': variant_sku,
-            'is_default': mapped_data.get('default_variant_id') == variant_sku
+            'is_default': is_default
         })
     
     def _build_products(self) -> List[Product]:
@@ -148,10 +172,14 @@ class SpecializedCSVParser:
             # Use first variant's data for product-level fields
             first_variant = variant_data_list[0]['raw_data']
             
+            # Get name from available fields (prefer product_title over name)
+            product_name = (first_variant.get('product_title') or 
+                          first_variant.get('name') or '').strip()
+            
             # Create base product
             product = Product(
                 id=parent_id,
-                name=self._clean_text(first_variant.get('name', '')),
+                name=self._clean_text(product_name),
                 brand='Specialized',  # Hardcoded for Specialized parser
                 productUrl=first_variant.get('product_url', ''),
                 categories=self._parse_categories(first_variant.get('category', '')),
@@ -160,11 +188,8 @@ class SpecializedCSVParser:
                 variants=[]
             )
             
-            # Process specifications (same for all variants)
-            if 'specifications' in first_variant:
-                product.specifications = self._parse_specifications(
-                    first_variant['specifications']
-                )
+            # Build specifications from individual fields
+            product.specifications = self._build_specifications(first_variant)
             
             # Process highlights
             if 'highlights' in first_variant:
@@ -173,14 +198,15 @@ class SpecializedCSVParser:
                 )
             
             # Build variants
-            for variant_info in variant_data_list:
+            for i, variant_info in enumerate(variant_data_list):
+                # Mark first variant as default if no explicit default is set
+                if not variant_info['is_default'] and i == 0:
+                    variant_info['is_default'] = True
+                    
                 variant = self._build_variant(variant_info, parent_id)
                 product.variants.append(variant)
             
-            # Set product-level price from variants
-            self._set_product_pricing(product)
-            
-            # Collect all variant images for product
+            # Collect all variant images for product  
             self._collect_product_images(product)
             
             products.append(product)
@@ -192,8 +218,18 @@ class SpecializedCSVParser:
         data = variant_info['raw_data']
         
         # Parse pricing
-        price = self._format_price(data.get('sale_price') or data.get('price', ''))
-        original_price = self._format_price(data.get('price', ''))
+        raw_price = data.get('price', '').strip()
+        raw_sale_price = data.get('sale_price', '').strip()
+        
+        # Always set original price from the regular price field
+        original_price = self._format_price(raw_price) if raw_price else None
+        
+        # If there's a sale price, use it as the current price
+        if raw_sale_price:
+            price = self._format_price(raw_sale_price)
+        else:
+            # No sale price, use regular price as current price
+            price = original_price
         
         # Parse inventory
         inventory_qty = None
@@ -204,23 +240,35 @@ class SpecializedCSVParser:
         except:
             pass
         
-        # Parse images (pipe-separated URLs)
-        image_urls = self._parse_pipe_separated(data.get('images', ''))
+        # Parse images from available fields
+        image_urls = []
+        if data.get('image_link'):
+            image_urls.append(data['image_link'])
+        if data.get('plp_image'):
+            image_urls.append(data['plp_image'])
         
-        # Parse GTIN/barcode (may be pipe-separated)
-        gtin_values = self._parse_pipe_separated(data.get('gtin', ''))
-        gtin = gtin_values[0] if gtin_values else None
+        # Remove duplicates while preserving order
+        unique_images = []
+        seen = set()
+        for url in image_urls:
+            if url and url not in seen:
+                unique_images.append(url)
+                seen.add(url)
+        
+        # Parse GTIN/barcode
+        gtin = data.get('gtin', '').strip() or None
         
         # Build variant
         variant = ProductVariant(
             id=variant_info['variant_sku'],
             productId=parent_id,
             price=price,
-            originalPrice=original_price if original_price != price else None,
+            originalPrice=original_price,
             inventoryQuantity=inventory_qty,
-            imageUrls=image_urls,
+            imageUrls=unique_images,
             gtin=gtin,
             isDefault=variant_info['is_default'],
+            url=data.get('product_url', ''),  # Use product URL for variant URL
             attributes={
                 'size': data.get('size', '').strip(),
                 'color': data.get('color', '').strip(),
@@ -237,24 +285,6 @@ class SpecializedCSVParser:
         
         return variant
     
-    def _set_product_pricing(self, product: Product):
-        """Set product-level pricing from variants"""
-        if not product.variants:
-            return
-        
-        # Get price range from variants
-        min_price, max_price = product.price_range()
-        
-        # Set product prices from default variant or first variant
-        default_variant = product.get_default_variant()
-        if default_variant:
-            product.originalPrice = default_variant.originalPrice or default_variant.price
-            product.salePrice = default_variant.price if default_variant.price != default_variant.originalPrice else None
-        elif product.variants:
-            # Use first variant
-            first = product.variants[0]
-            product.originalPrice = first.originalPrice or first.price
-            product.salePrice = first.price if first.price != first.originalPrice else None
     
     def _collect_product_images(self, product: Product):
         """Collect all unique images from variants"""
@@ -274,13 +304,44 @@ class SpecializedCSVParser:
         if not category_str:
             return []
         
-        # Handle different separators
-        if '>' in category_str:
-            return [c.strip() for c in category_str.split('>')]
-        elif '/' in category_str:
-            return [c.strip() for c in category_str.split('/')]
-        else:
-            return [category_str.strip()]
+        # The categories appear to be comma-separated tags rather than hierarchical
+        # Split by comma and clean up each category
+        categories = []
+        for cat in category_str.split(','):
+            cat = cat.strip()
+            if cat:
+                categories.append(cat)
+        
+        return categories
+    
+    def _build_specifications(self, data: Dict[str, str]) -> Dict[str, Any]:
+        """Build specifications dictionary from CSV data"""
+        specs = {}
+        
+        # Map specification fields
+        spec_mappings = {
+            'frame_material': 'Frame Material',
+            'wheel_size': 'Wheel Size',
+            'suspension': 'Suspension',
+            'brake_type': 'Brake Type',
+            'suspension_brand': 'Suspension Brand',
+            'material': 'Material',
+            'technology': 'Technology',
+            'rear_suspension_travel': 'Rear Suspension Travel',
+            'drivetrain': 'Drivetrain',
+            'drivetrain_brand': 'Drivetrain Brand',
+            'motor_type': 'Motor Type',
+            'battery_size': 'Battery Size',
+            'torque': 'Torque',
+            'power': 'Power'
+        }
+        
+        for field_name, display_name in spec_mappings.items():
+            value = data.get(field_name, '').strip()
+            if value:
+                specs[display_name] = value
+        
+        return specs
     
     def _parse_specifications(self, spec_str: str) -> Dict[str, Any]:
         """Parse specification string into dictionary"""

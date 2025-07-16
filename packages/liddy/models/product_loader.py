@@ -46,17 +46,8 @@ class ProductLoader:
         elif source == 'json':
             products = await self._load_from_json()
         else:
-            # Auto-detect: try CSV first (richer data), fallback to JSON
-            try:
-                csv_path = await self._get_csv_path()
-                if csv_path and Path(csv_path).exists():
-                    logger.info(f"📄 Found CSV source, loading variant-aware data")
-                    products = await self._load_from_csv()
-                else:
-                    raise FileNotFoundError("No CSV found")
-            except Exception as e:
-                logger.debug(f"CSV load failed ({e}), trying JSON")
-                products = await self._load_from_json()
+            # Auto-detect: Default to JSON (GCP bucket), only use CSV if explicitly requested
+            products = await self._load_from_json()
         
         # Ensure all products have proper variant structure
         products = self._ensure_variant_compatibility(products)
@@ -65,12 +56,13 @@ class ProductLoader:
         return products
     
     async def _load_from_json(self) -> List[Product]:
-        """Load products from traditional products.json"""
+        """Load products from products.json in GCP bucket"""
         try:
+            logger.info(f"📚 Loading products from GCP bucket for {self.account}")
             products_data = await self.storage_provider.get_product_catalog(account=self.account)
             
             if not products_data:
-                logger.warning(f"No products.json found for {self.account}")
+                logger.warning(f"No products.json found in GCP bucket for {self.account}")
                 return []
             
             # Convert to Product objects
@@ -82,10 +74,11 @@ class ProductLoader:
                 except Exception as e:
                     logger.error(f"Failed to parse product {product_dict.get('id')}: {e}")
             
+            logger.info(f"📦 Loaded {len(products)} products from GCP bucket")
             return products
             
         except Exception as e:
-            logger.error(f"Failed to load products.json: {e}")
+            logger.error(f"Failed to load products.json from GCP: {e}")
             return []
     
     async def _load_from_csv(self) -> List[Product]:
@@ -149,29 +142,32 @@ class ProductLoader:
         # Use product ID as variant ID (with suffix to distinguish)
         variant_id = f"{product.id}-default"
         
-        # Determine price
-        price = product.salePrice or product.originalPrice
+        # Determine price - access directly from attributes
+        price = product._salePrice or product._originalPrice if hasattr(product, '_salePrice') else product.salePrice or product.originalPrice
+        original_price = product._originalPrice if hasattr(product, '_originalPrice') else product.originalPrice
         
         # Collect attributes from product
         attributes = {}
         
         # Add sizes if available
-        if product.sizes:
-            attributes['size'] = product.sizes[0] if product.sizes else 'One Size'
+        product_sizes = product._sizes if hasattr(product, '_sizes') else product.sizes
+        if product_sizes:
+            attributes['size'] = product_sizes[0] if product_sizes else 'One Size'
         
         # Add color if available
-        if product.colors:
-            if isinstance(product.colors[0], dict):
-                attributes['color'] = product.colors[0].get('name', 'Default')
+        product_colors = product._colors if hasattr(product, '_colors') else product.colors
+        if product_colors:
+            if isinstance(product_colors[0], dict):
+                attributes['color'] = product_colors[0].get('name', 'Default')
             else:
-                attributes['color'] = str(product.colors[0])
+                attributes['color'] = str(product_colors[0])
         
         # Create variant
         variant = ProductVariant(
             id=variant_id,
             productId=product.id,
             price=price,
-            originalPrice=product.originalPrice,
+            originalPrice=original_price,
             inStock=bool(price),  # Assume in stock if has price
             url=product.productUrl,
             image=product.imageUrls[0] if product.imageUrls else None,
@@ -240,11 +236,14 @@ class ProductLoader:
 # Convenience functions
 async def load_products(account: str, source: Optional[str] = None) -> List[Product]:
     """
-    Load products for an account from the best available source.
+    Load products for an account.
     
     Args:
         account: Account/brand domain
-        source: Optional source preference ('json', 'csv', or None for auto)
+        source: Optional source preference:
+            - 'json': Load from GCP bucket (default)
+            - 'csv': Load from local CSV file
+            - None: Load from GCP bucket (default behavior)
         
     Returns:
         List of Product objects with variants
