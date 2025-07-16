@@ -691,16 +691,36 @@ Include only terms that are specific to the {industry} industry."""
             # Get price using variant-aware logic
             price = 0
             
-            # Try multiple ways to get price based on product type
-            if hasattr(product, 'price_range') and self._get_product_attribute(product, 'variants'):
-                try:
-                    min_price, max_price = product.price_range()
-                    price = (min_price + max_price) / 2 if min_price > 0 else 0
-                except:
-                    pass
+            # Extract prices from variants (where actual pricing lives)
+            variants = self._get_product_attribute(product, 'variants', [])
+            if variants:
+                variant_prices = []
+                for variant in variants:
+                    variant_price = 0
+                    
+                    # Try different price fields on variants
+                    for price_field in ['sale_price', 'salePrice', 'original_price', 'originalPrice', 'price']:
+                        price_str = self._get_product_attribute(variant, price_field)
+                        if price_str:
+                            try:
+                                if isinstance(price_str, (int, float)):
+                                    variant_price = float(price_str)
+                                else:
+                                    variant_price = float(str(price_str).replace('$', '').replace(',', ''))
+                                break
+                            except:
+                                continue
+                    
+                    if variant_price > 0:
+                        variant_prices.append(variant_price)
+                
+                # Use average price from variants if available
+                if variant_prices:
+                    price = sum(variant_prices) / len(variant_prices)
             
+            # Fallback: Try to get price from product level (legacy support)
             if price == 0:
-                # Try different price fields
+                # Try different price fields on the product itself
                 for price_field in ['sale_price', 'salePrice', 'original_price', 'originalPrice', 'price']:
                     price_str = self._get_product_attribute(product, price_field)
                     if price_str:
@@ -1572,7 +1592,7 @@ Each definition should be concise (under 100 characters) and explain what the te
         user_indicators = set()
         performance_indicators = set()
         
-        for product in products:  # Analyze first 50 products for patterns
+        for product in products:
             # Use the safe helper method for all attribute access
             product_name = self._get_product_attribute(product, 'name', '') or ""
             product_description = self._get_product_attribute(product, 'description', '') or ""
@@ -1713,7 +1733,7 @@ Each definition should be concise (under 100 characters) and explain what the te
             all_results = []
             for query in queries[:3]:  # Limit to 3 queries for efficiency
                 try:
-                    search_results = await self.web_searcher.search(query, num_results=5)
+                    search_results = await self.web_search.search(query, num_results=5)
                     if hasattr(search_results, 'results'):
                         all_results.extend(search_results.results)
                     elif isinstance(search_results, list):
