@@ -1572,29 +1572,23 @@ Each definition should be concise (under 100 characters) and explain what the te
         user_indicators = set()
         performance_indicators = set()
         
-        for product in products[:50]:  # Analyze first 50 products for patterns
-            # Handle both Product objects and dictionaries
-            if hasattr(product, 'to_dict'):
-                # Product object
-                product_dict = product.to_dict()
-                product_name = product.name or ""
-                product_description = product.description or ""
-                product_highlights = getattr(product, 'highlights', []) or []
-                product_categories = getattr(product, 'categories', []) or []
-            else:
-                # Already a dictionary
-                product_dict = product
-                product_name = product_dict.get('name', '') or ""
-                product_description = product_dict.get('description', '') or ""
-                product_highlights = product_dict.get('highlights', []) or []
-                product_categories = product_dict.get('categories', []) or []
+        for product in products:  # Analyze first 50 products for patterns
+            # Use the safe helper method for all attribute access
+            product_name = self._get_product_attribute(product, 'name', '') or ""
+            product_description = self._get_product_attribute(product, 'description', '') or ""
+            product_highlights = self._get_product_attribute(product, 'highlights', []) or []
+            product_categories = self._get_product_attribute(product, 'categories', []) or []
+            
+            # Get additional fields safely using the helper method
+            long_description = self._get_product_attribute(product, 'long_description', '')
+            title = self._get_product_attribute(product, 'title', '')
             
             # Extract from product names and descriptions
             text_fields = [
                 product_name,
                 product_description,
-                str(product_dict.get('long_description', '')),
-                str(product_dict.get('title', ''))
+                str(long_description),
+                str(title)
             ]
             
             # Extract from highlights/features
