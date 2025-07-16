@@ -17,12 +17,11 @@ import json
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import re
-import numpy as np
-from collections import defaultdict
 
 from liddy_intelligence.research.base_researcher import BaseResearcher
 from liddy.models.product import Product
 from liddy_intelligence.progress_tracker import StepType
+from liddy_intelligence.catalog.price_statistics_analyzer import PriceStatisticsAnalyzer
 # SearchResult import removed - now using SearchResponse
 from liddy.llm import LLMFactory
 
@@ -680,12 +679,10 @@ Include only terms that are specific to the {industry} industry."""
             return {'specifications': [], 'features': [], 'technologies': []}
     
     async def _analyze_product_tiers(self, products: List[Product]) -> Dict[str, Any]:
-        """Analyze product names and prices to identify tier patterns using sophisticated statistical analysis"""
+        """Analyze product names and prices to identify tier patterns using PriceStatisticsAnalyzer"""
         
-        # Extract product names and prices with category information
+        # Extract product names and prices for LLM analysis
         product_data = []
-        prices_by_category = defaultdict(list)
-        all_prices = []
         
         for product in products:
             # Safely get product attributes
@@ -693,7 +690,7 @@ Include only terms that are specific to the {industry} industry."""
             if not product_name:
                 continue
                 
-            # Get price using variant-aware logic
+            # Get price using variant-aware logic (same as before for consistency)
             price = 0
             
             # Extract prices from variants (where actual pricing lives)
@@ -740,192 +737,29 @@ Include only terms that are specific to the {industry} industry."""
             
             if price > 0:
                 categories = self._get_product_attribute(product, 'categories', [])
-                primary_category = categories[0] if categories else "general"
-                
                 product_data.append({
                     'name': product_name,
                     'price': price,
-                    'categories': categories[:2] if categories else [],
-                    'primary_category': primary_category
+                    'categories': categories[:2] if categories else []
                 })
-                
-                # Collect data for statistical analysis
-                all_prices.append(price)
-                prices_by_category[primary_category].append(price)
         
         if not product_data:
             return {}
         
-        # Perform sophisticated statistical analysis
-        price_analysis = self._analyze_pricing_statistics(all_prices, prices_by_category)
+        # Use PriceStatisticsAnalyzer for sophisticated statistical analysis
+        price_analysis = PriceStatisticsAnalyzer.analyze_catalog_pricing(products)
         
-        # Categorize products using sophisticated tier boundaries
-        tier_samples = self._categorize_products_by_sophisticated_tiers(product_data, price_analysis)
+        # Categorize products using the statistical analysis results
+        tier_samples = self._categorize_products_by_tiers(product_data, price_analysis)
         
         # Use LLM to analyze naming patterns with enhanced data
         llm_analysis = await self._llm_analyze_product_patterns(tier_samples, price_analysis)
         
         return llm_analysis
     
-    def _analyze_pricing_statistics(self, all_prices: List[float], prices_by_category: Dict[str, List[float]]) -> Dict[str, Any]:
+    def _categorize_products_by_tiers(self, product_data: List[Dict], price_analysis: Dict[str, Any]) -> Dict[str, List[Dict]]:
         """
-        Perform sophisticated statistical analysis of pricing data using the same approach as PriceStatisticsAnalyzer
-        """
-        if not all_prices:
-            return {}
-        
-        # Calculate overall statistics with percentiles
-        overall_stats = self._calculate_statistics(all_prices)
-        
-        # Detect if we have a multi-modal distribution
-        multi_modal = self._detect_multimodal_distribution(all_prices)
-        
-        # Calculate category-specific statistics
-        category_stats = {}
-        for category, prices in prices_by_category.items():
-            if len(prices) >= 5:  # Need enough data points
-                category_stats[category] = self._calculate_statistics(prices)
-        
-        # Determine pricing strategy
-        if multi_modal:
-            # Use clustering to find natural price groups
-            price_clusters = self._cluster_prices(all_prices)
-            overall_stats['price_clusters'] = price_clusters
-            overall_stats['is_multimodal'] = True
-            
-            # Define tiers based on clusters
-            if len(price_clusters) >= 3:
-                overall_stats['budget_threshold'] = price_clusters[0]['max']
-                overall_stats['mid_low_threshold'] = price_clusters[1]['max'] if len(price_clusters) > 1 else price_clusters[0]['max'] * 2
-                overall_stats['mid_high_threshold'] = price_clusters[2]['max'] if len(price_clusters) > 2 else price_clusters[1]['max'] * 2
-                overall_stats['premium_threshold'] = price_clusters[-1]['min']
-        else:
-            # Use standard percentile approach but check if it makes sense
-            overall_stats['is_multimodal'] = False
-            
-            # Check if the distribution is too skewed
-            if overall_stats['std'] > overall_stats['mean']:
-                # High variance - use log scale percentiles
-                log_prices = np.log10(all_prices)
-                log_percentiles = {
-                    'p25': np.percentile(log_prices, 25),
-                    'p50': np.percentile(log_prices, 50),
-                    'p75': np.percentile(log_prices, 75),
-                    'p95': np.percentile(log_prices, 95)
-                }
-                
-                overall_stats['budget_threshold'] = 10 ** log_percentiles['p25']
-                overall_stats['mid_low_threshold'] = 10 ** log_percentiles['p50']
-                overall_stats['mid_high_threshold'] = 10 ** log_percentiles['p75']
-                overall_stats['premium_threshold'] = 10 ** log_percentiles['p95']
-            else:
-                # Normal distribution - use regular percentiles
-                overall_stats['budget_threshold'] = overall_stats['p25']
-                overall_stats['mid_low_threshold'] = overall_stats['p50']
-                overall_stats['mid_high_threshold'] = overall_stats['p75']
-                overall_stats['premium_threshold'] = overall_stats['p95']
-        
-        return {
-            'overall': overall_stats,
-            'by_category': category_stats,
-            'distribution_type': 'multimodal' if multi_modal else 'unimodal'
-        }
-    
-    def _calculate_statistics(self, prices: List[float]) -> Dict[str, float]:
-        """Calculate comprehensive statistics for a price list including percentiles"""
-        prices_array = np.array(prices)
-        
-        return {
-            'min': float(np.min(prices_array)),
-            'max': float(np.max(prices_array)),
-            'mean': float(np.mean(prices_array)),
-            'std': float(np.std(prices_array)),
-            'p5': float(np.percentile(prices_array, 5)),
-            'p25': float(np.percentile(prices_array, 25)),
-            'p50': float(np.percentile(prices_array, 50)),
-            'p75': float(np.percentile(prices_array, 75)),
-            'p95': float(np.percentile(prices_array, 95)),
-            'count': len(prices)
-        }
-    
-    def _detect_multimodal_distribution(self, prices: List[float]) -> bool:
-        """
-        Detect if the price distribution has multiple distinct modes
-        (e.g., accessories at $20-100 and bikes at $1000-5000)
-        """
-        if len(prices) < 20:
-            return False
-        
-        # Use log scale to detect gaps
-        log_prices = np.log10([p for p in prices if p > 0])
-        
-        # Sort and find gaps
-        sorted_log_prices = np.sort(log_prices)
-        gaps = np.diff(sorted_log_prices)
-        
-        # If we have gaps > 0.5 in log scale (>3x price difference), it's likely multimodal
-        large_gaps = gaps > 0.5
-        
-        # Need at least one significant gap with data on both sides
-        if np.any(large_gaps):
-            gap_positions = np.where(large_gaps)[0]
-            for gap_pos in gap_positions:
-                # Check if we have meaningful data on both sides of the gap
-                if gap_pos > len(prices) * 0.1 and gap_pos < len(prices) * 0.9:
-                    return True
-        
-        return False
-    
-    def _cluster_prices(self, prices: List[float], max_clusters: int = 4) -> List[Dict[str, float]]:
-        """
-        Cluster prices into natural groups using gap detection
-        """
-        if len(prices) < 10:
-            return [{'min': min(prices), 'max': max(prices), 'mean': np.mean(prices), 'count': len(prices)}]
-        
-        # Sort prices
-        sorted_prices = np.sort(prices)
-        
-        # Find natural breaks using log scale gaps
-        log_prices = np.log10(sorted_prices)
-        gaps = np.diff(log_prices)
-        
-        # Find significant gaps (> 0.3 in log scale = 2x price difference)
-        significant_gaps = np.where(gaps > 0.3)[0]
-        
-        # Create clusters
-        clusters = []
-        start_idx = 0
-        
-        for gap_idx in significant_gaps[:max_clusters-1]:
-            end_idx = gap_idx + 1
-            cluster_prices = sorted_prices[start_idx:end_idx]
-            
-            if len(cluster_prices) > 0:
-                clusters.append({
-                    'min': float(np.min(cluster_prices)),
-                    'max': float(np.max(cluster_prices)),
-                    'mean': float(np.mean(cluster_prices)),
-                    'count': len(cluster_prices)
-                })
-            
-            start_idx = end_idx
-        
-        # Add final cluster
-        final_cluster = sorted_prices[start_idx:]
-        if len(final_cluster) > 0:
-            clusters.append({
-                'min': float(np.min(final_cluster)),
-                'max': float(np.max(final_cluster)),
-                'mean': float(np.mean(final_cluster)),
-                'count': len(final_cluster)
-            })
-        
-        return clusters
-    
-    def _categorize_products_by_sophisticated_tiers(self, product_data: List[Dict], price_analysis: Dict[str, Any]) -> Dict[str, List[Dict]]:
-        """
-        Categorize products into tiers using sophisticated statistical boundaries
+        Categorize products into tiers using PriceStatisticsAnalyzer results
         """
         if not price_analysis or 'overall' not in price_analysis:
             # Fallback to simple sorting if analysis failed
@@ -948,13 +782,13 @@ Include only terms that are specific to the {industry} industry."""
             'budget': []
         }
         
-        # Use sophisticated tier boundaries
+        # Use tier boundaries from PriceStatisticsAnalyzer
         budget_threshold = overall_stats.get('budget_threshold', overall_stats.get('p25', 0))
         mid_low_threshold = overall_stats.get('mid_low_threshold', overall_stats.get('p50', 0))
         mid_high_threshold = overall_stats.get('mid_high_threshold', overall_stats.get('p75', 0))
         premium_threshold = overall_stats.get('premium_threshold', overall_stats.get('p95', float('inf')))
         
-        # Categorize each product based on sophisticated boundaries
+        # Categorize each product based on statistical boundaries
         for product in product_data:
             price = product['price']
             if price >= premium_threshold:
@@ -966,8 +800,7 @@ Include only terms that are specific to the {industry} industry."""
             else:
                 tier_samples['budget'].append(product)
         
-        # Ensure we have samples in each tier by redistributing if necessary
-        # and limit to reasonable sample sizes for LLM analysis
+        # Ensure we have reasonable sample sizes for LLM analysis
         max_samples_per_tier = 15
         
         for tier_name, tier_products in tier_samples.items():
@@ -976,14 +809,13 @@ Include only terms that are specific to the {industry} industry."""
                 tier_products.sort(key=lambda x: x['price'], reverse=(tier_name in ['premium', 'mid_high']))
                 tier_samples[tier_name] = tier_products[:max_samples_per_tier]
             elif len(tier_products) == 0 and len(product_data) > 4:
-                # If a tier is empty but we have products, redistribute
-                # This handles edge cases where thresholds might not align perfectly
-                self._redistribute_empty_tiers(tier_samples, product_data, tier_name)
+                # If a tier is empty but we have products, use simple redistribution
+                self._simple_redistribute_for_empty_tier(tier_samples, product_data, tier_name)
         
         return tier_samples
     
-    def _redistribute_empty_tiers(self, tier_samples: Dict[str, List[Dict]], product_data: List[Dict], empty_tier: str):
-        """Redistribute products to ensure all tiers have at least one sample"""
+    def _simple_redistribute_for_empty_tier(self, tier_samples: Dict[str, List[Dict]], product_data: List[Dict], empty_tier: str):
+        """Simple redistribution for edge cases where a tier is empty"""
         # Simple redistribution logic for edge cases
         all_products = sorted(product_data, key=lambda x: x['price'], reverse=True)
         total_products = len(all_products)
@@ -1012,7 +844,8 @@ Include only terms that are specific to the {industry} industry."""
         # Include statistical analysis context if available
         if price_analysis and 'overall' in price_analysis:
             overall_stats = price_analysis['overall']
-            distribution_type = price_analysis.get('distribution_type', 'unknown')
+            is_multimodal = overall_stats.get('is_multimodal', False)
+            distribution_type = 'multimodal' if is_multimodal else 'unimodal'
             
             statistical_context = f"""
 ## Statistical Analysis Context
