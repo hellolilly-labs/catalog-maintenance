@@ -683,27 +683,42 @@ Include only terms that are specific to the {industry} industry."""
         # Extract product names and prices
         product_data = []
         for product in products:
+            # Safely get product attributes
+            product_name = self._get_product_attribute(product, 'name', '')
+            if not product_name:
+                continue
+                
             # Get price using variant-aware logic
             price = 0
-            if hasattr(product, 'price_range') and product.variants:
-                min_price, max_price = product.price_range()
-                price = (min_price + max_price) / 2 if min_price > 0 else 0  # Use average
-            else:
-                # Fallback for legacy products
-                price_str = product.sale_price if hasattr(product, 'sale_price') else product.salePrice
-                if not price_str:
-                    price_str = product.original_price if hasattr(product, 'original_price') else product.originalPrice
-                if price_str:
-                    try:
-                        price = float(price_str.replace('$', '').replace(',', ''))
-                    except:
-                        pass
+            
+            # Try multiple ways to get price based on product type
+            if hasattr(product, 'price_range') and self._get_product_attribute(product, 'variants'):
+                try:
+                    min_price, max_price = product.price_range()
+                    price = (min_price + max_price) / 2 if min_price > 0 else 0
+                except:
+                    pass
+            
+            if price == 0:
+                # Try different price fields
+                for price_field in ['sale_price', 'salePrice', 'original_price', 'originalPrice', 'price']:
+                    price_str = self._get_product_attribute(product, price_field)
+                    if price_str:
+                        try:
+                            if isinstance(price_str, (int, float)):
+                                price = float(price_str)
+                            else:
+                                price = float(str(price_str).replace('$', '').replace(',', ''))
+                            break
+                        except:
+                            continue
             
             if price > 0:
+                categories = self._get_product_attribute(product, 'categories', [])
                 product_data.append({
-                    'name': product.name,
+                    'name': product_name,
                     'price': price,
-                    'categories': product.categories[:2] if product.categories else []
+                    'categories': categories[:2] if categories else []
                 })
         
         if not product_data:
@@ -816,6 +831,27 @@ Focus on extracting actual terms used in product names, not generic descriptions
             logger.error(f"LLM product pattern analysis failed: {e}")
             return {'premium_indicators': [], 'mid_indicators': [], 'budget_indicators': []}
     
+    def _get_product_attribute(self, product, attribute: str, default=None):
+        """
+        Safely get a product attribute, handling both Product objects and dictionaries
+        
+        Args:
+            product: Product object or dictionary
+            attribute: Attribute name to get
+            default: Default value if attribute not found
+            
+        Returns:
+            Attribute value or default
+        """
+        if hasattr(product, attribute):
+            # Product object
+            return getattr(product, attribute, default)
+        elif isinstance(product, dict):
+            # Dictionary
+            return product.get(attribute, default)
+        else:
+            return default
+    
     def _analyze_product_patterns(self, products: List[Product]) -> Dict[str, Any]:
         """Analyze product naming patterns"""
         
@@ -826,7 +862,12 @@ Focus on extracting actual terms used in product names, not generic descriptions
         }
         
         for product in products:
-            name_parts = product.name.split()
+            # Safely get product name
+            product_name = self._get_product_attribute(product, 'name', '')
+            if not product_name:
+                continue
+                
+            name_parts = str(product_name).split()
             
             # Check for common prefixes (first word)
             if name_parts:
